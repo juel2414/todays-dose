@@ -1291,7 +1291,9 @@ function inputFromRequiredBook(goal, book) {
 /** 필독서로 만든 목표의 표지 이미지 주소 (없으면 null) */
 function getCoverUrl(goal) {
   const book = goal.requiredBookId ? requiredBooks.find((b) => b.id === goal.requiredBookId) : null;
-  return book && book.coverUrl ? book.coverUrl : null;
+  if (book && book.coverUrl) return book.coverUrl;
+  const item = groupItemForGoal(goal);
+  return item && item.coverUrl ? item.coverUrl : null;
 }
 
 /** 목표 삭제 */
@@ -1787,6 +1789,10 @@ function checkGoalShape(goal, index) {
     || !/^[\w-]{1,64}$/.test(goal.requiredBookId))) {
     return fail('필독서 연결 정보가 올바르지 않습니다.');
   }
+  if ((goal.groupId !== undefined && (typeof goal.groupId !== 'string' || !/^[\w-]{1,64}$/.test(goal.groupId)))
+    || (goal.groupItemId !== undefined && (typeof goal.groupItemId !== 'string' || !/^[\w-]{1,64}$/.test(goal.groupItemId)))) {
+    return fail('그룹 연결 정보가 올바르지 않습니다.');
+  }
   if (goal.extraDates !== undefined && (!Array.isArray(goal.extraDates)
     || !goal.extraDates.every((x) => x && isValidDateStr(x.date) && EXTRA_WEIGHTS.includes(x.weight)))) {
     return fail('여유 있는 날 정보가 올바르지 않습니다.');
@@ -2134,6 +2140,18 @@ function runPlanSelfTests() {
   check('기타: 수정하면 계획 다시 만듦', getTotalUnits(cg, 'custom') === 60 && getActivePlan(cg, 'custom').to === 60);
   useUnitOf(null);
 
+  // 그룹 공유
+  const src = createBookGoal({ title: '책', startDate: '2026-10-01', dueDate: '2026-10-09', chapters: [{ name: '1장', startPage: 1 }, { name: '2장', startPage: 11 }], lastPage: 20, author: '저자' });
+  const shared = { id: 'item1', groupId: 'grp1', type: 'book', title: '책', content: JSON.parse(JSON.stringify({ lastPage: 20, chapters: [{ startPage: 1, name: '1장' }, { startPage: 11, name: '2장' }], author: '저자' })) };
+  const mine = linkGoalToGroupItem(createGoalFromInput({ ...goalToInput(src), title: shared.title, ...shared.content, startDate: '2026-10-02', dueDate: '2026-10-20' }), shared);
+  check('그룹: 키 순서가 달라도 같은 내용', !isGroupItemChanged(mine, shared) && !isSourceGoalChanged(shared, src));
+  const shared2 = { ...shared, content: { ...shared.content, lastPage: 30 } };
+  check('그룹: 리더 수정 감지', isGroupItemChanged(mine, shared2) && isSourceGoalChanged(shared2, src));
+  applyGoalEdit(mine, inputFromGroupItem(mine, shared2), '2026-09-30');
+  check('그룹: 적용하면 같아지고 날짜는 유지', !isGroupItemChanged(mine, shared2) && mine.dueDate === '2026-10-20' && mine.groupItemId === 'item1');
+  check('그룹: 형식 검사', checkGoalShape(mine, 0) === null && isValidShareContent('book', shared.content)
+    && isValidShareContent('custom', goalShareContent(cg)) && !isValidShareContent('lecture', { titles: [] }));
+
   console.group('■ 검사 결과');
   console.table(results);
   console.groupEnd();
@@ -2223,6 +2241,7 @@ function renderTopbar() {
     <div class="topbar-inner">
       <nav class="topbar-nav">
         <a class="brand" href="#/"><img class="brand-logo" src="logo/symbol.svg" alt="" width="26" height="26">${t('오늘분량')}</a>
+        <a class="nav-link" href="#/groups">${t('그룹')}</a>
         ${account.isAdmin ? `<a class="nav-link" href="#/admin">${t('관리자')}</a>` : ''}
       </nav>
       <div class="topbar-right">
@@ -2309,6 +2328,13 @@ async function startApp(user) {
     myAssignedBookIds = new Set();
     setLibraryRows([]);
   }
+  try {
+    await loadGroups();
+  } catch (err) {
+    console.warn('[group] 그룹을 불러오지 못했습니다:', err);
+    myGroups = [];
+    groupItems = [];
+  }
   renderTopbar();
 
   const legacy = readLegacyGoals().filter((g) => !getGoal(g.id));
@@ -2325,6 +2351,9 @@ async function startApp(user) {
   }
   // 도서관 검토가 끝난 내 책 목표는 도서관 책과 연결 (관리자가 고친 내용은 상세 화면에서 적용 여부를 묻는다)
   linkReviewedSubmissions();
+  // 로그인 전에 초대 링크로 들어왔으면 그 화면으로
+  const pendingJoin = takePendingJoin();
+  if (pendingJoin && location.hash !== pendingJoin) { location.hash = pendingJoin; return; }
   render();
 }
 
@@ -2363,6 +2392,14 @@ function changeLanguage(lang) {
 function parseRoute() {
   const [name, id, sub, sub2] = location.hash.replace(/^#\/?/, '').split('/');
   if (name === 'new' && id === 'book' && sub) return { view: 'form', bookId: sub };
+  if (name === 'new' && id === 'group' && sub) return { view: 'form', groupItemId: sub };
+  if (name === 'groups') return { view: 'groups' };
+  if (name === 'join' && id) return { view: 'join', code: id };
+  if (name === 'group' && id && sub === 'member' && sub2) {
+    const [, , , , goalId] = location.hash.replace(/^#\/?/, '').split('/');
+    return { view: 'group', groupId: id, userId: sub2, goalId };
+  }
+  if (name === 'group' && id) return { view: 'group', groupId: id };
   if (name === 'new') return { view: 'form' };
   if (name === 'admin' && id === 'member' && sub && sub2) return { view: 'admin', tab: 'member', userId: sub, goalId: sub2 };
   if (name === 'admin') return { view: 'admin', tab: id || 'progress' };
@@ -2392,7 +2429,10 @@ function render() {
   if (route.view === 'admin') {
     if (!account.isAdmin) { navigate('#/'); return; }
     renderAdmin(root, route.tab, route);
-  } else if (route.view === 'form') renderGoalForm(root, goal, route.bookId || null);
+  } else if (route.view === 'form') renderGoalForm(root, goal, route.bookId || null, route.groupItemId || null);
+  else if (route.view === 'groups') renderGroups(root);
+  else if (route.view === 'join') renderJoinGroup(root, route.code);
+  else if (route.view === 'group') renderGroupPage(root, route);
   else if (route.view === 'detail') renderGoalDetail(root, goal);
   else renderDashboard(root);
   window.scrollTo(0, 0);
@@ -2436,6 +2476,7 @@ function renderDashboard(root) {
     </header>
 
     ${showRequired ? renderRequiredSection(today, myBooks) : ''}
+    ${renderGroupInbox()}
 
     <section>
       <h2 class="section-title">${t('진행 중')} <span class="count">${active.length}</span></h2>
@@ -2532,12 +2573,14 @@ function renderGoalCard(goal, s) {
   useUnitOf(goal);
   const requiredBook = libraryBookForGoal(goal);
   const tagKind = bookTagKind(requiredBook);
-  const changed = requiredBook && isRequiredBookChanged(goal, requiredBook);
+  const groupItem = groupItemForGoal(goal);
+  const changed = (requiredBook && isRequiredBookChanged(goal, requiredBook)) || (groupItem && isGroupItemChanged(goal, groupItem));
   return `
     <a class="goal-card ${s.isActive ? '' : 'is-finished'}" href="#/goal/${escapeHtml(goal.id)}">
       <div class="card-top">
         <span class="card-tags">
           ${tagKind ? renderBookTag(tagKind) : `<span class="type-tag type-${goal.type}">${typeLabel(goal.type)}</span>`}
+          ${goal.groupId && groupNameOf(goal.groupId) ? `<span class="type-tag type-group">${escapeHtml(groupNameOf(goal.groupId))}</span>` : ''}
           ${changed ? `<span class="badge badge-ended">${t('내용 변경됨')}</span>` : ''}
         </span>
         ${renderStatusBadge(s)}
@@ -2611,7 +2654,7 @@ function renderTodayAmount(goal, s) {
 /** 언어를 바꿀 때 입력 중이던 목표 폼 값 (다시 그린 폼에 한 번 채운다) */
 let langFormDraft = null;
 
-function renderGoalForm(root, goal, bookId = null) {
+function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
   const isEdit = !!goal;
   const langDraft = langFormDraft;
   langFormDraft = null;
@@ -2623,8 +2666,15 @@ function renderGoalForm(root, goal, bookId = null) {
     const existing = findGoalForBook(appData.goals, bookId);
     if (existing) { navigate(`#/goal/${existing.id}`); return; }
   }
-  const locked = !!requiredBook;
-  const type = goal ? goal.type : (langDraft && langDraft.type) || 'book';
+  // 그룹에서 공유된 목표로 계획 세우기: 이름·내용은 리더가 공유한 것을 쓰고 잠근다
+  const groupItem = groupItemId ? groupItems.find((i) => i.id === groupItemId) : groupItemForGoal(goal);
+  if (groupItemId) {
+    if (!groupItem) { navigate('#/groups'); return; }
+    const existing = findGoalForGroupItem(appData.goals, groupItemId);
+    if (existing) { navigate(`#/goal/${existing.id}`); return; }
+  }
+  const locked = !!requiredBook || !!groupItem;
+  const type = goal ? goal.type : groupItem ? groupItem.type : (langDraft && langDraft.type) || 'book';
   const started = isEdit && hasGoalStarted(goal);
   // 미리보기에서 "수정으로 돌아가기"를 누르면 입력하던 값(draft)으로 다시 채운다
   const draft = langDraft || (isEdit && detailState.draft && detailState.goalId === goal.id ? detailState.draft : null);
@@ -2637,6 +2687,7 @@ function renderGoalForm(root, goal, bookId = null) {
   if (bookId) {
     Object.assign(v, { title: requiredBook.title, author: requiredBook.author || '', chapters: requiredBook.chapters, lastPage: requiredBook.lastPage });
   }
+  if (groupItemId && !langDraft) Object.assign(v, { title: groupItem.title }, groupItem.content);
 
   root.innerHTML = `
     <header class="page-header">
@@ -2647,7 +2698,8 @@ function renderGoalForm(root, goal, bookId = null) {
     </header>
 
     <form id="goal-form" class="panel ${locked ? 'is-locked' : ''}" novalidate>
-      ${locked ? `<p class="notice notice-info">${t('도서관에 있는 책입니다. 책 제목과 챕터는 관리자가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.')}</p>` : ''}
+      ${requiredBook ? `<p class="notice notice-info">${t('도서관에 있는 책입니다. 책 제목과 챕터는 관리자가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.')}</p>` : ''}
+      ${groupItem && !requiredBook ? `<p class="notice notice-info">${t("'{group}' 그룹에서 공유된 목표입니다. 이름과 내용은 리더가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.", { group: escapeHtml(groupNameOf(groupItem.groupId)) })}</p>` : ''}
       ${started ? `<p class="notice">${t('진행 중인 목표입니다. 날짜·쉬는 요일·챕터·강의 목록을 바꾸면 원래 계획은 보관하고, 오늘부터 마감일까지 남은 분량을 다시 나눕니다. 저장하면 새 계획을 먼저 미리보기로 보여드립니다.')}</p>` : ''}
 
       <div class="field">
@@ -2818,6 +2870,7 @@ function renderGoalForm(root, goal, bookId = null) {
   `;
 
   fillChapterEditor(v.chapters, locked);
+  if (locked) lockSharedContentInputs(root);
   (v.restDates || []).forEach((x) => addRestDateChip(x));
   (v.extraDates || []).forEach((x) => addExtraDateChip(x));
 
@@ -2891,7 +2944,7 @@ function renderGoalForm(root, goal, bookId = null) {
   });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    submitGoalForm(goal, requiredBook && !goal ? requiredBook.id : null);
+    submitGoalForm(goal, requiredBook && !goal ? requiredBook.id : null, groupItemId && !goal ? groupItemId : null);
   });
   updateFormView();
 }
@@ -3583,7 +3636,7 @@ function updateFormView() {
   document.getElementById('f-lecture-count').textContent = t('{n}개 강의', { n: input.titles.length });
 }
 
-function submitGoalForm(goal, requiredBookId = null) {
+function submitGoalForm(goal, requiredBookId = null, groupItemId = null) {
   const input = collectFormInput();
   const errors = goal
     ? validateGoalEdit(goal, input)
@@ -3609,11 +3662,13 @@ function submitGoalForm(goal, requiredBookId = null) {
     navigate(`#/goal/${goal.id}`);
   } else {
     const created = createGoalFromInput(input, requiredBookId);
+    const groupItem = groupItemId ? groupItems.find((i) => i.id === groupItemId) : null;
+    if (groupItem) linkGoalToGroupItem(created, groupItem);
     appData.goals.push(created);
     commit();
-    // 도서관에 없는 책이면 관리자 검토를 위해 도서관에 제출 (실패해도 목표는 그대로)
-    if (!requiredBookId && created.type === 'book') submitGoalToLibrary(created);
-    navigate(requiredBookId ? `#/goal/${created.id}` : '#/');
+    // 도서관에 없는 책이면 관리자 검토를 위해 도서관에 제출 (실패해도 목표는 그대로). 그룹에서 받은 책은 제외
+    if (!requiredBookId && !groupItem && created.type === 'book') submitGoalToLibrary(created);
+    navigate(requiredBookId || groupItem ? `#/goal/${created.id}` : '#/');
   }
 }
 
@@ -3673,6 +3728,7 @@ function renderGoalDetail(root, goal) {
       </header>
 
       ${renderRequiredBookNotice(goal)}
+      ${renderGroupItemNotice(goal)}
       ${renderSummaryPanel(goal, s)}
       ${detailState.preview ? renderPreviewPanel(goal, basis) : renderPlanPanel(goal, basis)}
     </div>
@@ -4440,6 +4496,12 @@ function bindDetailEvents(container, goal) {
     const resetBtn = e.target.closest('[data-reset-date]');
     if (resetBtn && detailState.adjust) {
       detailState.adjust.edits[resetBtn.dataset.resetDate] = '';
+      rerenderDetail(goal);
+      return;
+    }
+    if (action === 'sync-group') {
+      const item = groupItemForGoal(goal);
+      if (item) openPreview(goal, { kind: 'edit', input: inputFromGroupItem(goal, item) });
       rerenderDetail(goal);
       return;
     }
@@ -5841,6 +5903,680 @@ async function onExportDialogChange(e) {
 }
 
 /* =========================================================================
+ * 12-2. 그룹 — 회원 누구나 그룹을 만들어 리더가 되고, 초대 링크/코드로 멤버를 모은다.
+ *   리더는 내 목표의 내용(책 목차·강의 목록 등, 날짜 제외)을 그룹에 공유하고,
+ *   멤버는 그 내용으로 각자 날짜를 정해 계획한다.
+ *   리더는 공유한 목표로 만든 멤버 계획의 진도만 볼 수 있다 (서버 RLS: study_planner_leader_can_view).
+ * ========================================================================= */
+
+const GROUPS_TABLE = 'study_planner_groups';
+const GROUP_MEMBERS_TABLE = 'study_planner_group_members';
+const GROUP_ITEMS_TABLE = 'study_planner_group_items';
+const PENDING_JOIN_KEY = 'study-planner:pending-join';
+
+/** 내 그룹 [{ id, name, leaderId, leaderName, inviteCode(리더만), memberCount, isLeader }] */
+let myGroups = [];
+/** 내 그룹들에 공유된 목표 [{ id, groupId, type, title, content, coverUrl, sourceGoalId, updatedAt }] */
+let groupItems = [];
+
+/** 그룹 상세 화면 상태 (리더: 멤버 목록 · 멤버들의 공유 목표) */
+const groupState = {
+  groupId: null,
+  loaded: false,
+  loading: false,
+  error: null,
+  members: [], // [{ user_id, name, email, joined_at }]
+  memberGoals: [], // [{ userId, goal }]
+  sharing: false, // "내 목표 공유하기" 선택 상자 열림
+};
+
+/* ----- 공유 내용 (계산 · 비교) ----- */
+
+/** 목표에서 그룹에 공유할 내용만 (이름은 따로, 날짜·진도·쉬는 날은 제외) */
+function goalShareContent(goal) {
+  const v = goalToInput(goal);
+  if (goal.type === 'book') {
+    return { author: v.author, chapters: v.chapters.map((c) => ({ name: c.name, startPage: Number(c.startPage) })), lastPage: v.lastPage };
+  }
+  if (goal.type === 'bible') return { bibleStart: v.bibleStart, bibleEnd: v.bibleEnd };
+  if (goal.type === 'custom') return { customUnit: v.customUnit, customTotal: v.customTotal, customItems: v.customItems };
+  return { titles: v.titles };
+}
+
+/** 키 순서와 상관없이 같은 값이면 같은 문자열 (서버 jsonb는 키 순서를 바꾼다) */
+function canonicalJson(x) {
+  if (Array.isArray(x)) return `[${x.map(canonicalJson).join(',')}]`;
+  if (x && typeof x === 'object') {
+    return `{${Object.keys(x).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(x[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(x === undefined ? null : x);
+}
+
+function shareSignature(title, content) {
+  return canonicalJson({ title: String(title).trim(), ...content });
+}
+
+/** 리더가 공유 내용을 바꿔서 내 목표와 달라졌는지 */
+function isGroupItemChanged(goal, item) {
+  return goal.type !== item.type || shareSignature(goal.title, goalShareContent(goal)) !== shareSignature(item.title, item.content);
+}
+
+/** 리더의 원본 목표가 공유한 뒤에 바뀌었는지 (리더 화면의 "공유 내용 업데이트") */
+function isSourceGoalChanged(item, goal) {
+  return !!goal && (goal.type !== item.type || shareSignature(goal.title, goalShareContent(goal)) !== shareSignature(item.title, item.content));
+}
+
+/** 공유 내용 최신본을 반영한 수정 입력 (기간·쉬는 날은 그대로) */
+function inputFromGroupItem(goal, item) {
+  return { ...goalToInput(goal), title: item.title, ...item.content };
+}
+
+function linkGoalToGroupItem(goal, item) {
+  goal.groupId = item.groupId;
+  goal.groupItemId = item.id;
+  return goal;
+}
+
+function findGoalForGroupItem(goals, itemId) {
+  return goals.find((g) => g.groupItemId === itemId) || null;
+}
+
+function groupItemForGoal(goal) {
+  return goal && goal.groupItemId ? groupItems.find((i) => i.id === goal.groupItemId) || null : null;
+}
+
+function groupNameOf(groupId) {
+  const g = myGroups.find((x) => x.id === groupId);
+  return g ? g.name : '';
+}
+
+/** 공유 목표 한 줄 설명: "312페이지 · 23개 챕터" / "12개 강의" / "창세기~신명기 · 187장" / "120문제" */
+function describeShareContent(item) {
+  const c = item.content || {};
+  if (item.type === 'book' && c.chapters && c.chapters.length) {
+    return t('{pages}페이지 · {n}개 챕터', { pages: c.lastPage - c.chapters[0].startPage + 1, n: c.chapters.length });
+  }
+  if (item.type === 'lecture') return t('{n}개 강의', { n: (c.titles || []).length });
+  if (item.type === 'bible') {
+    const books = bibleBooksInRange(Number(c.bibleStart), Number(c.bibleEnd));
+    return t('{books}권 · {chapters}장', { books: books.length, chapters: books.reduce((sum, b) => sum + b.chapters, 0) });
+  }
+  if (item.type === 'custom') {
+    const total = (c.customItems || []).length || c.customTotal;
+    return currentLang === 'en' ? `${total} ${c.customUnit}` : `${total}${c.customUnit}`;
+  }
+  return '';
+}
+
+/** 공유 내용이 올바른 형식인지 (서버에서 받은 행 검사) */
+function isValidShareContent(type, content) {
+  if (!content || typeof content !== 'object') return false;
+  if (type === 'book') return validateBookStructure(content).length === 0;
+  if (type === 'lecture') return Array.isArray(content.titles) && content.titles.length > 0;
+  if (type === 'bible') return validateBibleInput({ title: 'x', startDate: '2026-01-01', dueDate: '2026-01-01', ...content }).length === 0;
+  if (type === 'custom') return validateCustomInput({ title: 'x', startDate: '2026-01-01', dueDate: '2026-01-01', ...content }).length === 0;
+  return false;
+}
+
+/* ----- 초대 링크 (로그인 전에 들어온 경우 기억) ----- */
+
+function rememberPendingJoin() {
+  try {
+    if (/^#\/join\/[\w-]+$/.test(location.hash)) localStorage.setItem(PENDING_JOIN_KEY, location.hash);
+  } catch (err) { /* 저장소를 못 써도 링크를 다시 누르면 된다 */ }
+}
+
+function takePendingJoin() {
+  try {
+    const hash = localStorage.getItem(PENDING_JOIN_KEY);
+    localStorage.removeItem(PENDING_JOIN_KEY);
+    return hash && /^#\/join\/[\w-]+$/.test(hash) ? hash : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function inviteLink(code) {
+  return `${location.origin}${location.pathname}#/join/${code}`;
+}
+
+/* ----- 저장소 (Supabase) ----- */
+
+function rowToGroupItem(row) {
+  return {
+    id: row.id,
+    groupId: row.group_id,
+    type: row.type,
+    title: row.title,
+    content: row.content,
+    coverUrl: row.cover_url || null,
+    sourceGoalId: row.source_goal_id || null,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** 내 그룹과 공유된 목표 불러오기 */
+async function loadGroups() {
+  const sb = getSupabase();
+  const { data, error } = await sb.rpc('study_planner_my_groups');
+  if (error) throw error;
+  myGroups = data.map((r) => ({
+    id: r.id,
+    name: r.name,
+    leaderId: r.leader_id,
+    leaderName: r.leader_name || '',
+    inviteCode: r.invite_code || null,
+    memberCount: r.member_count,
+    isLeader: r.is_leader,
+  }));
+  if (!myGroups.length) {
+    groupItems = [];
+    return;
+  }
+  const items = await sb.from(GROUP_ITEMS_TABLE)
+    .select('id, group_id, type, title, content, cover_url, source_goal_id, updated_at')
+    .in('group_id', myGroups.map((g) => g.id)).order('created_at');
+  if (items.error) throw items.error;
+  groupItems = items.data.map(rowToGroupItem).filter((i) => isValidShareContent(i.type, i.content));
+}
+
+/** 그룹 상세(리더): 멤버 목록 + 멤버들이 이 그룹에서 받은 목표 */
+async function loadGroupDetail(groupId) {
+  groupState.loading = true;
+  groupState.error = null;
+  try {
+    const sb = getSupabase();
+    const [members, goals] = await Promise.all([
+      sb.rpc('study_planner_group_members', { p_group: groupId }),
+      sb.from(GOALS_TABLE).select('user_id, data').eq('data->>groupId', groupId).neq('user_id', currentUser.id),
+    ]);
+    if (members.error) throw members.error;
+    if (goals.error) throw goals.error;
+    groupState.members = members.data;
+    groupState.memberGoals = goals.data
+      .map((r) => ({ userId: r.user_id, goal: r.data }))
+      .filter((x) => checkGoalShape(x.goal, 0) === null);
+    groupState.loaded = true;
+  } catch (err) {
+    console.error('[group] 불러오기 실패:', err);
+    groupState.error = err.message || String(err);
+  }
+  groupState.loading = false;
+  if (parseRoute().view === 'group') render();
+}
+
+async function refreshGroups() {
+  await loadGroups();
+  groupState.loaded = false;
+  renderTopbar();
+  render();
+}
+
+/* ----- 화면: 그룹 목록 ----- */
+
+function renderGroups(root) {
+  const cards = myGroups.map((g) => {
+    const items = groupItems.filter((i) => i.groupId === g.id);
+    const planned = items.filter((i) => findGoalForGroupItem(appData.goals, i.id)).length;
+    return `
+      <a class="goal-card group-card" href="#/group/${escapeHtml(g.id)}">
+        <div class="card-top">
+          <span class="type-tag ${g.isLeader ? 'type-leader' : 'type-group'}">${g.isLeader ? t('리더') : t('멤버')}</span>
+          <span class="muted small">${t('멤버 {n}명', { n: g.memberCount })}</span>
+        </div>
+        <h3 class="card-title">${escapeHtml(g.name)}</h3>
+        <p class="card-meta">${g.isLeader ? t('공유한 목표 {n}개', { n: items.length })
+          : `${t('리더 {name}', { name: escapeHtml(g.leaderName) })} · ${t('공유된 목표 {n}개 · 계획 {planned}개', { n: items.length, planned })}`}</p>
+      </a>`;
+  }).join('');
+
+  root.innerHTML = `
+    <div id="groups-page">
+      <header class="page-header">
+        <div>
+          <a class="back-link" href="#/">← ${t('내 계획')}</a>
+          <h1>${t('그룹')}</h1>
+          <p class="muted">${t('그룹을 만들면 리더가 되어 책·강의 같은 목표를 멤버들에게 나눠 주고 진도를 볼 수 있어요.')}</p>
+        </div>
+      </header>
+
+      <div class="group-actions">
+        <form class="panel group-form" data-form="create" novalidate>
+          <h2 class="section-title">${t('새 그룹 만들기')}</h2>
+          <div class="group-form-row">
+            <input id="g-name" type="text" class="input" maxlength="40" placeholder="${t('예: 청년부 독서 모임')}">
+            <button type="submit" class="btn btn-primary">${t('만들기')}</button>
+          </div>
+        </form>
+        <form class="panel group-form" data-form="join" novalidate>
+          <h2 class="section-title">${t('초대 코드로 참여')}</h2>
+          <div class="group-form-row">
+            <input id="g-code" type="text" class="input input-code" maxlength="6" placeholder="${t('6자리 코드')}" autocomplete="off">
+            <button type="submit" class="btn">${t('참여하기')}</button>
+          </div>
+        </form>
+      </div>
+      <p class="errors" id="group-error" hidden></p>
+
+      <section>
+        <h2 class="section-title">${t('내 그룹')} <span class="count">${myGroups.length}</span></h2>
+        ${myGroups.length ? `<div class="card-grid">${cards}</div>` : `<div class="empty">${t('아직 속한 그룹이 없습니다.')}</div>`}
+      </section>
+    </div>`;
+
+  const page = root.querySelector('#groups-page');
+  page.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const kind = e.target.dataset.form;
+    const errorEl = page.querySelector('#group-error');
+    const btn = e.target.querySelector('button[type="submit"]');
+    errorEl.hidden = true;
+    try {
+      btn.disabled = true;
+      if (kind === 'create') {
+        const name = page.querySelector('#g-name').value.trim();
+        if (!name) throw new Error(t('그룹 이름을 입력하세요.'));
+        const { data, error } = await getSupabase().from(GROUPS_TABLE)
+          .insert({ name, leader_id: currentUser.id }).select('id').single();
+        if (error) throw error;
+        await loadGroups();
+        renderTopbar();
+        navigate(`#/group/${data.id}`);
+      } else {
+        const code = page.querySelector('#g-code').value.trim().toUpperCase();
+        if (!/^[0-9A-F]{6}$/.test(code)) throw new Error(t('초대 코드 6자리를 확인하세요.'));
+        navigate(`#/join/${code}`);
+      }
+    } catch (err) {
+      errorEl.textContent = err.message || String(err);
+      errorEl.hidden = false;
+      btn.disabled = false;
+    }
+  });
+}
+
+/* ----- 화면: 초대 링크로 참여 ----- */
+
+function renderJoinGroup(root, code) {
+  root.innerHTML = `<div class="empty">${t('불러오는 중…')}</div>`;
+  getSupabase().rpc('study_planner_group_by_code', { p_code: code }).then(({ data, error }) => {
+    if (parseRoute().view !== 'join') return;
+    const info = !error && data && data[0];
+    if (!info) {
+      renderMessageScreen(root, t('그룹을 찾을 수 없습니다'), `
+        <p class="muted">${t('초대 코드가 틀렸거나, 리더가 코드를 새로 만들었을 수 있어요. 리더에게 새 링크를 받아 주세요.')}</p>
+        <a class="btn" href="#/groups">${t('그룹 목록')}</a>`);
+      return;
+    }
+    if (info.is_member) { navigate(`#/group/${info.id}`); return; }
+    renderMessageScreen(root, t("'{name}' 그룹에 참여할까요?", { name: escapeHtml(info.name) }), `
+      <p class="muted">${t('리더: {name}', { name: escapeHtml(info.leader_name) })}</p>
+      <p class="muted">${t('참여하면 리더가 공유한 목표로 계획을 세울 수 있고, 리더는 그 목표의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.')}</p>
+      <div class="join-actions">
+        <button type="button" class="btn btn-primary" data-action="join">${t('참여하기')}</button>
+        <a class="btn" href="#/">${t('취소')}</a>
+      </div>
+      <p class="errors" id="join-error" hidden></p>`);
+    root.querySelector('[data-action="join"]').addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      const res = await getSupabase().rpc('study_planner_join_group', { p_code: code });
+      if (res.error) {
+        const el = root.querySelector('#join-error');
+        el.textContent = res.error.message;
+        el.hidden = false;
+        e.target.disabled = false;
+        return;
+      }
+      await loadGroups();
+      renderTopbar();
+      navigate(`#/group/${res.data}`);
+    });
+  });
+}
+
+/* ----- 화면: 그룹 상세 ----- */
+
+function renderGroupPage(root, route) {
+  const group = myGroups.find((g) => g.id === route.groupId);
+  if (!group) { navigate('#/groups'); return; }
+  if (groupState.groupId !== group.id) {
+    Object.assign(groupState, { groupId: group.id, loaded: false, error: null, members: [], memberGoals: [], sharing: false });
+  }
+  if (group.isLeader && !groupState.loaded && !groupState.loading && !groupState.error) loadGroupDetail(group.id);
+
+  const body = route.userId && group.isLeader
+    ? renderGroupMemberGoal(group, route.userId, route.goalId)
+    : group.isLeader ? renderLeaderGroup(group) : renderMemberGroup(group);
+
+  root.innerHTML = `<div id="group-page">${body}</div>`;
+  bindGroupEvents(root.querySelector('#group-page'), group);
+}
+
+function renderGroupHeader(group, actions) {
+  return `
+    <header class="page-header">
+      <div>
+        <a class="back-link" href="#/groups">← ${t('그룹 목록')}</a>
+        <h1>${escapeHtml(group.name)}</h1>
+        <p class="muted">${group.isLeader ? t('내가 리더인 그룹') : t('리더 {name}', { name: escapeHtml(group.leaderName) })} · ${t('멤버 {n}명', { n: group.memberCount })}</p>
+      </div>
+      <div class="header-actions">${actions}</div>
+    </header>`;
+}
+
+/** 멤버 화면: 공유된 목표 → 계획 세우기 / 내 계획 보기 */
+function renderMemberGroup(group) {
+  const today = todayStr();
+  const items = groupItems.filter((i) => i.groupId === group.id);
+  const rows = items.map((item) => {
+    const goal = findGoalForGroupItem(appData.goals, item.id);
+    const s = goal ? getGoalSummary(goal, undefined, today) : null;
+    return `
+      <div class="group-item">
+        ${renderCoverThumb(item.coverUrl, 'sm')}
+        <div class="group-item-main">
+          <div><span class="type-tag type-${item.type}">${typeLabel(item.type)}</span> <strong>${escapeHtml(item.title)}</strong></div>
+          <div class="muted small">${escapeHtml(describeShareContent(item))}</div>
+        </div>
+        <div class="group-item-side">
+          ${goal ? `${renderStatusBadge(s)}${isGroupItemChanged(goal, item) ? ` <span class="badge badge-ended">${t('내용 변경됨')}</span>` : ''}
+            <a class="btn btn-small" href="#/goal/${escapeHtml(goal.id)}">${t('내 계획 보기')}</a>`
+          : `<a class="btn btn-primary btn-small" href="#/new/group/${escapeHtml(item.id)}">${t('계획 세우기')}</a>`}
+        </div>
+      </div>`;
+  }).join('');
+  return `
+    ${renderGroupHeader(group, `<button type="button" class="btn btn-danger" data-action="group-leave">${t('그룹 나가기')}</button>`)}
+    <section class="panel">
+      <h2 class="section-title">${t('공유된 목표')} <span class="count">${items.length}</span></h2>
+      ${items.length ? `<div class="group-items">${rows}</div>` : `<div class="empty">${t('리더가 아직 공유한 목표가 없습니다.')}</div>`}
+      <p class="muted small">${t('리더는 여기서 만든 계획의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.')}</p>
+    </section>`;
+}
+
+/** 리더 화면: 초대 · 공유한 목표(멤버 진도) · 멤버 */
+function renderLeaderGroup(group) {
+  const today = todayStr();
+  const items = groupItems.filter((i) => i.groupId === group.id);
+  const sharedSources = new Set(items.map((i) => i.sourceGoalId).filter(Boolean));
+  // 그룹에서 받은 목표는 다시 공유하지 않는다 (다른 그룹 내용의 재배포 방지)
+  const shareable = appData.goals.filter((g) => !sharedSources.has(g.id) && !g.groupItemId);
+  const loading = !groupState.loaded;
+
+  const itemsHtml = items.map((item) => {
+    const source = item.sourceGoalId ? getGoal(item.sourceGoalId) : null;
+    const entries = groupState.memberGoals.filter((x) => x.goal.groupItemId === item.id);
+    const memberRows = groupState.members.map((m) => {
+      const entry = entries.find((x) => x.userId === m.user_id);
+      if (!entry) {
+        return `<tr><td>${escapeHtml(profileName(m))}</td><td colspan="4" class="muted">${t('아직 계획 없음')}</td></tr>`;
+      }
+      const goal = entry.goal;
+      const s = getGoalSummary(goal, undefined, today);
+      const targetPct = s.total ? Math.min(100, (s.target / s.total) * 100) : 0;
+      const donePct = s.total ? Math.min(100, (s.done / s.total) * 100) : 0;
+      const last = goal.progress.history.length ? goal.progress.history[0].date : null;
+      return `
+        <tr class="${s.isActive ? '' : 'is-finished-row'}">
+          <td><a class="member-link" href="#/group/${escapeHtml(group.id)}/member/${escapeHtml(m.user_id)}/${escapeHtml(goal.id)}">${escapeHtml(profileName(m))}</a></td>
+          <td class="muted">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
+          <td class="col-bar">
+            <div class="mini-bar"><div class="compare-fill" style="width:${donePct}%"></div><div class="compare-marker" style="left:${targetPct}%"></div></div>
+            <span class="mini-pct">${s.percent}%</span>
+          </td>
+          <td>${renderStatusBadge(s)}</td>
+          <td class="muted">${last ? formatShortDate(last) : '-'}</td>
+        </tr>`;
+    }).join('');
+    const plannedCount = new Set(entries.map((x) => x.userId)).size;
+    return `
+      <section class="panel group-share">
+        <div class="group-item">
+          ${renderCoverThumb(item.coverUrl, 'sm')}
+          <div class="group-item-main">
+            <div><span class="type-tag type-${item.type}">${typeLabel(item.type)}</span> <strong>${escapeHtml(item.title)}</strong></div>
+            <div class="muted small">${escapeHtml(describeShareContent(item))} · ${loading ? '' : t('계획 세운 멤버 {n}/{total}명', { n: plannedCount, total: groupState.members.length })}</div>
+          </div>
+          <div class="group-item-side">
+            ${isSourceGoalChanged(item, source) ? `<button type="button" class="btn btn-small" data-action="share-update" data-item="${escapeHtml(item.id)}"
+              title="${t('내 목표에서 바꾼 이름·내용을 멤버들에게 다시 공유합니다')}">${t('바뀐 내용 공유')}</button>` : ''}
+            <button type="button" class="btn btn-small btn-danger" data-action="share-delete" data-item="${escapeHtml(item.id)}">${t('공유 취소')}</button>
+          </div>
+        </div>
+        ${loading ? '' : groupState.members.length ? `
+        <table class="admin-table">
+          <thead><tr><th>${t('멤버')}</th><th>${t('기간')}</th><th class="col-bar">${t('진도')}</th><th>${t('상태')}</th><th>${t('마지막 기록')}</th></tr></thead>
+          <tbody>${memberRows}</tbody>
+        </table>` : `<p class="muted small">${t('아직 참여한 멤버가 없습니다. 초대 링크를 보내 주세요.')}</p>`}
+      </section>`;
+  }).join('');
+
+  const membersHtml = groupState.members.map((m) => `
+    <tr>
+      <td>${escapeHtml(profileName(m))}</td>
+      <td class="muted">${escapeHtml(m.email)}</td>
+      <td class="muted nowrap">${timestampToDate(m.joined_at)}</td>
+      <td class="num"><button type="button" class="btn btn-small btn-danger" data-action="member-remove" data-user="${escapeHtml(m.user_id)}" data-name="${escapeHtml(profileName(m))}">${t('내보내기||member')}</button></td>
+    </tr>`).join('');
+
+  return `
+    ${renderGroupHeader(group, `
+      <button type="button" class="btn" data-action="group-refresh">${t('새로고침')}</button>
+      <button type="button" class="btn" data-action="group-rename">${t('이름 바꾸기')}</button>
+      <button type="button" class="btn btn-danger" data-action="group-delete">${t('그룹 삭제')}</button>`)}
+    ${groupState.error ? `<div class="errors">${t('불러오지 못했습니다: {message}', { message: escapeHtml(groupState.error) })}</div>` : ''}
+
+    <section class="panel invite-panel">
+      <h2 class="section-title">${t('멤버 초대')}</h2>
+      <div class="invite-row">
+        <span class="invite-code">${escapeHtml(group.inviteCode || '')}</span>
+        <input class="input invite-link" type="text" readonly value="${escapeHtml(inviteLink(group.inviteCode || ''))}">
+        <button type="button" class="btn btn-primary" data-action="invite-copy">${t('링크 복사')}</button>
+        <button type="button" class="btn" data-action="invite-reset" title="${t('지금 코드는 더 이상 쓸 수 없게 됩니다')}">${t('코드 새로 만들기')}</button>
+      </div>
+      <p class="muted small">${t('링크를 받은 사람은 로그인한 뒤 바로 참여할 수 있어요. 코드만 알려 줘도 [그룹 → 초대 코드로 참여]에서 들어올 수 있습니다.')}</p>
+    </section>
+
+    <div class="section-head">
+      <h2 class="section-title">${t('공유한 목표')} <span class="count">${items.length}</span></h2>
+      <button type="button" class="btn btn-primary" data-action="share-open">${t('+ 내 목표 공유하기')}</button>
+    </div>
+    ${groupState.sharing ? `
+    <div class="panel share-picker">
+      ${shareable.length ? `
+        <p class="muted small">${t('내 목표의 이름과 내용(목차·목록·범위)만 공유되고, 날짜와 진도는 공유되지 않아요. 멤버는 각자 날짜를 정합니다.')}</p>
+        <div class="group-form-row">
+          <select id="share-goal" class="input">
+            ${shareable.map((g) => `<option value="${escapeHtml(g.id)}">[${typeLabel(g.type)}] ${escapeHtml(g.title)}</option>`).join('')}
+          </select>
+          <button type="button" class="btn btn-primary" data-action="share-confirm">${t('공유')}</button>
+          <button type="button" class="btn" data-action="share-close">${t('취소')}</button>
+        </div>`
+      : `<p class="muted">${t('공유할 목표가 없습니다. 먼저 <a href="#/new">새 목표</a>를 만들어 주세요. (그룹에서 받은 목표는 다시 공유할 수 없어요)')}</p>
+         <button type="button" class="btn btn-small" data-action="share-close">${t('닫기')}</button>`}
+    </div>` : ''}
+    ${items.length ? itemsHtml : `<div class="empty">${t('아직 공유한 목표가 없습니다. 내 목표를 공유하면 멤버들이 같은 내용으로 계획을 세울 수 있어요.')}</div>`}
+
+    <section class="panel">
+      <h2 class="section-title">${t('멤버')} <span class="count">${loading ? '' : groupState.members.length}</span></h2>
+      ${loading ? `<div class="empty">${t('불러오는 중…')}</div>` : groupState.members.length ? `
+      <table class="admin-table">
+        <thead><tr><th>${t('이름')}</th><th>${t('이메일')}</th><th>${t('참여일')}</th><th></th></tr></thead>
+        <tbody>${membersHtml}</tbody>
+      </table>` : `<p class="muted">${t('아직 참여한 멤버가 없습니다. 초대 링크를 보내 주세요.')}</p>`}
+    </section>`;
+}
+
+/** 리더: 멤버 한 사람의 공유 목표 계획 (읽기 전용) */
+function renderGroupMemberGoal(group, userId, goalId) {
+  const back = `<a class="back-link" href="#/group/${escapeHtml(group.id)}">← ${escapeHtml(group.name)}</a>`;
+  if (!groupState.loaded) return `${back}<div class="empty">${t('불러오는 중…')}</div>`;
+  const entry = groupState.memberGoals.find((x) => x.userId === userId && x.goal.id === goalId);
+  const m = groupState.members.find((x) => x.user_id === userId);
+  if (!entry || !m) return `${back}<div class="empty">${t('목표를 찾을 수 없습니다.')}</div>`;
+  const goal = entry.goal;
+  const basis = getPrimaryBasis(goal);
+  const s = getGoalSummary(goal);
+  const rest = getRestWeekdays(goal);
+  return `
+    ${back}
+    <div class="member-goal-head">
+      ${renderCoverThumb(getCoverUrl(goal), 'lg')}
+      <div>
+        <p class="muted">${t('{name}님의 계획', { name: escapeHtml(profileName(m)) })}</p>
+        <h2 class="member-goal-title">${escapeHtml(goal.title)}</h2>
+        <p class="muted">${goal.startDate} ~ ${goal.dueDate} · ${formatDday(s.dday)}${rest.length ? ` · ${t('쉬는 요일 {days}', { days: weekdayListLabel(rest) })}` : ''}</p>
+      </div>
+    </div>
+    <section class="panel summary-panel">
+      ${renderCompareBlock(goal, s)}
+      <div class="summary-info">
+        <div><span class="info-label">${t('현재 위치')}</span>${escapeHtml(describePosition(goal))}</div>
+        <div class="summary-today"><span class="info-label">${t('오늘 할 일')}</span>${renderTodayAmount(goal, s)}</div>
+      </div>
+    </section>
+    <section class="panel plan-panel">
+      <div class="plan-head">
+        <h2 class="section-title">${t('계획표')} <span class="badge badge-waiting">${t('읽기 전용')}</span></h2>
+      </div>
+      ${renderPlanTable(goal, basis, true)}
+    </section>`;
+}
+
+function bindGroupEvents(container, group) {
+  container.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const sb = getSupabase();
+    const run = async (fn) => {
+      btn.disabled = true;
+      try {
+        await fn();
+      } catch (err) {
+        console.error('[group]', err);
+        alert(t('처리하지 못했습니다.\n\n{message}', { message: err.message || String(err) }));
+        btn.disabled = false;
+      }
+    };
+    const check = ({ error }) => { if (error) throw error; };
+
+    if (action === 'group-refresh') {
+      groupState.loaded = false;
+      groupState.error = null;
+      await run(refreshGroups);
+    } else if (action === 'invite-copy') {
+      const link = inviteLink(group.inviteCode);
+      try {
+        await navigator.clipboard.writeText(link);
+        btn.textContent = t('복사됨');
+      } catch (err) {
+        container.querySelector('.invite-link').select();
+      }
+    } else if (action === 'invite-reset') {
+      if (!confirm(t('초대 코드를 새로 만들까요?\n지금 코드와 링크로는 더 이상 참여할 수 없습니다. (이미 참여한 멤버는 그대로예요)'))) return;
+      await run(async () => { check(await sb.rpc('study_planner_reset_invite', { p_group: group.id })); await refreshGroups(); });
+    } else if (action === 'group-rename') {
+      const name = prompt(t('새 그룹 이름'), group.name);
+      if (name === null || !name.trim() || name.trim() === group.name) return;
+      await run(async () => { check(await sb.from(GROUPS_TABLE).update({ name: name.trim().slice(0, 40) }).eq('id', group.id)); await refreshGroups(); });
+    } else if (action === 'group-delete') {
+      if (!confirm(t("'{name}' 그룹을 삭제할까요?\n공유한 목표와 멤버 목록이 사라집니다. 멤버들이 이미 만든 계획은 각자에게 개인 목표로 남습니다.", { name: group.name }))) return;
+      await run(async () => { check(await sb.from(GROUPS_TABLE).delete().eq('id', group.id)); await loadGroups(); renderTopbar(); navigate('#/groups'); });
+    } else if (action === 'group-leave') {
+      if (!confirm(t("'{name}' 그룹에서 나갈까요?\n이미 만든 계획은 개인 목표로 남고, 리더는 더 이상 볼 수 없습니다.", { name: group.name }))) return;
+      await run(async () => {
+        check(await sb.from(GROUP_MEMBERS_TABLE).delete().eq('group_id', group.id).eq('user_id', currentUser.id));
+        await loadGroups();
+        renderTopbar();
+        navigate('#/groups');
+      });
+    } else if (action === 'member-remove') {
+      if (!confirm(t("{name}님을 그룹에서 내보낼까요?\n그 멤버의 계획은 개인 목표로 남고, 더 이상 볼 수 없습니다.", { name: btn.dataset.name }))) return;
+      await run(async () => { check(await sb.from(GROUP_MEMBERS_TABLE).delete().eq('group_id', group.id).eq('user_id', btn.dataset.user)); await refreshGroups(); });
+    } else if (action === 'share-open' || action === 'share-close') {
+      groupState.sharing = action === 'share-open';
+      render();
+    } else if (action === 'share-confirm') {
+      const goal = getGoal(container.querySelector('#share-goal').value);
+      if (!goal) return;
+      await run(async () => {
+        check(await sb.from(GROUP_ITEMS_TABLE).insert({
+          group_id: group.id, type: goal.type, title: goal.title.trim(), content: goalShareContent(goal),
+          cover_url: getCoverUrl(goal), source_goal_id: goal.id,
+        }));
+        groupState.sharing = false;
+        await refreshGroups();
+      });
+    } else if (action === 'share-update') {
+      const item = groupItems.find((i) => i.id === btn.dataset.item);
+      const goal = item && getGoal(item.sourceGoalId);
+      if (!goal) return;
+      if (!confirm(t('내 목표의 바뀐 이름·내용을 멤버들에게 다시 공유할까요?\n이미 계획을 세운 멤버에게는 "적용할까요?" 안내가 나타납니다.'))) return;
+      await run(async () => {
+        check(await sb.from(GROUP_ITEMS_TABLE).update({
+          type: goal.type, title: goal.title.trim(), content: goalShareContent(goal), cover_url: getCoverUrl(goal), updated_at: new Date().toISOString(),
+        }).eq('id', item.id));
+        await refreshGroups();
+      });
+    } else if (action === 'share-delete') {
+      const item = groupItems.find((i) => i.id === btn.dataset.item);
+      if (!item || !confirm(t("'{title}' 공유를 취소할까요?\n멤버들이 이미 만든 계획은 각자에게 개인 목표로 남지만, 리더는 더 이상 진도를 볼 수 없습니다.", { title: item.title }))) return;
+      await run(async () => { check(await sb.from(GROUP_ITEMS_TABLE).delete().eq('id', item.id)); await refreshGroups(); });
+    }
+  });
+}
+
+/* ----- 대시보드 · 목표 화면 연결 ----- */
+
+/** 대시보드: 아직 계획을 세우지 않은 그룹 공유 목표 */
+function renderGroupInbox() {
+  const pending = groupItems.filter((i) => {
+    const g = myGroups.find((x) => x.id === i.groupId);
+    return g && !g.isLeader && !findGoalForGroupItem(appData.goals, i.id);
+  });
+  if (!pending.length) return '';
+  const cards = pending.map((item) => `
+    <div class="goal-card required-empty">
+      <div class="card-top">
+        <span class="type-tag type-group">${escapeHtml(groupNameOf(item.groupId))}</span>
+        <span class="badge badge-waiting">${t('계획 없음')}</span>
+      </div>
+      <div class="card-book">
+        ${renderCoverThumb(item.coverUrl)}
+        <div>
+          <h3 class="card-title">${escapeHtml(item.title)}</h3>
+          <p class="card-meta">${typeLabel(item.type)} · ${escapeHtml(describeShareContent(item))}</p>
+        </div>
+      </div>
+      <a class="btn btn-primary" href="#/new/group/${escapeHtml(item.id)}">${t('계획 세우기')}</a>
+    </div>`).join('');
+  return `
+    <section class="required-section">
+      <h2 class="section-title">${t('그룹에서 공유된 목표')} <span class="count">${pending.length}</span></h2>
+      <div class="card-grid">${cards}</div>
+    </section>`;
+}
+
+/** 상세 화면: 리더가 공유 내용을 바꿨으면 적용 안내 */
+function renderGroupItemNotice(goal) {
+  const item = groupItemForGoal(goal);
+  if (!item || !isGroupItemChanged(goal, item) || detailState.preview) return '';
+  return `
+    <div class="notice notice-row">
+      <span>${t('그룹 리더가 공유 내용(이름·목차·목록)을 수정했습니다. 내 계획에 적용할까요?')}</span>
+      <button type="button" class="btn btn-small" data-action="sync-group">${t('적용 미리보기')}</button>
+    </div>`;
+}
+
+/** 목표 폼: 공유받은 내용 입력칸을 읽기 전용으로 */
+function lockSharedContentInputs(root) {
+  root.querySelectorAll('#f-lectures, #f-custom-unit, #f-custom-total, #f-custom-items').forEach((el) => { el.readOnly = true; });
+  root.querySelectorAll('#f-bible-start, #f-bible-end').forEach((el) => { el.disabled = true; });
+  root.querySelectorAll('.bible-presets, .custom-unit-presets').forEach((el) => { el.hidden = true; });
+}
+
+/* =========================================================================
  * 13. 영어 번역 — 키는 한국어 원문 (t() 참고)
  *     값이 함수면 매개변수로 문장을 만든다 (단수/복수 등).
  * ========================================================================= */
@@ -6379,6 +7115,72 @@ const EN = {
   '전체 개수를 1 이상의 정수로 입력하거나 항목 목록을 적어 주세요.': 'Enter a total count of 1 or more, or list the items.',
   '전체 개수는 10000개까지 입력할 수 있습니다.': 'The total count can be at most 10,000.',
   '기타 목표 정보가 올바르지 않습니다.': 'Custom goal data is invalid.',
+  // 그룹
+  '그룹': 'Groups',
+  '그룹 연결 정보가 올바르지 않습니다.': 'Group link data is invalid.',
+  "'{group}' 그룹에서 공유된 목표입니다. 이름과 내용은 리더가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.": (p) => `This goal was shared in the group '${p.group}'. The leader sets its name and contents; here you can only set the start date, due date and rest days.`,
+  '리더': 'Leader',
+  '멤버': 'Member',
+  '멤버 {n}명': (p) => `${p.n} ${p.n === 1 ? 'member' : 'members'}`,
+  '공유한 목표 {n}개': (p) => `${p.n} shared ${p.n === 1 ? 'goal' : 'goals'}`,
+  '리더 {name}': (p) => `Leader ${p.name}`,
+  '공유된 목표 {n}개 · 계획 {planned}개': (p) => `${p.n} shared · ${p.planned} planned`,
+  '그룹을 만들면 리더가 되어 책·강의 같은 목표를 멤버들에게 나눠 주고 진도를 볼 수 있어요.': 'Create a group to become its leader, share goals like books and lectures with members, and follow their progress.',
+  '새 그룹 만들기': 'Create a group',
+  '예: 청년부 독서 모임': 'e.g. Youth reading club',
+  '만들기': 'Create',
+  '초대 코드로 참여': 'Join with an invite code',
+  '6자리 코드': '6-character code',
+  '참여하기': 'Join',
+  '내 그룹': 'My groups',
+  '아직 속한 그룹이 없습니다.': 'You are not in any group yet.',
+  '그룹 이름을 입력하세요.': 'Enter a group name.',
+  '초대 코드 6자리를 확인하세요.': 'Check the 6-character invite code.',
+  '그룹을 찾을 수 없습니다': 'Group not found',
+  '초대 코드가 틀렸거나, 리더가 코드를 새로 만들었을 수 있어요. 리더에게 새 링크를 받아 주세요.': 'The invite code is wrong, or the leader created a new one. Ask the leader for a new link.',
+  '그룹 목록': 'Groups',
+  "'{name}' 그룹에 참여할까요?": (p) => `Join the group '${p.name}'?`,
+  '리더: {name}': (p) => `Leader: ${p.name}`,
+  '참여하면 리더가 공유한 목표로 계획을 세울 수 있고, 리더는 그 목표의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.': 'After joining you can plan the goals the leader shares. The leader can see progress on those goals only — never your personal goals.',
+  '내가 리더인 그룹': 'You lead this group',
+  '그룹 나가기': 'Leave group',
+  '공유된 목표': 'Shared goals',
+  '리더가 아직 공유한 목표가 없습니다.': 'The leader has not shared any goals yet.',
+  '리더는 여기서 만든 계획의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.': 'The leader can see progress only on plans made from these goals. Your personal goals stay private.',
+  '아직 계획 없음': 'No plan yet',
+  '계획 세운 멤버 {n}/{total}명': (p) => `${p.n}/${p.total} members planned`,
+  '내 목표에서 바꾼 이름·내용을 멤버들에게 다시 공유합니다': 'Share the name and contents you changed in your goal with members again',
+  '바뀐 내용 공유': 'Share changes',
+  '공유 취소': 'Unshare',
+  '마지막 기록': 'Last update',
+  '아직 참여한 멤버가 없습니다. 초대 링크를 보내 주세요.': 'No members yet. Send them the invite link.',
+  '내보내기||member': 'Remove',
+  '이름 바꾸기': 'Rename',
+  '그룹 삭제': 'Delete group',
+  '멤버 초대': 'Invite members',
+  '링크 복사': 'Copy link',
+  '지금 코드는 더 이상 쓸 수 없게 됩니다': 'The current code will stop working',
+  '코드 새로 만들기': 'New code',
+  '링크를 받은 사람은 로그인한 뒤 바로 참여할 수 있어요. 코드만 알려 줘도 [그룹 → 초대 코드로 참여]에서 들어올 수 있습니다.': 'Anyone with the link can join right after signing in. You can also share just the code — they enter it under [Groups → Join with an invite code].',
+  '공유한 목표': 'Shared goals',
+  '+ 내 목표 공유하기': '+ Share one of my goals',
+  '내 목표의 이름과 내용(목차·목록·범위)만 공유되고, 날짜와 진도는 공유되지 않아요. 멤버는 각자 날짜를 정합니다.': 'Only the name and contents (table of contents, list, range) are shared — not your dates or progress. Each member sets their own dates.',
+  '공유': 'Share',
+  '공유할 목표가 없습니다. 먼저 <a href="#/new">새 목표</a>를 만들어 주세요. (그룹에서 받은 목표는 다시 공유할 수 없어요)': 'Nothing to share. Create a <a href="#/new">new goal</a> first. (Goals received from a group cannot be re-shared.)',
+  '아직 공유한 목표가 없습니다. 내 목표를 공유하면 멤버들이 같은 내용으로 계획을 세울 수 있어요.': 'No shared goals yet. Share one of your goals so members can plan with the same contents.',
+  '참여일': 'Joined',
+  '목표를 찾을 수 없습니다.': 'Goal not found.',
+  '처리하지 못했습니다.\n\n{message}': (p) => `Something went wrong.\n\n${p.message}`,
+  '복사됨': 'Copied',
+  '초대 코드를 새로 만들까요?\n지금 코드와 링크로는 더 이상 참여할 수 없습니다. (이미 참여한 멤버는 그대로예요)': 'Create a new invite code?\nThe current code and link will stop working. (Existing members stay.)',
+  '새 그룹 이름': 'New group name',
+  "'{name}' 그룹을 삭제할까요?\n공유한 목표와 멤버 목록이 사라집니다. 멤버들이 이미 만든 계획은 각자에게 개인 목표로 남습니다.": (p) => `Delete the group '${p.name}'?\nShared goals and the member list will be removed. Plans members already made stay with them as personal goals.`,
+  "'{name}' 그룹에서 나갈까요?\n이미 만든 계획은 개인 목표로 남고, 리더는 더 이상 볼 수 없습니다.": (p) => `Leave the group '${p.name}'?\nPlans you made stay as personal goals, and the leader can no longer see them.`,
+  '{name}님을 그룹에서 내보낼까요?\n그 멤버의 계획은 개인 목표로 남고, 더 이상 볼 수 없습니다.': (p) => `Remove ${p.name} from the group?\nTheir plans stay as personal goals, and you will no longer see them.`,
+  '내 목표의 바뀐 이름·내용을 멤버들에게 다시 공유할까요?\n이미 계획을 세운 멤버에게는 "적용할까요?" 안내가 나타납니다.': 'Share the updated name and contents with members?\nMembers who already planned will be asked whether to apply the changes.',
+  "'{title}' 공유를 취소할까요?\n멤버들이 이미 만든 계획은 각자에게 개인 목표로 남지만, 리더는 더 이상 진도를 볼 수 없습니다.": (p) => `Unshare '${p.title}'?\nPlans members already made stay as personal goals, but you will no longer see their progress.`,
+  '그룹에서 공유된 목표': 'Shared in your groups',
+  '그룹 리더가 공유 내용(이름·목차·목록)을 수정했습니다. 내 계획에 적용할까요?': 'The group leader updated the shared contents (name, table of contents, list). Apply to your plan?',
 };
 
 /* =========================================================================
@@ -6402,6 +7204,7 @@ async function boot() {
     return;
   }
   window.addEventListener('hashchange', render);
+  rememberPendingJoin();
   document.getElementById('topbar').addEventListener('click', async (e) => {
     const action = e.target.closest('[data-action]')?.dataset.action;
     if (action === 'user-menu') {
@@ -6448,6 +7251,9 @@ async function boot() {
       account = { isAdmin: false, inTeam: false };
       setLibraryRows([]);
       myAssignedBookIds = new Set();
+      myGroups = [];
+      groupItems = [];
+      groupState.groupId = null;
       adminState.loaded = false;
       renderTopbar();
       renderLogin(root);

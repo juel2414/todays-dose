@@ -1121,3 +1121,26 @@ body.modal-open { overflow: hidden; }
 /* 기타 종류 */
 .custom-intro { margin: 0 0 14px; }
 .custom-unit-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+/* ===== 그룹 ===== */
+.type-group { background: #fdeaf3; color: #be185d; }
+.type-leader { background: var(--primary-soft); color: var(--primary); }
+.group-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 12px; }
+.group-form .section-title { margin-top: 0; }
+.group-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.group-form-row .input { flex: 1; min-width: 180px; }
+.input-code { text-transform: uppercase; letter-spacing: 0.15em; font-weight: 700; max-width: 160px; }
+.group-card .card-title { margin: 10px 0 4px; }
+.group-items { display: flex; flex-direction: column; }
+.group-item { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.group-items .group-item:last-child { border-bottom: 0; }
+.group-share .group-item { border-bottom: 0; padding-top: 0; }
+.group-item-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.group-item-side { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.invite-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.invite-code { font-size: 24px; font-weight: 800; letter-spacing: 0.18em; padding: 4px 14px; border-radius: var(--radius); background: var(--primary-soft); color: var(--primary); }
+.invite-link { flex: 1; min-width: 240px; color: var(--muted); }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 0 12px; }
+.section-head .section-title { margin: 0; }
+.share-picker { margin-bottom: 16px; }
+.join-actions { display: flex; gap: 8px; justify-content: center; margin-top: 16px; }
