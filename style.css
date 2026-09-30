@@ -1191,3 +1191,13 @@ body.modal-open { overflow: hidden; }
 .group-share .admin-table th:nth-child(2) { width: 24%; }
 .group-share .admin-table th:nth-child(3) { width: 24%; }
 .group-share .admin-table th:nth-child(4) { width: 18%; }
+.progress-section-head { display: flex; align-items: baseline; gap: 12px; margin: 28px 0 12px; }
+.progress-section-head:first-child { margin-top: 8px; }
+.progress-section-head .section-title { margin: 0; }
+.progress-toggle { margin-bottom: 12px; padding: 0; }
+.progress-toggle > summary { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 16px 20px; cursor: pointer; list-style: none; }
+.progress-toggle > summary::-webkit-details-marker { display: none; }
+.progress-toggle > summary::before { content: '▸'; color: var(--muted); transition: transform 0.15s; }
+.progress-toggle[open] > summary::before { transform: rotate(90deg); }
+.progress-toggle-body { padding: 16px 20px 6px; border-top: 1px solid var(--border); }
+.progress-toggle .group-share { box-shadow: none; }

@@ -4690,6 +4690,7 @@ const adminState = {
   groupMembers: [], // [{ group_id, user_id, joined_at }]
   groupItems: [], // 모든 공유 목표 (rowToGroupItem)
   openGroups: new Set(), // 회원 관리에서 펼친 그룹
+  progressOpen: new Map(), // 진도 현황 접기/펼치기 (key → 펼침 여부)
   memberSearch: '', // 전체 회원 검색어
   memberGroupFilter: '', // '' 전체 | 'none' 그룹 없음 | 그룹 id
 };
@@ -4793,12 +4794,64 @@ function bookAudience(book) {
 function renderAdminProgress() {
   const books = requiredBooks.filter((b) => adminState.assignments.some((a) => a.book_id === b.id));
   const groups = renderAdminGroupProgress();
-  if (!books.length && !groups) {
-    return `<div class="empty">${t('아직 그룹의 필독서·필수 시청이나 배정된 책이 없습니다.')}</div>`;
+  const personal = renderAdminPersonalProgress();
+  if (!books.length && !groups && !personal) {
+    return `<div class="empty">${t('아직 그룹의 필독서·필수 시청이나 회원 목표가 없습니다.')}</div>`;
   }
-  return `${groups}${books.length ? `
-    <div class="progress-group-head"><h2 class="section-title">${t('배정된 책')} <span class="count">${books.length}</span></h2></div>
-    ${renderAssignedProgress(books)}` : ''}`;
+  return `
+    ${groups ? `<div class="progress-section-head"><h2 class="section-title">${t('그룹')}</h2></div>${groups}` : ''}
+    ${books.length ? `
+    <div class="progress-section-head"><h2 class="section-title">${t('배정된 책')} <span class="count">${books.length}</span></h2></div>
+    ${renderAssignedProgress(books)}` : ''}
+    ${personal}`;
+}
+
+/** 진도 현황 접기/펼치기 상태 (key → 펼침 여부). 그룹은 기본 펼침, 회원은 기본 접힘 */
+function isProgressOpen(key, fallback) {
+  return adminState.progressOpen.has(key) ? adminState.progressOpen.get(key) : fallback;
+}
+
+/** 진도 현황: 회원이 개별로 진행하는 목표 (그룹에서 받은 목표 제외) — 회원마다 접고 펼치기 */
+function renderAdminPersonalProgress() {
+  const today = todayStr();
+  const byUser = new Map();
+  adminState.goals.forEach(({ userId, goal }) => {
+    if (goal.groupItemId) return;
+    if (!byUser.has(userId)) byUser.set(userId, []);
+    byUser.get(userId).push(goal);
+  });
+  const people = adminState.profiles.filter((p) => byUser.has(p.user_id));
+  if (!people.length) return '';
+  const blocks = people.map((p) => {
+    const items = byUser.get(p.user_id)
+      .map((goal) => ({ goal, s: getGoalSummary(goal, undefined, today) }))
+      .sort((a, b) => (a.s.isActive === b.s.isActive ? diffDays(b.goal.dueDate, a.goal.dueDate) : a.s.isActive ? -1 : 1));
+    const active = items.filter((x) => x.s.isActive).length;
+    const behind = items.filter((x) => x.s.isActive && !x.s.notStarted && x.s.diff < 0).length;
+    const key = `m:${p.user_id}`;
+    return `
+      <details class="panel progress-toggle" data-progress-key="${escapeHtml(key)}" ${isProgressOpen(key, false) ? 'open' : ''}>
+        <summary>
+          <span class="admin-group-name">${escapeHtml(profileName(p))}</span>
+          <span class="muted">${t('목표 {n}개 · 진행 중 {active}개', { n: items.length, active })}</span>
+          ${behind ? `<b class="text-danger small">${t('밀림 {n}개', { n: behind })}</b>` : ''}
+        </summary>
+        <div class="progress-toggle-body">
+          <table class="admin-table">
+            <thead>
+              <tr><th>${t('목표')}</th><th>${t('기간')}</th><th class="num">${t('오늘까지 권장')}</th><th class="num">${t('실제 완료')}</th><th class="num">${t('끝')}</th><th class="col-bar">${t('진도')}</th><th>${t('상태')}</th></tr>
+            </thead>
+            <tbody>${items.map(({ goal, s }) => renderAdminGoalRow(p, goal, s)).join('')}</tbody>
+          </table>
+        </div>
+      </details>`;
+  }).join('');
+  return `
+    <div class="progress-section-head">
+      <h2 class="section-title">${t('개별 진행')} <span class="count">${people.length}</span></h2>
+      <span class="muted small">${t('그룹과 상관없이 회원이 스스로 세운 목표입니다.')}</span>
+    </div>
+    ${blocks}`;
 }
 
 /** 진도 현황: 그룹마다 필독서 · 필수 시청의 멤버 진도 */
@@ -4810,13 +4863,27 @@ function renderAdminGroupProgress() {
     const members = adminGroupPeople(g.id);
     const memberIds = new Set(members.map((m) => m.user_id));
     const memberGoals = adminState.goals.filter((x) => x.goal.groupId === g.id && memberIds.has(x.userId));
+    const key = `g:${g.id}`;
+    const planned = new Set(memberGoals.filter((x) => x.goal.groupItemId).map((x) => x.userId)).size;
+    const behind = new Set(memberGoals.filter((x) => {
+      if (!x.goal.groupItemId) return false;
+      const s = getGoalSummary(x.goal);
+      return s.isActive && !s.notStarted && s.diff < 0;
+    }).map((x) => x.userId)).size;
     return `
-      <div class="progress-group-head">
-        <h2 class="section-title">${escapeHtml(g.name)}</h2>
-        <span class="muted">${t('리더 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })} · ${t('멤버 {n}명', { n: members.length })}</span>
-      </div>
-      ${groupItemsByKind(items).map(({ items: list }) => list.map((item) => renderGroupItemProgress(item, members, memberGoals, '',
-        (m, goal) => `#/admin/member/${m.user_id}/${goal.id}`)).join('')).join('')}`;
+      <details class="panel progress-toggle" data-progress-key="${escapeHtml(key)}" ${isProgressOpen(key, true) ? 'open' : ''}>
+        <summary>
+          <span class="admin-group-name">${escapeHtml(g.name)}</span>
+          <span class="muted">${t('리더 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })} · ${t('멤버 {n}명', { n: members.length })}</span>
+          <span class="muted">${summarizeShared(items)}</span>
+          <span class="muted">${t('계획 세운 멤버 {n}/{total}명', { n: planned, total: members.length })}</span>
+          ${behind ? `<b class="text-danger small">${t('밀림 {n}명', { n: behind })}</b>` : ''}
+        </summary>
+        <div class="progress-toggle-body">
+          ${groupItemsByKind(items).map(({ items: list }) => list.map((item) => renderGroupItemProgress(item, members, memberGoals, '',
+            (m, goal) => `#/admin/member/${m.user_id}/${goal.id}`)).join('')).join('')}
+        </div>
+      </details>`;
   }).join('');
 }
 
@@ -5546,6 +5613,10 @@ function bindAdminEvents(container, tab) {
   // 회원 관리: 그룹 펼치기/접기 (펼칠 때 내용을 그린다)
   container.addEventListener('toggle', (e) => {
     const el = e.target;
+    if (el.dataset && el.dataset.progressKey) {
+      adminState.progressOpen.set(el.dataset.progressKey, el.open);
+      return;
+    }
     if (!el.classList || !el.classList.contains('admin-group')) return;
     const id = el.dataset.group;
     if (el.open === adminState.openGroups.has(id)) return;
@@ -7539,6 +7610,10 @@ const EN = {
   '그룹 필독서 · 필수 시청': 'Required in your groups',
   "'{group}' 그룹의 {kind}입니다. 이름과 내용은 리더가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.": (p) => `${p.kind} in the group '${p.group}'. The leader sets its name and contents; here you can only set the start date, due date and rest days.`,
   '아직 그룹의 필독서·필수 시청이나 배정된 책이 없습니다.': 'No group required books/lectures or assigned books yet.',
+  '아직 그룹의 필독서·필수 시청이나 회원 목표가 없습니다.': 'No group required books/lectures or member goals yet.',
+  '개별 진행': 'Individual goals',
+  '그룹과 상관없이 회원이 스스로 세운 목표입니다.': 'Goals members set up on their own, outside any group.',
+  '밀림 {n}개': (p) => `${p.n} behind`,
 };
 
 /* =========================================================================
