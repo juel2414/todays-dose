@@ -1722,8 +1722,9 @@ function renderGoalForm(root, goal, bookId = null) {
         </div>
       </div>
       <div class="quick-due">
-        <span class="field-hint">시작일부터</span>
-        ${[1, 2, 4, 6, 8].map((w) => `<button type="button" class="btn btn-small" data-weeks="${w}">${w}주</button>`).join('')}
+        <span class="field-hint">마감일 빠르게 정하기 (시작일부터)</span>
+        ${[1, 2, 4, 6, 8].map((w) => `<button type="button" class="btn btn-small" data-weeks="${w}"
+          title="시작일부터 ${w}주 뒤를 마감일로 정합니다">${w}주 동안</button>`).join('')}
         <span id="f-daily" class="daily-estimate"></span>
       </div>
 
