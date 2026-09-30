@@ -4692,6 +4692,7 @@ const adminState = {
   openGroups: new Set(), // 회원 관리에서 펼친 그룹
   progressOpen: new Map(), // 진도 현황 접기/펼치기 (key → 펼침 여부)
   memberSearch: '', // 전체 회원 검색어
+  planSearch: '', // 회원 계획 검색어
   memberGroupFilter: '', // '' 전체 | 'none' 그룹 없음 | 그룹 id
 };
 
@@ -4833,7 +4834,7 @@ function renderAdminPersonalProgress() {
       <details class="panel progress-toggle" data-progress-key="${escapeHtml(key)}" ${isProgressOpen(key, false) ? 'open' : ''}>
         <summary>
           <span class="admin-group-name">${escapeHtml(profileName(p))}</span>
-          <span class="muted">${t('목표 {n}개 · 진행 중 {active}개', { n: items.length, active })}</span>
+          <span class="muted">${summarizeGoalTypes(items.map((x) => x.goal), active)}</span>
           ${behind ? `<b class="text-danger small">${t('밀림 {n}개', { n: behind })}</b>` : ''}
         </summary>
         <div class="progress-toggle-body">
@@ -4965,13 +4966,13 @@ function renderAdminPlans() {
       .map((goal) => ({ goal, s: getGoalSummary(goal, undefined, today) }))
       .sort((a, b) => (a.s.isActive === b.s.isActive ? diffDays(b.goal.dueDate, a.goal.dueDate) : a.s.isActive ? -1 : 1));
     return `
-      <section class="panel admin-book">
+      <section class="panel admin-book" data-plan-person data-search="${escapeHtml(`${p.name || ''} ${p.email || ''}`.toLowerCase())}">
         <div class="admin-book-head">
           <div>
             <h2 class="section-title">${escapeHtml(profileName(p))} ${renderAdminGroupTags(p.user_id)}</h2>
             <span class="muted">${escapeHtml(p.email)}</span>
           </div>
-          <span class="muted">${t('목표 {n}개 · 진행 중 {active}개', { n: items.length, active: items.filter((x) => x.s.isActive).length })}</span>
+          <span class="muted">${summarizeGoalTypes(items.map((x) => x.goal), items.filter((x) => x.s.isActive).length)}</span>
         </div>
         <table class="admin-table">
           <thead>
@@ -4985,8 +4986,12 @@ function renderAdminPlans() {
   }).join('');
 
   return `
-    <p class="muted admin-intro">${t('회원들이 만든 모든 목표입니다. 목표를 누르면 날짜별 계획표를 볼 수 있습니다. (읽기 전용)')}</p>
+    <div class="plans-toolbar">
+      <p class="muted admin-intro">${t('회원들이 만든 모든 목표입니다. 목표를 누르면 날짜별 계획표를 볼 수 있습니다. (읽기 전용)')}</p>
+      <input type="search" id="plan-search" class="input member-search" placeholder="${t('이름 또는 이메일 검색…')}" value="${escapeHtml(adminState.planSearch)}">
+    </div>
     ${sections}
+    <p class="empty" id="plan-empty" hidden>${t('조건에 맞는 회원이 없습니다.')}</p>
     ${withoutGoals.length ? `<p class="muted admin-legend">${t('목표가 없는 회원: {names}', { names: withoutGoals.map((p) => escapeHtml(profileName(p))).join(', ') })}</p>` : ''}`;
 }
 
@@ -5426,6 +5431,18 @@ function applyMemberFilter(container) {
   if (empty) empty.hidden = shown > 0;
 }
 
+/** 회원 계획 탭: 이름·이메일 검색 (다시 그리지 않고 숨김) */
+function applyPlanFilter(container) {
+  const q = adminState.planSearch.trim().toLowerCase();
+  let shown = 0;
+  container.querySelectorAll('[data-plan-person]').forEach((el) => {
+    el.hidden = !!q && !el.dataset.search.includes(q);
+    if (!el.hidden) shown += 1;
+  });
+  const empty = container.querySelector('#plan-empty');
+  if (empty) empty.hidden = shown > 0 || !container.querySelector('[data-plan-person]');
+}
+
 /** 관리자: 드롭다운으로 고른 그룹에 회원 추가 */
 async function adminAddToGroup(select) {
   const groupId = select.value;
@@ -5442,6 +5459,16 @@ async function adminAddToGroup(select) {
     select.value = '';
     select.disabled = false;
   }
+}
+
+/** 목표 종류별 개수: "책 2개 · 강의 1개" (+ 진행 중 N개) */
+function summarizeGoalTypes(goals, activeCount = null) {
+  const parts = Object.keys(TYPE_LABELS)
+    .map((type) => [type, goals.filter((g) => g.type === type).length])
+    .filter(([, n]) => n > 0)
+    .map(([type, n]) => t('{type} {n}개', { type: typeLabel(type), n }));
+  if (activeCount !== null) parts.push(t('진행 중 {n}개', { n: activeCount }));
+  return parts.join(' · ');
 }
 
 /** 사람이 속한 그룹 태그 (리더면 "리더" 표시) */
@@ -5605,11 +5632,17 @@ function bindAdminEvents(container, tab) {
   bindCoverDrop(container);
   // 회원 관리: 검색
   container.addEventListener('input', (e) => {
+    if (e.target.id === 'plan-search') {
+      adminState.planSearch = e.target.value;
+      applyPlanFilter(container);
+      return;
+    }
     if (e.target.id !== 'member-search') return;
     adminState.memberSearch = e.target.value;
     applyMemberFilter(container);
   });
   if (tab === 'members') applyMemberFilter(container);
+  if (tab === 'plans') applyPlanFilter(container);
   // 회원 관리: 그룹 펼치기/접기 (펼칠 때 내용을 그린다)
   container.addEventListener('toggle', (e) => {
     const el = e.target;
@@ -7614,6 +7647,8 @@ const EN = {
   '개별 진행': 'Individual goals',
   '그룹과 상관없이 회원이 스스로 세운 목표입니다.': 'Goals members set up on their own, outside any group.',
   '밀림 {n}개': (p) => `${p.n} behind`,
+  '{type} {n}개': (p) => `${p.n} ${p.type.toLowerCase()}${p.n === 1 ? '' : 's'}`,
+  '진행 중 {n}개': (p) => `${p.n} in progress`,
 };
 
 /* =========================================================================
