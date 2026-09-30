@@ -1093,3 +1093,10 @@ body.modal-open { overflow: hidden; }
 .toc-tools { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 .toc-paste-link { color: var(--primary); font-size: 13px; }
 .read-page-row { display: flex; align-items: center; gap: 12px; }
+.ai-toc { transition: border-color 0.15s, box-shadow 0.15s, background 0.15s; }
+.ai-toc.is-dragover {
+  border: 2px dashed #6a4fe8;
+  background: linear-gradient(135deg, #e3ebff 0%, #efe6ff 100%);
+  box-shadow: 0 0 0 4px rgba(122, 79, 232, 0.12);
+}
+.ai-toc-text .ai-toc-drop { font-size: 12px; color: #6a4fe8; }

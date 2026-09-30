@@ -2784,6 +2784,7 @@ function renderChapterEditorHtml(lastPage) {
         <div class="ai-toc-text">
           <strong>${t('AI 목차 인식')}<span class="ai-badge">AI</span></strong>
           <span>${t('책의 목차 페이지를 찍어 올리면 AI가 챕터 이름과 시작 페이지를 읽어 한 번에 채워요. 여러 쪽이면 사진을 여러 장 함께 고르세요.')}</span>
+          <span class="ai-toc-drop">${t('사진을 이 상자에 끌어다 놓아도 돼요.')}</span>
         </div>
         <label class="btn btn-ai" id="toc-photo-label">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
@@ -2997,10 +2998,48 @@ function bindTocTools(container, onChange) {
     if (e.target.classList && e.target.classList.contains('ch-start') && e.target.value !== '') e.target.classList.remove('is-missing');
   });
 
-  photo.addEventListener('change', async () => {
-    // 여러 장이면 파일 이름 순서(보통 찍은 순서)로 읽는다
-    const files = [...photo.files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  photo.addEventListener('change', () => {
+    const files = [...photo.files];
     photo.value = '';
+    readTocFiles(files);
+  });
+
+  // 카드에 사진을 끌어다 놓아도 읽는다
+  const card = container.querySelector('.ai-toc');
+  const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+  let dragDepth = 0;
+  card.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth++;
+    card.classList.add('is-dragover');
+  });
+  card.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  card.addEventListener('dragleave', () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) card.classList.remove('is-dragover');
+  });
+  card.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    card.classList.remove('is-dragover');
+    if (photo.disabled) return; // 읽는 중
+    const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'));
+    if (!files.length) {
+      showChapterEditorError(container, t('목차를 읽지 못했습니다'), t('이미지 파일(JPG·PNG 등)을 끌어다 놓아 주세요.'));
+      return;
+    }
+    readTocFiles(files);
+  });
+
+  async function readTocFiles(picked) {
+    // 여러 장이면 파일 이름 순서(보통 찍은 순서)로 읽는다
+    const files = [...picked].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
     if (!files.length) return;
     if (!confirmReplaceChapters()) return;
     const text = photoLabel.querySelector('.toc-photo-text');
@@ -3049,7 +3088,7 @@ function bindTocTools(container, onChange) {
       photoLabel.classList.remove('is-loading');
       photo.disabled = false;
     }
-  });
+  }
 }
 
 /** 손잡이(⠿)를 잡고 끌어서 챕터 순서 바꾸기 */
@@ -5485,6 +5524,8 @@ const EN = {
   'p.{p}까지 읽음 → 남은 {n}페이지를 나눕니다.': (p) => `Read through p.${p.p} → the remaining ${p.n} ${p.n === 1 ? 'page' : 'pages'} will be split.`,
   '첫 챕터 시작 페이지와 마지막 페이지 사이로 입력하세요.': 'Enter a page between the first chapter and the last page.',
   '마지막으로 읽은 페이지는 {a}~{b} 사이로 입력하세요. 처음부터 읽을 거면 비워 두세요.': 'Enter a last page read between {a} and {b}, or leave it blank to start from the beginning.',
+  '사진을 이 상자에 끌어다 놓아도 돼요.': 'You can also drag photos onto this box.',
+  '이미지 파일(JPG·PNG 등)을 끌어다 놓아 주세요.': 'Drop image files (JPG, PNG, etc.).',
   '오늘분량': "Today's Dose",
   '언어': 'Language',
   '저장 중…': 'Saving…',
