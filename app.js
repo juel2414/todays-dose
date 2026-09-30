@@ -3187,8 +3187,29 @@ function stripTags(html) {
   return div.textContent;
 }
 
-/** 글자를 폭에 맞게 줄바꿈 */
+/** 띄어쓰기 단위로 폭에 맞게 줄바꿈 (한 단어가 너무 길면 글자 단위로) */
 function wrapText(ctx, text, maxWidth) {
+  const words = String(text).split(' ');
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (ctx.measureText(next).width <= maxWidth) {
+      line = next;
+    } else if (!line) {
+      lines.push(...wrapChars(ctx, word, maxWidth));
+    } else {
+      lines.push(line);
+      line = ctx.measureText(word).width <= maxWidth ? word : '';
+      if (!line) lines.push(...wrapChars(ctx, word, maxWidth));
+    }
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [''];
+}
+
+/** 글자 단위 줄바꿈 */
+function wrapChars(ctx, text, maxWidth) {
   const lines = [];
   let line = '';
   for (const ch of String(text)) {
@@ -3222,7 +3243,10 @@ function loadImage(url) {
 }
 
 /**
- * 계획 이미지 그리기 → canvas
+ * 계획 이미지 그리기 → canvas (한눈에 보기용 압축 배치)
+ *  - 머리: 제목 · 저자 · 기간
+ *  - 현황: 실제 완료 / 끝 · 진행률 · 진행 막대 · 핵심 숫자 3개 · 안내 한 줄
+ *  - 날짜별: 하루 한 줄 (날짜 · 범위 · 분량 · 완료). 16일 넘으면 두 칸으로.
  * options: { basis, range: 'all' | 'upcoming' }
  */
 async function drawPlanImage(goal, options) {
@@ -3230,201 +3254,243 @@ async function drawPlanImage(goal, options) {
   const { basis } = options;
   const s = getGoalSummary(goal, undefined, today);
   const msg = getCompareMessage(goal, s);
-  const unit = getUnitLabel(s.basis);
   const cover = await loadImage(getCoverUrl(goal));
   let rows = buildTimeline(goal, basis);
   if (options.range === 'upcoming') rows = rows.filter((r) => diffDays(today, r.date) >= 0);
   const done = getDoneUnits(goal, basis);
+  const C = EXPORT_COLORS;
 
   const W = EXPORT_WIDTH;
-  const P = EXPORT_PAD;
+  const P = 56;
   const inner = W - P * 2;
   const font = (size, weight = 400) => `${weight} ${size}px ${EXPORT_FONT}`;
+  const fit = (ctx, text, maxW) => {
+    if (ctx.measureText(text).width <= maxW) return text;
+    let t = String(text);
+    while (t.length > 1 && ctx.measureText(`${t}…`).width > maxW) t = t.slice(0, -1);
+    return `${t}…`;
+  };
 
-  // 1) 먼저 높이를 재기 위해 행 레이아웃 계산
-  const measure = document.createElement('canvas').getContext('2d');
-  const contentX = P + 210;
-  const contentW = inner - 210 - 170;
-  const rowLayouts = rows.map((row) => {
-    const t = rowTextForExport(goal, basis, row);
-    measure.font = font(26);
-    const subLines = t.subs.flatMap((sub) => wrapText(measure, sub, contentW));
-    const height = Math.max(92, 36 + 36 + subLines.length * 34 + 22);
-    return { row, t, subLines, height: t.rest ? 72 : height };
-  });
+  // 두 칸 여부와 높이 계산
+  const twoCols = rows.length > 16;
+  const perCol = twoCols ? Math.ceil(rows.length / 2) : rows.length;
+  const ROW_H = twoCols ? 50 : 58;
+  const isRequired = goal.requiredBookId && requiredBooks.some((b) => b.id === goal.requiredBookId);
+  const headerH = Math.max(isRequired ? 196 : 150, cover ? 44 + 145 + 24 : 0);
 
-  const headerH = 330;
-  const statsH = 470;
-  const tableHeadH = 110;
-  const listH = rowLayouts.reduce((sum, r) => sum + r.height, 0);
-  const footerH = 110;
-  const H = headerH + statsH + tableHeadH + listH + footerH;
+  // 안내 문구가 길면 두 줄
+  const measureCtx = document.createElement('canvas').getContext('2d');
+  measureCtx.font = font(22, 600);
+  const msgLines = wrapText(measureCtx, stripTags(msg.html), inner - 72 - 36).slice(0, 2);
+  const msgH = msgLines.length > 1 ? 80 : 46;
+  const statusH = 284 + msgH;
+  const tableTop = headerH + statusH + 24;
+  const tableH = 70 + perCol * ROW_H + 24;
+  const H = tableTop + tableH + 70;
 
   const canvas = document.createElement('canvas');
   canvas.width = W;
   canvas.height = H;
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = EXPORT_COLORS.bg;
+  ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, W, H);
-  ctx.textBaseline = 'alphabetic';
 
-  // 2) 머리: 표지 · 제목 · 저자 · 기간
-  let y = P;
-  let textX = P;
+  // ---- 머리
+  let x = P;
   if (cover) {
-    const cw = 150;
-    const ch = Math.round(cw * (cover.height / cover.width));
+    const cw = 100;
+    const ch = Math.min(145, Math.round(cw * (cover.height / cover.width)));
     ctx.save();
     ctx.shadowColor = 'rgba(16,24,40,0.25)';
-    ctx.shadowBlur = 16;
-    ctx.drawImage(cover, P, y, cw, Math.min(ch, 220));
+    ctx.shadowBlur = 12;
+    ctx.drawImage(cover, P, 44, cw, ch);
     ctx.restore();
-    textX = P + cw + 36;
+    x = P + cw + 28;
   }
-  const tagText = goal.requiredBookId && requiredBooks.some((b) => b.id === goal.requiredBookId) ? '사역자 필독서'
-    : goal.type === 'book' ? '책' : '강의';
-  ctx.font = font(24, 700);
-  const tagW = ctx.measureText(tagText).width + 28;
-  roundRect(ctx, textX, y, tagW, 40, 8, EXPORT_COLORS.requiredSoft);
-  ctx.fillStyle = EXPORT_COLORS.required;
-  ctx.fillText(tagText, textX + 14, y + 29);
-
-  ctx.font = font(52, 800);
-  ctx.fillStyle = EXPORT_COLORS.text;
-  const titleLines = wrapText(ctx, goal.title, W - P - textX).slice(0, 2);
-  titleLines.forEach((line, i) => ctx.fillText(line, textX, y + 110 + i * 62));
-  let ty = y + 110 + (titleLines.length - 1) * 62;
-  ctx.font = font(28);
-  ctx.fillStyle = EXPORT_COLORS.muted;
-  if (getBookAuthor(goal)) {
-    ty += 48;
-    ctx.fillText(`${getBookAuthor(goal)} 지음`, textX, ty);
+  let y = 44;
+  if (isRequired) {
+    ctx.font = font(20, 700);
+    const tw = ctx.measureText('사역자 필독서').width + 24;
+    roundRect(ctx, x, y, tw, 34, 7, C.requiredSoft);
+    ctx.fillStyle = C.required;
+    ctx.fillText('사역자 필독서', x + 12, y + 24);
+    y += 46;
   }
-  ty += 48;
+  ctx.font = font(42, 800);
+  ctx.fillStyle = C.text;
+  ctx.fillText(fit(ctx, goal.title, W - P - x), x, y + 38);
+  ctx.font = font(23);
+  ctx.fillStyle = C.muted;
   const rest = getRestWeekdays(goal);
-  ctx.fillText(`${goal.startDate} ~ ${goal.dueDate} · ${formatDday(s.dday)}${rest.length ? ` · ${WEEKDAY_ORDER.filter((d) => rest.includes(d)).map((d) => WEEKDAYS_KO[d]).join('·')} 쉼` : ''}`, textX, ty);
+  const meta = [
+    getBookAuthor(goal) ? `${getBookAuthor(goal)} 지음` : '',
+    `${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)}`,
+    formatDday(s.dday),
+    rest.length ? `${WEEKDAY_ORDER.filter((d) => rest.includes(d)).map((d) => WEEKDAYS_KO[d]).join('·')} 쉼` : '',
+  ].filter(Boolean).join('  ·  ');
+  ctx.fillText(fit(ctx, meta, W - P - x), x, y + 78);
 
-  // 3) 현황 카드
+  // ---- 현황 카드
   y = headerH;
-  roundRect(ctx, P, y, inner, statsH - 30, 24, EXPORT_COLORS.surface);
-  const statY = y + 36;
-  const boxGap = 16;
-  const boxW = (inner - 72 - boxGap * 3) / 4;
-  const stats = [
-    [`${s.dailyPlan}${unit}`, '하루 권장'],
-    [formatPosition(goal, s.basis, s.target), '오늘까지 권장'],
-    [formatPosition(goal, s.basis, s.done), '실제 완료'],
-    [formatPosition(goal, s.basis, s.total), totalLabel(s.basis)],
-  ];
-  stats.forEach(([value, label], i) => {
-    const bx = P + 36 + i * (boxW + boxGap);
-    roundRect(ctx, bx, statY, boxW, 140, 16, '#f7f8f9');
-    ctx.textAlign = 'center';
-    ctx.font = font(value.length > 7 ? 34 : 40, 800);
-    ctx.fillStyle = EXPORT_COLORS.text;
-    ctx.fillText(value, bx + boxW / 2, statY + 72);
-    ctx.font = font(24);
-    ctx.fillStyle = EXPORT_COLORS.muted;
-    ctx.fillText(label, bx + boxW / 2, statY + 114);
-    ctx.textAlign = 'left';
-  });
+  roundRect(ctx, P, y, inner, statusH, 22, C.surface);
+  const cx = P + 36;
+  const cw = inner - 72;
+
+  // 큰 숫자: 실제 완료 / 끝 + 진행률 + 상태
+  ctx.font = font(24, 600);
+  ctx.fillStyle = C.muted;
+  ctx.fillText('현재 진도', cx, y + 50);
+  ctx.font = font(52, 800);
+  ctx.fillStyle = C.text;
+  const doneText = formatPosition(goal, s.basis, s.done);
+  ctx.fillText(doneText, cx, y + 112);
+  let tx = cx + ctx.measureText(doneText).width + 12;
+  ctx.font = font(30, 600);
+  ctx.fillStyle = C.muted;
+  const totalText = `/ ${formatPosition(goal, s.basis, s.total)}`;
+  ctx.fillText(totalText, tx, y + 112);
+  tx += ctx.measureText(totalText).width + 20;
+  ctx.font = font(30, 800);
+  ctx.fillStyle = C.bar;
+  ctx.fillText(`${s.percent}%`, tx, y + 112);
+
+  // 상태 배지 (오른쪽 위)
+  const badge = s.isComplete ? ['완료', C.successSoft, C.success]
+    : s.isOverdue ? ['종료 · 미완료', '#fff4e0', '#9a5b00']
+    : s.notStarted ? ['시작 전', C.neutralSoft, C.muted]
+    : s.diff < 0 ? [`${-s.diff}${getUnitLabel(s.basis)} 밀림`, C.dangerSoft, C.danger]
+    : s.diff > 0 ? [`${s.diff}${getUnitLabel(s.basis)} 앞섬`, C.successSoft, C.success]
+    : ['계획대로', C.primarySoft, C.primary];
+  ctx.font = font(24, 700);
+  const bw = ctx.measureText(badge[0]).width + 36;
+  roundRect(ctx, cx + cw - bw, y + 28, bw, 44, 22, badge[1]);
+  ctx.fillStyle = badge[2];
+  ctx.fillText(badge[0], cx + cw - bw + 18, y + 58);
 
   // 진행 막대
-  const barY = statY + 176;
-  const barX = P + 36;
-  const barW = inner - 72;
-  roundRect(ctx, barX, barY, barW, 20, 10, EXPORT_COLORS.neutralSoft);
+  const barY = y + 140;
+  roundRect(ctx, cx, barY, cw, 18, 9, C.neutralSoft);
   const donePct = s.total ? Math.min(1, s.done / s.total) : 0;
   const targetPct = s.total ? Math.min(1, s.target / s.total) : 0;
-  roundRect(ctx, barX, barY, Math.max(20, barW * donePct), 20, 10, EXPORT_COLORS.bar);
-  ctx.fillStyle = EXPORT_COLORS.text;
-  ctx.fillRect(barX + barW * targetPct - 2, barY - 8, 4, 36);
-  ctx.font = font(24);
-  ctx.fillStyle = EXPORT_COLORS.muted;
-  ctx.fillText(`실제 진도 ${s.percent}%   |   오늘까지 권장 ${Math.floor(targetPct * 100)}%`, barX, barY + 62);
+  roundRect(ctx, cx, barY, Math.max(18, cw * donePct), 18, 9, C.bar);
+  ctx.fillStyle = C.text;
+  ctx.fillRect(cx + cw * targetPct - 2, barY - 7, 4, 32);
 
-  // 안내 문구
-  const tone = { behind: [EXPORT_COLORS.dangerSoft, '#a3261c'], ahead: [EXPORT_COLORS.successSoft, EXPORT_COLORS.success],
-    done: [EXPORT_COLORS.successSoft, EXPORT_COLORS.success], ontrack: [EXPORT_COLORS.primarySoft, '#1d4ab5'],
-    ended: ['#fff4e0', '#7a4a00'], neutral: [EXPORT_COLORS.neutralSoft, EXPORT_COLORS.text] }[msg.tone];
-  const msgY = barY + 96;
-  roundRect(ctx, barX, msgY, barW, 96, 16, tone[0]);
-  ctx.font = font(27, 600);
+  // 핵심 숫자 3개
+  const facts = [
+    ['하루 권장', formatAmount(s.dailyPlan, s.basis)],
+    ['오늘까지 권장', formatPosition(goal, s.basis, s.target)],
+    ['남은 공부일', s.isOverdue || s.isComplete ? '-' : `${s.remainingStudyDays}일`],
+  ];
+  const fw = cw / 3;
+  facts.forEach(([label, value], i) => {
+    const fx = cx + i * fw;
+    ctx.font = font(22);
+    ctx.fillStyle = C.muted;
+    ctx.fillText(label, fx, y + 210);
+    ctx.font = font(30, 800);
+    ctx.fillStyle = C.text;
+    ctx.fillText(value, fx, y + 248);
+  });
+
+  // 안내 한 줄
+  const tone = { behind: [C.dangerSoft, '#a3261c'], ahead: [C.successSoft, C.success], done: [C.successSoft, C.success],
+    ontrack: [C.primarySoft, '#1d4ab5'], ended: ['#fff4e0', '#7a4a00'], neutral: [C.neutralSoft, C.text] }[msg.tone];
+  roundRect(ctx, cx, y + 268, cw, msgH, 12, tone[0]);
+  ctx.font = font(22, 600);
   ctx.fillStyle = tone[1];
-  const msgLines = wrapText(ctx, stripTags(msg.html), barW - 48).slice(0, 2);
-  msgLines.forEach((line, i) => ctx.fillText(line, barX + 24, msgY + (msgLines.length === 1 ? 58 : 40 + i * 36)));
+  msgLines.forEach((line, i) => ctx.fillText(line, cx + 18, y + 298 + i * 32));
 
-  // 4) 날짜별 계획
-  y = headerH + statsH;
-  roundRect(ctx, P, y, inner, tableHeadH + listH + 20, 24, EXPORT_COLORS.surface);
-  ctx.font = font(34, 800);
-  ctx.fillStyle = EXPORT_COLORS.text;
-  ctx.fillText('매일 읽을 분량', P + 36, y + 62);
-  ctx.font = font(24);
-  ctx.fillStyle = EXPORT_COLORS.muted;
-  const basisLabel = { page: '페이지 기준', chapter: '챕터 기준', lecture: '강의' }[basis];
+  // ---- 날짜별 표
+  y = tableTop;
+  roundRect(ctx, P, y, inner, tableH, 22, C.surface);
+  ctx.font = font(28, 800);
+  ctx.fillStyle = C.text;
+  ctx.fillText(goal.type === 'book' ? '매일 읽을 분량' : '매일 들을 분량', P + 36, y + 48);
+  ctx.font = font(20);
+  ctx.fillStyle = C.muted;
   ctx.textAlign = 'right';
-  ctx.fillText(`${basisLabel} · ${options.range === 'upcoming' ? '오늘부터' : '전체 기간'} · ✓ 완료`, W - P - 36, y + 60);
+  const basisLabel = { page: '페이지 기준', chapter: '챕터 기준', lecture: '강의' }[basis];
+  ctx.fillText(`${basisLabel} · ${options.range === 'upcoming' ? '오늘부터' : '전체 기간'}   ✓ 완료  ■ 오늘`, W - P - 36, y + 46);
   ctx.textAlign = 'left';
-  y += tableHeadH;
 
-  rowLayouts.forEach(({ row, t, subLines, height }) => {
+  const colGap = 24;
+  const colW = twoCols ? (inner - 72 - colGap) / 2 : inner - 72;
+  const rowsTop = y + 70;
+
+  rows.forEach((row, i) => {
+    const col = twoCols && i >= perCol ? 1 : 0;
+    const rx = P + 36 + col * (colW + colGap);
+    const ry = rowsTop + (i - col * perCol) * ROW_H;
+    const t = rowTextForExport(goal, basis, row);
     const dayDiff = diffDays(today, row.date);
     const checked = !t.rest && done >= row.cumulative;
     const behind = dayDiff < 0 && !checked && !t.rest;
-    if (dayDiff === 0) roundRect(ctx, P + 16, y, inner - 32, height - 6, 12, EXPORT_COLORS.primarySoft);
-    else if (behind) roundRect(ctx, P + 16, y, inner - 32, height - 6, 12, EXPORT_COLORS.dangerSoft);
-    ctx.globalAlpha = checked && dayDiff !== 0 ? 0.45 : 1;
+
+    if (dayDiff === 0) roundRect(ctx, rx - 10, ry + 4, colW + 20, ROW_H - 8, 10, C.primarySoft);
+    else if (behind) roundRect(ctx, rx - 10, ry + 4, colW + 20, ROW_H - 8, 10, C.dangerSoft);
+    ctx.globalAlpha = checked && dayDiff !== 0 ? 0.4 : 1;
+    const base = ry + ROW_H / 2 + 8;
 
     // 날짜
     const d = parseDate(row.date);
     const dow = d.getDay();
-    ctx.font = font(28, 700);
-    ctx.fillStyle = behind ? EXPORT_COLORS.danger : EXPORT_COLORS.text;
-    ctx.fillText(`${d.getMonth() + 1}/${d.getDate()}`, P + 40, y + 46);
-    ctx.font = font(26, 600);
-    ctx.fillStyle = dow === 0 ? EXPORT_COLORS.danger : dow === 6 ? EXPORT_COLORS.primary : EXPORT_COLORS.muted;
-    ctx.fillText(`(${WEEKDAYS_KO[dow]})`, P + 120, y + 46);
-    if (dayDiff === 0) {
-      roundRect(ctx, P + 40, y + 60, 70, 32, 6, EXPORT_COLORS.primary);
-      ctx.font = font(20, 700);
-      ctx.fillStyle = '#fff';
-      ctx.fillText('오늘', P + 54, y + 83);
-    }
+    ctx.font = font(twoCols ? 22 : 24, 700);
+    ctx.fillStyle = behind ? C.danger : C.text;
+    const dateText = `${d.getMonth() + 1}/${d.getDate()}`;
+    ctx.fillText(dateText, rx, base);
+    ctx.font = font(twoCols ? 20 : 22, 600);
+    ctx.fillStyle = dow === 0 ? C.danger : dow === 6 ? C.primary : C.muted;
+    ctx.fillText(WEEKDAYS_KO[dow], rx + (twoCols ? 72 : 78), base);
 
-    // 내용
-    ctx.font = t.rest ? font(26) : font(29, 700);
-    ctx.fillStyle = t.rest ? EXPORT_COLORS.muted : EXPORT_COLORS.text;
-    ctx.fillText(t.main, contentX, y + 46);
-    ctx.font = font(26);
-    ctx.fillStyle = EXPORT_COLORS.muted;
-    subLines.forEach((line, i) => ctx.fillText(line, contentX, y + 88 + i * 34));
-
-    // 누적 · 완료
-    ctx.textAlign = 'right';
-    if (!t.rest) {
-      ctx.font = font(24);
-      ctx.fillStyle = EXPORT_COLORS.muted;
-      ctx.fillText(`누적 ${formatCumulative(goal, basis, row.cumulative)}`, W - P - 90, y + 46);
+    // 범위 / 분량
+    const rangeX = rx + (twoCols ? 108 : 122);
+    const checkW = 34;
+    const amountW = twoCols ? 86 : 110;
+    const rangeMaxW = colW - (rangeX - rx) - amountW - checkW;
+    if (t.rest) {
+      ctx.font = font(twoCols ? 20 : 22);
+      ctx.fillStyle = C.muted;
+      ctx.fillText(t.main, rangeX, base);
+    } else {
+      const range = basis === 'page'
+        ? t.main.replace(/\s*\(.*\)$/, '')
+        : basis === 'chapter'
+          ? getChapterRanges(goal.book).slice(row.prevCumulative, row.cumulative).map((c) => c.name).join(', ')
+          : t.main.replace(/\s*\(.*\)$/, '');
+      ctx.font = font(twoCols ? 22 : 24, 700);
+      ctx.fillStyle = C.text;
+      const rangeText = fit(ctx, range, twoCols || basis !== 'page' ? rangeMaxW : 170);
+      ctx.fillText(rangeText, rangeX, base);
+      // 한 칸 배치일 때만 챕터 설명을 흐리게 덧붙임
+      if (!twoCols && basis === 'page' && t.subs[0]) {
+        const subX = rangeX + ctx.measureText(rangeText).width + 16;
+        ctx.font = font(20);
+        ctx.fillStyle = C.muted;
+        ctx.fillText(fit(ctx, t.subs[0], rangeX + rangeMaxW - subX), subX, base);
+      }
+      ctx.textAlign = 'right';
+      ctx.font = font(twoCols ? 20 : 22, 700);
+      ctx.fillStyle = C.text;
+      ctx.fillText(formatAmount(row.amount, basis), rx + colW - checkW - 6, base);
+      ctx.textAlign = 'left';
     }
     if (checked) {
-      ctx.font = font(34, 800);
-      ctx.fillStyle = EXPORT_COLORS.success;
-      ctx.fillText('✓', W - P - 40, y + 48);
+      ctx.font = font(26, 800);
+      ctx.fillStyle = C.success;
+      ctx.fillText('✓', rx + colW - 24, base + 1);
     }
-    ctx.textAlign = 'left';
     ctx.globalAlpha = 1;
 
-    ctx.fillStyle = EXPORT_COLORS.border;
-    ctx.fillRect(P + 36, y + height - 3, inner - 72, 1);
-    y += height;
+    ctx.fillStyle = C.border;
+    ctx.fillRect(rx, ry + ROW_H - 1, colW, 1);
   });
 
-  // 5) 바닥글
-  ctx.font = font(22);
-  ctx.fillStyle = EXPORT_COLORS.muted;
+  // ---- 바닥글
+  ctx.font = font(20);
+  ctx.fillStyle = C.muted;
   ctx.textAlign = 'center';
-  ctx.fillText(`학습 진도 계획표 · ${today} (${weekdayKo(today)}) 기준`, W / 2, H - 44);
+  ctx.fillText(`학습 진도 계획표 · ${today} (${weekdayKo(today)}) 기준`, W / 2, H - 30);
   ctx.textAlign = 'left';
   return canvas;
 }
