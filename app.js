@@ -2402,7 +2402,8 @@ function renderSummaryPanel(goal, s) {
           ${goal.type === 'bible' ? renderBibleProgressInputs(goal) : `
           <label for="progress-input" class="field-label">${isBook ? '마지막으로 읽은 페이지' : '완료한 강의 수'}</label>
           <input id="progress-input" type="number" class="input input-num" min="${min}" max="${max}" value="${cur}">
-          <span class="muted">${isBook ? `(p.${min}~${max})` : `(0~${max}강)`}</span>`}
+          <span class="muted">${isBook ? `(p.${min}~${max})` : `(0~${max}강)`}</span>
+          ${isBook ? renderChapterProgressSelect(goal) : ''}`}
           <button type="submit" class="btn btn-primary">진도 기록</button>
           <span class="progress-error" hidden></span>
         </form>
@@ -2414,6 +2415,19 @@ function renderSummaryPanel(goal, s) {
       </div>
     </section>
   `;
+}
+
+/** 책: "또는 완료한 챕터" 선택 — 고르면 그 챕터의 끝 페이지가 페이지 칸에 채워진다 */
+function renderChapterProgressSelect(goal) {
+  const doneCount = completedChapterCount(goal.book, goal.progress.current);
+  return `
+    <span class="muted progress-or">또는</span>
+    <label for="progress-chapter-select" class="field-label">완료한 챕터</label>
+    <select id="progress-chapter-select" class="input chapter-select">
+      <option value="0" ${doneCount === 0 ? 'selected' : ''}>없음</option>
+      ${getChapterRanges(goal.book).map((c, i) => `
+        <option value="${i + 1}" ${doneCount === i + 1 ? 'selected' : ''}>${escapeHtml(c.name)} (~p.${c.endPage})</option>`).join('')}
+    </select>`;
 }
 
 /** 성경 통독 진도 입력: 마지막으로 읽은 권 + 장 */
@@ -2895,6 +2909,19 @@ function bindDetailEvents(container, goal) {
       }
     }
   });
+
+  // 진도 입력: 챕터를 고르면 페이지 칸을, 페이지를 적으면 챕터 칸을 맞춘다
+  const pageInput = container.querySelector('#progress-input');
+  const chapterSelect = container.querySelector('#progress-chapter-select');
+  if (pageInput && chapterSelect) {
+    chapterSelect.addEventListener('change', () => {
+      pageInput.value = chapterCountToPage(goal.book, Number(chapterSelect.value));
+    });
+    pageInput.addEventListener('input', () => {
+      const page = Number(pageInput.value);
+      if (Number.isInteger(page)) chapterSelect.value = String(completedChapterCount(goal.book, page));
+    });
+  }
 
   // 방식 2: 계획표 체크박스 (+ 마감일 변경 미리보기의 날짜 선택)
   container.addEventListener('change', (e) => {
