@@ -2222,6 +2222,13 @@ function runPlanSelfTests() {
   check('제출본: 목차 바뀌면 수정', submissionNeedsSync(subGoal, { ...sub, lastPage: 60 }));
   check('제출본: 검토 끝나면 수정 안 함', !submissionNeedsSync(subGoal, { ...sub, lastPage: 60, status: 'rejected' }));
 
+  // 목차 사진으로 페이지만 채우기
+  const have = [{ name: '개정판 프롤로그. 다시, 당신에게' }, { name: 'Chapter 1 · 자동적 생각' }, { name: 'Chapter 1 · 인지 오류' }, { name: '에필로그' }];
+  const readToc = [{ name: '개정판 프롤로그: 다시, 당신에게', startPage: 7 }, { name: '1장 · 자동적 생각', startPage: 29 }, { name: '인지 오류', startPage: 51 }, { name: '핵심 신념', startPage: 64 }];
+  const mt = matchTocPages(have, readToc);
+  check('목차 맞추기: 이름이 조금 달라도 순서대로', JSON.stringify(mt) === JSON.stringify([{ index: 0, startPage: 7 }, { index: 1, startPage: 29 }, { index: 2, startPage: 51 }]));
+  check('목차 맞추기: 없는 이름은 건너뜀', !mt.some((m) => m.index === 3));
+
   console.group('■ 검사 결과');
   console.table(results);
   console.groupEnd();
@@ -3191,6 +3198,58 @@ function showChapterEditorError(container, title, message) {
   box.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
+/* ----- 목차 사진으로 "페이지만" 채우기: 이미 있는 챕터 이름과 맞춰 비어 있는 시작 페이지만 넣는다 ----- */
+
+/** 비교용 이름: 공백·문장부호 빼고, "Chapter 1"/"1장"/"Part 2" 같은 번호 머리는 뗀 꼬리 부분도 함께 */
+function chapterNameKeys(name) {
+  const norm = (x) => String(x || '').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
+  const tail = String(name || '').split('·').pop()
+    .replace(/^\s*(chapter|part|제)?\s*\d+\s*(장|부|강|편|과)?[.:)\s]*/i, '');
+  return [norm(name), norm(tail)].filter(Boolean);
+}
+
+/** 두 문자열의 글자쌍(bigram) 유사도 0~1 */
+function bigramSimilarity(a, b) {
+  if (a === b) return 1;
+  if (a.length < 2 || b.length < 2) return 0;
+  if (a.includes(b) || b.includes(a)) return Math.min(a.length, b.length) / Math.max(a.length, b.length) >= 0.5 ? 0.9 : 0.6;
+  const pairs = (x) => { const m = new Map(); for (let i = 0; i < x.length - 1; i++) { const k = x.slice(i, i + 2); m.set(k, (m.get(k) || 0) + 1); } return m; };
+  const pa = pairs(a); const pb = pairs(b);
+  let hit = 0;
+  pa.forEach((n, k) => { hit += Math.min(n, pb.get(k) || 0); });
+  return (2 * hit) / (a.length - 1 + b.length - 1);
+}
+
+function chapterNameSimilarity(a, b) {
+  const ka = chapterNameKeys(a); const kb = chapterNameKeys(b);
+  let best = 0;
+  ka.forEach((x) => kb.forEach((y) => { best = Math.max(best, bigramSimilarity(x, y)); }));
+  return best;
+}
+
+/**
+ * 기존 챕터(이름 있음)에 목차 사진에서 읽은 페이지를 순서대로 맞춘다.
+ * → [{ index, startPage }] (기존 행 번호와 넣을 페이지). 순서를 거스르는 짝은 만들지 않는다.
+ */
+function matchTocPages(existing, read, threshold = 0.6) {
+  const withPage = read.map((c, j) => ({ ...c, j })).filter((c) => Number.isInteger(c.startPage));
+  const result = [];
+  let from = 0;
+  existing.forEach((row, index) => {
+    if (!row.name || !row.name.trim()) return;
+    let best = null;
+    for (let k = from; k < withPage.length; k++) {
+      const score = chapterNameSimilarity(row.name, withPage[k].name);
+      if (score >= threshold && (!best || score > best.score)) best = { k, score };
+      if (best && best.score === 1) break;
+    }
+    if (!best) return;
+    result.push({ index, startPage: withPage[best.k].startPage });
+    from = best.k + 1;
+  });
+  return result;
+}
+
 /** 목차로 채우기 전에 기존 입력을 덮어써도 되는지 */
 function confirmReplaceChapters() {
   return !hasChapterInput() || confirm(t('지금 입력한 챕터를 목차 내용으로 바꿀까요?'));
@@ -3244,6 +3303,36 @@ function mergeTocResults(results) {
     if (r.lastPage && (!lastPage || r.lastPage > lastPage)) lastPage = r.lastPage;
   });
   return { chapters, lastPage };
+}
+
+/**
+ * 페이지만 채우기: 비어 있는 시작 페이지를 이름이 맞는 목차 항목의 페이지로 채운다.
+ * 빈 칸의 절반 이상을 채우면 true (그렇지 않으면 목록을 통째로 바꿀지 묻는다)
+ */
+function fillPagesFromToc(container, before, read, lastPage, failed, resultEl, onChange) {
+  const emptyIdx = before.map((c, i) => (c.name.trim() && !Number.isFinite(c.startPage) ? i : -1)).filter((i) => i >= 0);
+  const matches = matchTocPages(before, read).filter((m) => emptyIdx.includes(m.index));
+  if (matches.length < Math.max(1, Math.ceil(emptyIdx.length / 2))) return false;
+  const inputs = [...container.querySelectorAll('#chapter-rows .ch-start')];
+  matches.forEach((m) => {
+    if (!inputs[m.index]) return;
+    inputs[m.index].value = m.startPage;
+    inputs[m.index].classList.remove('is-missing');
+  });
+  const lastEl = container.querySelector('#f-last-page');
+  if (lastPage && lastEl && lastEl.value === '') lastEl.value = lastPage;
+  const box = container.querySelector('#form-errors');
+  if (box) box.hidden = true;
+  onChange();
+  const still = [...container.querySelectorAll('#chapter-rows .ch-start')].filter((el) => el.value === '');
+  still.forEach((el) => el.classList.add('is-missing'));
+  const parts = [t('챕터 이름은 그대로 두고, 시작 페이지 {n}개를 채웠습니다.', { n: matches.length })];
+  if (still.length) parts.push(t('남은 {n}개는 노란 칸에 직접 넣어 주세요. (Enter를 누르면 다음 빈칸으로 넘어가요)', { n: still.length }));
+  if (failed.length) parts.push(t('사진 {n}장은 읽지 못했습니다.', { n: failed.length }));
+  parts.push(t('저장하기 전에 목차와 비교해 확인하세요.'));
+  resultEl.textContent = parts.join(' ');
+  resultEl.hidden = false;
+  return true;
 }
 
 /* ----- 책 검색 (국립중앙도서관 ISBN 서지정보, 서버 함수 study-planner-books) ----- */
@@ -3426,6 +3515,15 @@ function bindTocTools(container, onChange) {
   container.addEventListener('input', (e) => {
     if (e.target.classList && e.target.classList.contains('ch-start') && e.target.value !== '') e.target.classList.remove('is-missing');
   });
+  // 시작 페이지 칸에서 Enter → 다음 빈 시작 페이지 칸으로 (없으면 다음 칸, 마지막이면 마지막 페이지 칸)
+  container.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !e.target.classList || !e.target.classList.contains('ch-start') || e.isComposing) return;
+    e.preventDefault(); // 폼 제출 막기
+    const inputs = [...container.querySelectorAll('#chapter-rows .ch-start')];
+    const i = inputs.indexOf(e.target);
+    const next = inputs.slice(i + 1).find((el) => el.value === '') || inputs[i + 1] || container.querySelector('#f-last-page');
+    if (next) { next.focus(); if (next.select) next.select(); }
+  });
 
   photo.addEventListener('change', () => {
     const files = [...photo.files];
@@ -3470,7 +3568,10 @@ function bindTocTools(container, onChange) {
     // 여러 장이면 파일 이름 순서(보통 찍은 순서)로 읽는다
     const files = [...picked].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
     if (!files.length) return;
-    if (!confirmReplaceChapters()) return;
+    // 이름은 있는데 시작 페이지가 빈 챕터가 있으면, 먼저 "페이지만 채우기"를 시도한다
+    const before = readChapterEditor().chapters;
+    const pagesOnly = before.some((c) => c.name.trim()) && before.some((c) => c.name.trim() && !Number.isFinite(c.startPage));
+    if (!pagesOnly && !confirmReplaceChapters()) return;
     const text = photoLabel.querySelector('.toc-photo-text');
     const label = text.textContent;
     const resultEl = container.querySelector('#toc-result');
@@ -3493,6 +3594,8 @@ function bindTocTools(container, onChange) {
       }
       const { chapters, lastPage } = mergeTocResults(results);
       if (!chapters.length) throw new Error(t('사진에서 목차를 찾지 못했습니다. 목차가 잘 보이게 다시 찍어 주세요.'));
+      if (pagesOnly && fillPagesFromToc(container, before, chapters, lastPage, failed, resultEl, onChange)) return;
+      if (pagesOnly && !confirm(t('지금 챕터 이름과 사진의 목차가 잘 맞지 않아요.\n챕터 목록을 사진 내용으로 바꿀까요?'))) return;
       replaceChapterRows(chapters);
       const lastEl = container.querySelector('#f-last-page');
       if (lastPage && lastEl && lastEl.value === '') lastEl.value = lastPage;
@@ -7847,6 +7950,9 @@ const EN = {
   '정보 제공: {sources}': (p) => `Data: ${p.sources}`,
   '국립중앙도서관': 'National Library of Korea',
   'YES24·국립중앙도서관 정보로 제목·저자·마지막 페이지·표지를 채우고, 목차가 있으면 챕터도 채워요.': 'Fills in the title, author, last page and cover from YES24 and the National Library of Korea, plus chapters when contents are available.',
+  '지금 챕터 이름과 사진의 목차가 잘 맞지 않아요.\n챕터 목록을 사진 내용으로 바꿀까요?': "The chapter names don't match the photo well.\nReplace the chapter list with the photo's contents?",
+  '챕터 이름은 그대로 두고, 시작 페이지 {n}개를 채웠습니다.': (p) => `Kept the chapter names and filled in ${p.n} start pages.`,
+  '남은 {n}개는 노란 칸에 직접 넣어 주세요. (Enter를 누르면 다음 빈칸으로 넘어가요)': (p) => `Fill in the remaining ${p.n} in the yellow boxes. (Press Enter to jump to the next empty box.)`,
 };
 
 /* =========================================================================
