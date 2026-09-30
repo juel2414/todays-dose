@@ -78,26 +78,43 @@ function weekdayKo(str) {
  *   from:      number,        // 시작 시점에 이미 끝낸 단위 수 (최초 계획은 0)
  *   to:        number,        // 전체 단위 수 N
  *   restWeekdays: number[],   // 쉬는 요일 (0=일 ~ 6=토). 이 요일에는 분량을 배정하지 않는다
+ *   restDates: string[],      // 쉬는 날 (특정 날짜, 행사 등). 이 날에도 분량을 배정하지 않는다
  *   createdAt: ISO 문자열
  * }
  * 날짜별 표는 저장하지 않고 이 값들로 매번 계산한다 (저장 데이터를 작게, 항상 일관되게).
  * D = 기간 중 공부하는 날 수, k번째 공부하는 날(1부터) 누적 = from + round((to - from) * k / D)
  * ========================================================================= */
 
-function createPlan(startDate, endDate, from, to, restWeekdays = []) {
-  return { startDate, endDate, from, to, restWeekdays: [...restWeekdays], createdAt: new Date().toISOString() };
+function createPlan(startDate, endDate, from, to, restWeekdays = [], restDates = []) {
+  return {
+    startDate, endDate, from, to,
+    restWeekdays: [...restWeekdays],
+    restDates: restDateList(restDates),
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/** [{ date, label }] 또는 ['YYYY-MM-DD'] → 날짜 문자열 배열 */
+function restDateList(list) {
+  return (list || []).map((x) => (typeof x === 'string' ? x : x.date));
+}
+
+/** 그날이 쉬는 날인지 (쉬는 요일 또는 지정한 쉬는 날) */
+function isRestDate(date, restWeekdays, restDates) {
+  return isRestWeekday(restWeekdays, date) || (restDates || []).includes(date);
 }
 
 function isRestWeekday(restWeekdays, date) {
   return (restWeekdays || []).includes(parseDate(date).getDay());
 }
 
-/** start~end(포함) 중 쉬는 요일을 뺀 공부하는 날 수 */
-function countStudyDays(start, end, restWeekdays) {
+/** start~end(포함) 중 쉬는 요일·쉬는 날을 뺀 공부하는 날 수 */
+function countStudyDays(start, end, restWeekdays, restDates = []) {
   let count = 0;
   const days = countDaysInclusive(start, end);
+  const dates = restDateList(restDates);
   for (let i = 0; i < days; i++) {
-    if (!isRestWeekday(restWeekdays, addDays(start, i))) count++;
+    if (!isRestDate(addDays(start, i), restWeekdays, dates)) count++;
   }
   return count;
 }
@@ -114,7 +131,7 @@ function cumulativeAt(plan, k, D) {
  */
 function buildSchedule(plan) {
   const days = countDaysInclusive(plan.startDate, plan.endDate);
-  let D = countStudyDays(plan.startDate, plan.endDate, plan.restWeekdays);
+  let D = countStudyDays(plan.startDate, plan.endDate, plan.restWeekdays, plan.restDates);
   const noStudyDay = D === 0;
   if (noStudyDay) D = 1;
 
@@ -123,13 +140,13 @@ function buildSchedule(plan) {
   let k = 0;
   for (let i = 1; i <= days; i++) {
     const date = addDays(plan.startDate, i - 1);
-    const isRestDay = noStudyDay ? i < days : isRestWeekday(plan.restWeekdays, date);
+    const isRestDay = noStudyDay ? i < days : isRestDate(date, plan.restWeekdays, plan.restDates);
     if (!isRestDay) k++;
     const cumulative = cumulativeAt(plan, k, D);
     rows.push({
       index: i,
       date,
-      isRestDay,              // 쉬는 요일
+      isRestDay,              // 쉬는 요일 또는 지정한 쉬는 날
       prevCumulative: prev,   // 전날까지 누적
       cumulative,             // 오늘까지 누적 목표
       amount: cumulative - prev, // 오늘 분량 (0이면 휴식)
@@ -302,6 +319,7 @@ function clamp(n, min, max) {
  * Goal = {
  *   id, type: 'book' | 'lecture' | 'bible', title, startDate, dueDate, createdAt, updatedAt,
  *   restWeekdays: number[],                  // 쉬는 요일 (0=일 ~ 6=토)
+ *   restDates?: [{ date, label }],           // 쉬는 날 (특정 날짜 + 메모, 예: 수련회)
  *   book?:    { chapters: [{ name, startPage }], lastPage, author? },
  *   lecture?: { titles: [string] },
  *   bible?:   { books: [{ name, chapters }] },   // 통독 범위 (순서대로)
@@ -374,14 +392,14 @@ function buildInitialPlans(goal) {
   const plans = {};
   for (const basis of getBases(goal)) {
     plans[basis] = {
-      original: createPlan(goal.startDate, goal.dueDate, 0, getTotalUnits(goal, basis), goal.restWeekdays),
+      original: createPlan(goal.startDate, goal.dueDate, 0, getTotalUnits(goal, basis), goal.restWeekdays, getRestDates(goal)),
       current: null,
     };
   }
   return plans;
 }
 
-function createBookGoal({ title, startDate, dueDate, restWeekdays = [], chapters, lastPage, author = '', requiredBookId = null }) {
+function createBookGoal({ title, startDate, dueDate, restWeekdays = [], restDates = [], chapters, lastPage, author = '', requiredBookId = null }) {
   const now = new Date().toISOString();
   const goal = {
     id: generateId(),
@@ -390,6 +408,7 @@ function createBookGoal({ title, startDate, dueDate, restWeekdays = [], chapters
     startDate,
     dueDate,
     restWeekdays: normalizeWeekdays(restWeekdays),
+    restDates: normalizeRestDates(restDates),
     createdAt: now,
     updatedAt: now,
     book: {
@@ -406,7 +425,7 @@ function createBookGoal({ title, startDate, dueDate, restWeekdays = [], chapters
   return goal;
 }
 
-function createLectureGoal({ title, startDate, dueDate, restWeekdays = [], titles }) {
+function createLectureGoal({ title, startDate, dueDate, restWeekdays = [], restDates = [], titles }) {
   const now = new Date().toISOString();
   const goal = {
     id: generateId(),
@@ -415,6 +434,7 @@ function createLectureGoal({ title, startDate, dueDate, restWeekdays = [], title
     startDate,
     dueDate,
     restWeekdays: normalizeWeekdays(restWeekdays),
+    restDates: normalizeRestDates(restDates),
     createdAt: now,
     updatedAt: now,
     lecture: { titles: [...titles] },
@@ -434,7 +454,33 @@ function getRestWeekdays(goal) {
   return goal.restWeekdays || [];
 }
 
-function createBibleGoal({ title, startDate, dueDate, restWeekdays = [], bibleStart, bibleEnd }) {
+/** 쉬는 날 정리: 올바른 날짜만, 날짜 중복 제거, 날짜순 */
+function normalizeRestDates(list) {
+  const map = new Map();
+  (list || []).forEach((x) => {
+    const date = typeof x === 'string' ? x : x && x.date;
+    if (isValidDateStr(date)) map.set(date, { date, label: String((x && x.label) || '').trim() });
+  });
+  return [...map.values()].sort((a, b) => diffDays(b.date, a.date));
+}
+
+function getRestDates(goal) {
+  return goal.restDates || [];
+}
+
+/** 지정한 쉬는 날의 메모 (없으면 '') */
+function getRestDateLabel(goal, date) {
+  const item = getRestDates(goal).find((x) => x.date === date);
+  return item ? item.label : '';
+}
+
+/** 쉬는 날 표시 문구: "쉬는 날" / "쉬는 날 · 수련회" */
+function restText(goal, date) {
+  const label = getRestDateLabel(goal, date);
+  return label ? `쉬는 날 · ${label}` : '쉬는 날';
+}
+
+function createBibleGoal({ title, startDate, dueDate, restWeekdays = [], restDates = [], bibleStart, bibleEnd }) {
   const now = new Date().toISOString();
   const goal = {
     id: generateId(),
@@ -443,6 +489,7 @@ function createBibleGoal({ title, startDate, dueDate, restWeekdays = [], bibleSt
     startDate,
     dueDate,
     restWeekdays: normalizeWeekdays(restWeekdays),
+    restDates: normalizeRestDates(restDates),
     createdAt: now,
     updatedAt: now,
     bible: { books: bibleBooksInRange(Number(bibleStart), Number(bibleEnd)) },
@@ -462,7 +509,7 @@ function createGoalFromInput(input, requiredBookId = null) {
 
 /* ----- 검증: 오류 메시지 배열을 반환 (빈 배열이면 통과) ----- */
 
-function validateCommonInput({ title, startDate, dueDate, restWeekdays = [] }) {
+function validateCommonInput({ title, startDate, dueDate, restWeekdays = [], restDates = [] }) {
   const errors = [];
   if (!title || !title.trim()) errors.push('이름을 입력하세요.');
   if (!isValidDateStr(startDate)) errors.push('시작일이 올바르지 않습니다.');
@@ -471,7 +518,7 @@ function validateCommonInput({ title, startDate, dueDate, restWeekdays = [] }) {
     errors.push('쉬는 요일을 모두 선택할 수는 없습니다.');
   } else if (isValidDateStr(startDate) && isValidDateStr(dueDate)) {
     if (diffDays(startDate, dueDate) < 0) errors.push('마감일은 시작일과 같거나 뒤여야 합니다.');
-    else if (countStudyDays(startDate, dueDate, restWeekdays) === 0) {
+    else if (countStudyDays(startDate, dueDate, restWeekdays, restDates) === 0) {
       errors.push('기간 안에 공부하는 날이 없습니다. 기간이나 쉬는 요일을 바꾸세요.');
     }
   }
@@ -582,7 +629,7 @@ function validateGoalEdit(goal, input, today = todayStr()) {
   } else if (hasGoalStarted(goal, today) && isValidDateStr(input.dueDate) && isValidDateStr(input.startDate)
     && normalizeWeekdays(input.restWeekdays).length < 7) {
     const from = diffDays(today, input.startDate) > 0 ? input.startDate : today;
-    if (countStudyDays(from, input.dueDate, input.restWeekdays) === 0) {
+    if (countStudyDays(from, input.dueDate, input.restWeekdays, input.restDates) === 0) {
       errors.push('오늘부터 마감일까지 공부하는 날이 없습니다. 마감일이나 쉬는 요일을 바꾸세요.');
     }
   }
@@ -605,9 +652,15 @@ function isBookStructureChanged(goal, input) {
 function isPlanAffectingEdit(goal, input) {
   if (goal.startDate !== input.startDate || goal.dueDate !== input.dueDate) return true;
   if (getRestWeekdays(goal).join() !== normalizeWeekdays(input.restWeekdays).join()) return true;
+  if (isRestDatesChanged(goal, input)) return true;
   if (goal.type === 'book') return isBookStructureChanged(goal, input);
   if (goal.type === 'bible') return isBibleRangeChanged(goal, input);
   return JSON.stringify(goal.lecture.titles) !== JSON.stringify(input.titles);
+}
+
+/** 쉬는 날(날짜)이 바뀌었는지 — 메모만 바뀐 것은 계획에 영향 없음 */
+function isRestDatesChanged(goal, input) {
+  return restDateList(getRestDates(goal)).join() !== restDateList(normalizeRestDates(input.restDates)).join();
 }
 
 function isBibleRangeChanged(goal, input) {
@@ -629,6 +682,7 @@ function applyGoalEdit(goal, input, today = todayStr()) {
   goal.startDate = input.startDate;
   goal.dueDate = input.dueDate;
   goal.restWeekdays = normalizeWeekdays(input.restWeekdays);
+  goal.restDates = normalizeRestDates(input.restDates);
   if (goal.type === 'book') {
     goal.book = {
       chapters: input.chapters.map((c) => ({ name: c.name.trim(), startPage: Number(c.startPage) })),
@@ -664,7 +718,7 @@ function replanGoal(goal, today = todayStr()) {
   for (const basis of getBases(goal)) {
     const total = getTotalUnits(goal, basis);
     goal.plans[basis].current = createPlan(planStart, goal.dueDate, Math.min(getDoneUnits(goal, basis), total), total,
-      getRestWeekdays(goal));
+      getRestWeekdays(goal), getRestDates(goal));
   }
   goal.updatedAt = new Date().toISOString();
   return goal;
@@ -688,6 +742,7 @@ function goalToInput(goal) {
     startDate: goal.startDate,
     dueDate: goal.dueDate,
     restWeekdays: [...getRestWeekdays(goal)],
+    restDates: getRestDates(goal).map((x) => ({ ...x })),
     chapters: goal.type === 'book' ? goal.book.chapters.map((c) => ({ ...c })) : [],
     lastPage: goal.type === 'book' ? goal.book.lastPage : NaN,
     author: goal.type === 'book' ? getBookAuthor(goal) : '',
@@ -735,14 +790,14 @@ function getGoalSummary(goal, basis = getPrimaryBasis(goal), today = todayStr())
   else if (done > target) diff = done - target;
 
   // 하루 권장: 지금 계획의 공부하는 날 하루 평균
-  const planStudyDays = Math.max(1, countStudyDays(plan.startDate, plan.endDate, plan.restWeekdays));
+  const planStudyDays = Math.max(1, countStudyDays(plan.startDate, plan.endDate, plan.restWeekdays, plan.restDates));
   // 10 미만이면 소수 한 자리까지 (예: 하루 0.3강)
   const avgPlan = (plan.to - plan.from) / planStudyDays;
   const dailyPlan = avgPlan >= 10 ? Math.round(avgPlan) : Math.round(avgPlan * 10) / 10;
   // 지금부터 기한을 맞추려면: 남은 분량 ÷ 오늘 포함 남은 공부하는 날
   const remaining = total - done;
   const fromDate = diffDays(today, goal.startDate) > 0 ? goal.startDate : today;
-  const remainingStudyDays = isOverdue ? 0 : countStudyDays(fromDate, goal.dueDate, plan.restWeekdays);
+  const remainingStudyDays = isOverdue ? 0 : countStudyDays(fromDate, goal.dueDate, plan.restWeekdays, plan.restDates);
   const needPerDay = remainingStudyDays > 0 ? Math.ceil(remaining / remainingStudyDays) : remaining;
   return {
     dailyPlan,
@@ -1138,7 +1193,8 @@ function isValidPlan(plan) {
     && Number.isInteger(plan.from) && Number.isInteger(plan.to) && plan.from <= plan.to
     && diffDays(plan.startDate, plan.endDate) >= 0
     && (plan.restWeekdays === undefined || (Array.isArray(plan.restWeekdays)
-      && plan.restWeekdays.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)));
+      && plan.restWeekdays.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)))
+    && (plan.restDates === undefined || (Array.isArray(plan.restDates) && plan.restDates.every(isValidDateStr)));
 }
 
 /** 불러온 목표 하나의 형식 검사 (문제가 있으면 오류 메시지, 없으면 null) */
@@ -1156,6 +1212,10 @@ function checkGoalShape(goal, index) {
   if (goal.requiredBookId !== undefined && (typeof goal.requiredBookId !== 'string'
     || !/^[\w-]{1,64}$/.test(goal.requiredBookId))) {
     return `${label}: 필독서 연결 정보가 올바르지 않습니다.`;
+  }
+  if (goal.restDates !== undefined && (!Array.isArray(goal.restDates)
+    || !goal.restDates.every((x) => x && isValidDateStr(x.date) && typeof x.label === 'string'))) {
+    return `${label}: 쉬는 날 정보가 올바르지 않습니다.`;
   }
   if (goal.restWeekdays !== undefined && (!Array.isArray(goal.restWeekdays)
     || !goal.restWeekdays.every((d) => Number.isInteger(d) && d >= 0 && d <= 6))) {
@@ -1255,6 +1315,16 @@ function runPlanSelfTests() {
   check('쉬는 요일: 주말 분량 0', r5.filter((r) => r.isRestDay).length === 3 && r5.filter((r) => r.isRestDay).every((r) => r.amount === 0));
   check('쉬는 요일: 공부하는 날 매일 10', r5.filter((r) => !r.isRestDay).every((r) => r.amount === 10));
   check('쉬는 요일: 누적 목표 계산', cumulativeOnDate(createPlan('2026-10-01', '2026-10-10', 0, 70, [0, 6]), '2026-10-04') === 20);
+  const rd = createPlan('2026-10-01', '2026-10-10', 0, 70, [0, 6], ['2026-10-06']);
+  const rdRows = buildSchedule(rd);
+  check('쉬는 날(날짜): 그날 분량 0, 공부일 6일', rdRows.find((r) => r.date === '2026-10-06').isRestDay
+    && countStudyDays('2026-10-01', '2026-10-10', [0, 6], ['2026-10-06']) === 6 && rdRows.at(-1).cumulative === 70);
+  const rdGoal = createLectureGoal({ title: 'x', startDate: '2026-10-01', dueDate: '2026-10-10', titles: ['a', 'b', 'c'],
+    restDates: [{ date: '2026-10-05', label: '수련회' }, { date: '2026-10-03', label: '' }, { date: '2026-10-05', label: '중복' }] });
+  check('쉬는 날(날짜): 정리·메모', getRestDates(rdGoal).length === 2 && getRestDates(rdGoal)[0].date === '2026-10-03'
+    && restText(rdGoal, '2026-10-05') === '쉬는 날 · 중복' && getActivePlan(rdGoal, 'lecture').restDates.length === 2);
+  check('쉬는 날(날짜): 수정 시 계획 변경 감지', isPlanAffectingEdit(rdGoal, { ...goalToInput(rdGoal), restDates: [] })
+    && !isPlanAffectingEdit(rdGoal, { ...goalToInput(rdGoal), restDates: [{ date: '2026-10-03', label: '메모만' }, { date: '2026-10-05', label: 'x' }] }));
   check('검증: 공부하는 날 없음 차단',
     validateCommonInput({ title: 'x', startDate: '2026-10-03', dueDate: '2026-10-04', restWeekdays: [0, 6] }).length > 0);
 
@@ -1790,7 +1860,7 @@ function renderTodayAmount(goal, s) {
   if (s.notStarted) return `<span class="today-main">${formatShortDate(goal.startDate)} 시작</span>`;
   const row = s.todayRow;
   if (!row) return '<span class="today-main">-</span>';
-  if (row.isRestDay) return '<span class="today-main">오늘은 쉬는 날</span>';
+  if (row.isRestDay) return `<span class="today-main">오늘은 ${escapeHtml(restText(goal, row.date))}</span>`;
   if (row.amount === 0) return '<span class="today-main">휴식(분량 없음)</span>';
 
   const unit = getUnitLabel(s.basis);
@@ -1830,7 +1900,7 @@ function renderGoalForm(root, goal, bookId = null) {
   const draft = isEdit && detailState.draft && detailState.goalId === goal.id ? detailState.draft : null;
   detailState.draft = null;
   const v = draft || (goal ? goalToInput(goal) : {
-    title: '', startDate: todayStr(), dueDate: '', restWeekdays: [],
+    title: '', startDate: todayStr(), dueDate: '', restWeekdays: [], restDates: [],
     chapters: [{ name: '', startPage: '' }], lastPage: '', titles: [], bibleStart: 0, bibleEnd: 65,
   });
   if (bookId) {
@@ -1898,6 +1968,16 @@ function renderGoalForm(root, goal, bookId = null) {
         </div>
       </div>
 
+      <div class="field">
+        <span class="field-label">쉬는 날 <span class="muted">(행사·일정 등으로 빠지는 특정 날짜)</span></span>
+        <div class="rest-date-add">
+          <input id="f-rest-date" type="date" class="input" aria-label="쉬는 날짜">
+          <input id="f-rest-label" type="text" class="input rest-label-input" placeholder="메모 (예: 수련회)" maxlength="30">
+          <button type="button" class="btn btn-small" id="add-rest-date">+ 추가</button>
+        </div>
+        <div id="rest-date-list" class="rest-date-list"></div>
+      </div>
+
       <div data-section="book">
         <div class="field">
           <label class="field-label" for="f-author">저자 <span class="muted">(선택)</span></label>
@@ -1944,6 +2024,7 @@ function renderGoalForm(root, goal, bookId = null) {
   `;
 
   fillChapterEditor(v.chapters, locked);
+  (v.restDates || []).forEach((x) => addRestDateChip(x));
 
   const form = root.querySelector('#goal-form');
   form.addEventListener('change', (e) => {
@@ -1955,6 +2036,21 @@ function renderGoalForm(root, goal, bookId = null) {
   form.addEventListener('input', updateFormView);
   bindChapterEditor(form, updateFormView);
   form.addEventListener('click', (e) => {
+    if (e.target.id === 'add-rest-date') {
+      const dateEl = form.querySelector('#f-rest-date');
+      const labelEl = form.querySelector('#f-rest-label');
+      if (!isValidDateStr(dateEl.value)) { dateEl.focus(); return; }
+      addRestDateChip({ date: dateEl.value, label: labelEl.value });
+      dateEl.value = '';
+      labelEl.value = '';
+      updateFormView();
+      return;
+    }
+    if (e.target.closest('.rest-chip-del')) {
+      e.target.closest('.rest-chip').remove();
+      updateFormView();
+      return;
+    }
     const preset = e.target.closest('[data-bible-preset]')?.dataset.biblePreset;
     if (preset) {
       const [a, b] = preset.split(',');
@@ -1970,6 +2066,12 @@ function renderGoalForm(root, goal, bookId = null) {
     if (!isValidDateStr(start)) return;
     form.querySelector('#f-due').value = addDays(start, Number(weeks) * 7 - 1);
     updateFormView();
+  });
+  form.querySelector('#f-rest-label').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      form.querySelector('#add-rest-date').click();
+    }
   });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -2129,6 +2231,39 @@ function addChapterRow(ch, before = null) {
   return tr;
 }
 
+/** 쉬는 날 칩 추가 (같은 날짜가 있으면 메모만 바꿈), 날짜순 정렬 */
+function addRestDateChip({ date, label = '' }) {
+  const list = document.getElementById('rest-date-list');
+  const existing = list.querySelector(`[data-date="${date}"]`);
+  if (existing) existing.remove();
+  const chip = document.createElement('span');
+  chip.className = 'rest-chip';
+  chip.dataset.date = date;
+  chip.dataset.label = label.trim();
+  const d = parseDate(date);
+  chip.innerHTML = `
+    <span class="rest-chip-date">${d.getMonth() + 1}/${d.getDate()} (${weekdayKo(date)})</span>
+    ${label.trim() ? `<span class="rest-chip-label">${escapeHtml(label.trim())}</span>` : ''}
+    <button type="button" class="rest-chip-del" aria-label="${date} 쉬는 날 삭제">×</button>`;
+  const after = [...list.children].find((c) => diffDays(date, c.dataset.date) > 0);
+  list.insertBefore(chip, after || null);
+}
+
+function readRestDateChips() {
+  return [...document.querySelectorAll('#rest-date-list .rest-chip')]
+    .map((c) => ({ date: c.dataset.date, label: c.dataset.label || '' }));
+}
+
+/** 기간 밖의 쉬는 날은 흐리게 표시 */
+function markRestChipsOutOfRange(startDate, dueDate) {
+  document.querySelectorAll('#rest-date-list .rest-chip').forEach((c) => {
+    const out = !isValidDateStr(startDate) || !isValidDateStr(dueDate)
+      || diffDays(startDate, c.dataset.date) < 0 || diffDays(c.dataset.date, dueDate) < 0;
+    c.classList.toggle('is-out', out);
+    c.title = out ? '기간 밖이라 계획에 영향 없음' : '';
+  });
+}
+
 /** 성경 통독: 이름이 비어 있거나 자동으로 채운 이름이면 범위에 맞춰 이름을 바꿔 준다 */
 function syncBibleAutoTitle(form) {
   if (getFormType() !== 'bible') return;
@@ -2161,6 +2296,7 @@ function collectFormInput() {
     bibleEnd: Number(val('f-bible-end')),
     titles: parseLectureLines(val('f-lectures')),
     restWeekdays: [...document.querySelectorAll('input[name="rest-weekday"]:checked')].map((el) => Number(el.value)),
+    restDates: readRestDateChips(),
   };
 }
 
@@ -2183,16 +2319,17 @@ function updateFormView() {
     ? countDaysInclusive(input.startDate, input.dueDate) : null;
   let daysText = '-';
   if (days !== null) {
-    const study = days > 0 ? countStudyDays(input.startDate, input.dueDate, input.restWeekdays) : 0;
+    const study = days > 0 ? countStudyDays(input.startDate, input.dueDate, input.restWeekdays, input.restDates) : 0;
     daysText = days <= 0 ? '마감일이 시작일보다 앞입니다'
       : study === days ? `${days}일` : `${days}일 중 공부하는 날 ${study}일`;
   }
   document.getElementById('f-days').textContent = daysText;
+  markRestChipsOutOfRange(input.startDate, input.dueDate);
 
   // 하루 평균 분량 안내
   let daily = '';
   if (days > 0) {
-    const study = countStudyDays(input.startDate, input.dueDate, input.restWeekdays);
+    const study = countStudyDays(input.startDate, input.dueDate, input.restWeekdays, input.restDates);
     const first = input.chapters[0] && input.chapters[0].startPage;
     const total = isBook
       ? (Number.isInteger(first) && Number.isInteger(input.lastPage) ? input.lastPage - first + 1 : 0)
@@ -2365,7 +2502,10 @@ function getCompareMessage(goal, s) {
   const rest = `남은 공부일 ${s.remainingStudyDays}일 동안 <b>하루 ${u(s.needPerDay)}</b>씩`;
   if (s.diff < 0) return { tone: 'behind', html: `계획보다 <b>${u(-s.diff)} 밀렸습니다.</b> ${rest} 하면 기한을 맞출 수 있어요.` };
   if (s.diff > 0) return { tone: 'ahead', html: `계획보다 <b>${u(s.diff)} 앞서 있어요.</b> ${rest}이면 충분해요.` };
-  if (s.todayRow && s.todayRow.isRestDay) return { tone: 'ontrack', html: '오늘은 쉬는 날이에요. 계획대로 진행 중입니다.' };
+  if (s.todayRow && s.todayRow.isRestDay) {
+    const label = getRestDateLabel(goal, s.todayRow.date);
+    return { tone: 'ontrack', html: `오늘은 쉬는 날이에요${label ? ` (${escapeHtml(label)})` : ''}. 계획대로 진행 중입니다.` };
+  }
   if (s.done >= s.target) return { tone: 'ontrack', html: '오늘 분량을 마쳤어요. 계획대로 진행 중입니다.' };
   return { tone: 'ontrack', html: `계획대로 진행 중이에요. 오늘 <b>${u(s.target - s.done)}</b> 남았어요.` };
 }
@@ -2528,6 +2668,7 @@ function describeEditChanges(goal, input) {
   if (goal.startDate !== input.startDate) changes.push('시작일');
   if (goal.dueDate !== input.dueDate) changes.push(`마감일(${goal.dueDate} → ${input.dueDate})`);
   if (getRestWeekdays(goal).join() !== normalizeWeekdays(input.restWeekdays).join()) changes.push('쉬는 요일');
+  if (isRestDatesChanged(goal, input)) changes.push('쉬는 날');
   if (goal.type === 'book') {
     if (isBookStructureChanged(goal, input)) changes.push('챕터·페이지');
     if (getBookAuthor(goal) !== (input.author || '').trim()) changes.push('저자');
@@ -2591,11 +2732,11 @@ function renderPreviewBody(goal, clone, basis, preview, today) {
   const oldPlan = getActivePlan(goal, basis);
   const unit = getUnitLabel(basis);
   const rows = buildSchedule(newPlan);
-  const studyDays = countStudyDays(newPlan.startDate, newPlan.endDate, newPlan.restWeekdays);
+  const studyDays = countStudyDays(newPlan.startDate, newPlan.endDate, newPlan.restWeekdays, newPlan.restDates);
   const avg = studyDays > 0 ? (newPlan.to - newPlan.from) / studyDays : 0;
   const lo = Math.floor(avg);
   const hi = Math.ceil(avg);
-  const oldStudyDays = Math.max(1, countStudyDays(oldPlan.startDate, oldPlan.endDate, oldPlan.restWeekdays));
+  const oldStudyDays = Math.max(1, countStudyDays(oldPlan.startDate, oldPlan.endDate, oldPlan.restWeekdays, oldPlan.restDates));
   const oldAvg = Math.round((oldPlan.to - oldPlan.from) / oldStudyDays);
   const rebuilt = !clone.plans[basis].current; // 시작 전이라 원래 계획을 새로 만든 경우
 
@@ -2642,7 +2783,7 @@ function renderPreviewBody(goal, clone, basis, preview, today) {
 
 /** 계획표의 "오늘 분량" 칸 내용 */
 function describeRowContent(goal, basis, row) {
-  if (row.isRestDay) return '<span class="rest">쉬는 날</span>';
+  if (row.isRestDay) return `<span class="rest">${escapeHtml(restText(goal, row.date))}</span>`;
   if (row.amount === 0) return '<span class="rest">휴식(분량 없음)</span>';
   const from = row.prevCumulative;
   const to = row.cumulative;
@@ -2735,7 +2876,7 @@ function renderPlanTable(goal, basis, readOnly = false) {
 
 /** 달력 칸에 들어갈 짧은 내용 */
 function describeCellContent(goal, basis, row) {
-  if (row.isRestDay) return '<span class="rest">쉬는 날</span>';
+  if (row.isRestDay) return `<span class="rest">${escapeHtml(restText(goal, row.date))}</span>`;
   if (row.amount === 0) return '<span class="rest">휴식</span>';
   const from = row.prevCumulative;
   const to = row.cumulative;
@@ -3505,7 +3646,7 @@ const EXPORT_COLORS = {
 
 /** 이미지용 행 내용 (HTML 없이 글자만) */
 function rowTextForExport(goal, basis, row) {
-  if (row.isRestDay) return { main: '쉬는 날', subs: [], rest: true };
+  if (row.isRestDay) return { main: restText(goal, row.date), subs: [], rest: true };
   if (row.amount === 0) return { main: '휴식 (분량 없음)', subs: [], rest: true };
   const from = row.prevCumulative;
   const to = row.cumulative;

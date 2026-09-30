@@ -854,3 +854,31 @@ body.modal-open { overflow: hidden; }
 .progress-form.is-two-rows .progress-submit { grid-column: 3; grid-row: 1 / span 2; align-self: center; }
 .progress-form.is-two-rows .progress-error { grid-column: 1 / -1; }
 .progress-or { margin: 0 2px 0 0; font-weight: 400; }
+
+/* ===== 쉬는 날 (특정 날짜) ===== */
+.rest-date-add { display: flex; align-items: center; gap: 8px; }
+.rest-date-add .input { width: 180px; }
+.rest-date-add .rest-label-input { width: 220px; }
+.rest-date-add .btn { height: 40px; }
+.rest-date-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.rest-date-list:empty { display: none; }
+.rest-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fafbfc;
+  font-size: 14px;
+}
+.rest-chip-date { font-weight: 600; }
+.rest-chip-label { color: var(--muted); }
+.rest-chip.is-out { opacity: 0.45; }
+.rest-chip-del {
+  width: 22px; height: 22px;
+  border: none; border-radius: 50%;
+  background: transparent; color: var(--muted);
+  font-size: 15px; line-height: 1; cursor: pointer;
+}
+.rest-chip-del:hover { background: var(--danger-soft); color: var(--danger); }
