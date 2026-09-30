@@ -2058,9 +2058,6 @@ function renderPlanPanel(goal, basis) {
           ${renderBasisTabs(goal, basis)}
         </div>
       </div>
-      ${goal.plans[basis].current ? `
-        <p class="plan-note">${formatShortDate(goal.plans[basis].current.startDate)}부터 재분배된 계획입니다.
-          목록 보기의 "원래 계획 누적" 열에서 처음 계획과 비교할 수 있습니다.</p>` : ''}
       ${detailState.view === 'calendar' ? renderPlanCalendar(goal, basis) : renderPlanTable(goal, basis)}
     </section>
   `;
