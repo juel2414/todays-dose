@@ -6389,7 +6389,7 @@ function renderGroups(root) {
         </div>
         <h3 class="card-title">${escapeHtml(g.name)}</h3>
         <p class="card-meta">${g.isLeader ? t('공유한 목표 {n}개', { n: items.length })
-          : `${t('리더 {name}', { name: escapeHtml(g.leaderName) })} · ${t('공유된 목표 {n}개 · 계획 {planned}개', { n: items.length, planned })}`}</p>
+          : t('공유된 목표 {n}개 · 계획 {planned}개', { n: items.length, planned })}</p>
       </a>`;
   }).join('');
 
