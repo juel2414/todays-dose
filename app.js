@@ -4711,6 +4711,8 @@ const adminState = {
   groupItems: [], // 모든 공유 목표 (rowToGroupItem)
   bookGroups: [], // [{ book_id, group_id }] 도서관 책 ↔ 그룹 필독서
   openGroups: new Set(), // 회원 관리에서 펼친 그룹
+  memberSearch: '', // 전체 회원 검색어
+  memberGroupFilter: '', // '' 전체 | 'none' 그룹 없음 | 그룹 id
 };
 
 const ADMIN_TABS = [
@@ -5295,23 +5297,91 @@ function renderAdminMembers() {
     </div>
     ${adminState.groups.length ? adminState.groups.map(renderAdminGroup).join('') : `<div class="empty">${t('아직 그룹이 없습니다.')}</div>`}
 
-    <div class="section-head">
-      <h2 class="section-title">${t('전체 회원')} <span class="count">${profiles.length}</span></h2>
-      <span class="muted small">${t('앱에 한 번이라도 로그인한 사람들입니다.')}</span>
-    </div>
-    <table class="admin-table panel-table">
-      <thead><tr><th>${t('이름')}</th><th>${t('이메일')}</th><th>${t('그룹')}</th><th>${t('처음 로그인')}</th><th>${t('마지막 접속')}</th></tr></thead>
-      <tbody>
-        ${profiles.map((p) => `
-          <tr>
-            <td><strong>${escapeHtml(p.name || '-')}</strong>${p.user_id === currentUser.id ? ` <span class="muted">${t('(나)')}</span>` : ''}</td>
-            <td>${escapeHtml(p.email)}</td>
-            <td>${renderAdminGroupTags(p.user_id) || '<span class="muted">-</span>'}</td>
-            <td class="muted nowrap">${timestampToDateTime(p.created_at)}</td>
-            <td class="muted nowrap">${timestampToDateTime(p.last_seen_at)}</td>
-          </tr>`).join('')}
-      </tbody>
-    </table>`;
+    <div class="panel member-panel">
+      <div class="member-toolbar">
+        <h2 class="section-title">${t('전체 회원')} <span class="count" id="member-count">${profiles.length}</span></h2>
+        <span class="muted small">${t('앱에 한 번이라도 로그인한 사람들입니다.')}</span>
+        <input type="search" id="member-search" class="input member-search" placeholder="${t('이름 또는 이메일 검색…')}" value="${escapeHtml(adminState.memberSearch)}">
+        <select id="member-group-filter" class="input member-filter" aria-label="${t('그룹으로 거르기')}">
+          <option value="">${t('전체 그룹')}</option>
+          <option value="none" ${adminState.memberGroupFilter === 'none' ? 'selected' : ''}>${t('그룹 없음')}</option>
+          ${adminState.groups.map((g) => `<option value="${escapeHtml(g.id)}" ${adminState.memberGroupFilter === g.id ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('')}
+        </select>
+      </div>
+      <table class="admin-table member-table">
+        <thead><tr><th>${t('이름 / 이메일')}</th><th>${t('그룹')}</th><th>${t('처음 로그인')}</th><th>${t('마지막 접속')}</th></tr></thead>
+        <tbody>
+          ${profiles.map((p) => {
+            const groups = adminGroupsOf(p.user_id);
+            return `
+            <tr data-member-row data-search="${escapeHtml(`${p.name || ''} ${p.email || ''}`.toLowerCase())}" data-groups="${escapeHtml(groups.map((g) => g.id).join(' '))}">
+              <td>
+                <strong>${escapeHtml(p.name || '-')}</strong>${p.user_id === currentUser.id ? ` <span class="muted">${t('(나)')}</span>` : ''}
+                <div class="muted small">${escapeHtml(p.email)}</div>
+              </td>
+              <td>${renderMemberGroupCell(p, groups)}</td>
+              <td class="muted nowrap">${timestampToDateTime(p.created_at)}</td>
+              <td class="muted nowrap">${timestampToDateTime(p.last_seen_at)}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      <p class="empty" id="member-empty" hidden>${t('조건에 맞는 회원이 없습니다.')}</p>
+    </div>`;
+}
+
+/** 전체 회원 표의 그룹 칸: 속한 그룹(× 로 빼기) + 드롭다운으로 그룹 추가 */
+function renderMemberGroupCell(p, groups) {
+  const others = adminState.groups.filter((g) => !groups.includes(g));
+  const tags = groups.map((g) => g.leader_id === p.user_id
+    ? `<span class="type-tag type-leader" title="${t('리더는 그룹에서 뺄 수 없습니다')}">${escapeHtml(g.name)} · ${t('리더')}</span>`
+    : `<span class="type-tag type-group group-chip">${escapeHtml(g.name)}<button type="button" class="chip-x" data-action="ag-remove-member"
+        data-group="${escapeHtml(g.id)}" data-user="${escapeHtml(p.user_id)}" data-name="${escapeHtml(profileName(p))}"
+        aria-label="${t('{group}에서 빼기', { group: escapeHtml(g.name) })}">×</button></span>`).join('');
+  return `
+    <div class="member-groups">
+      ${tags}
+      ${others.length ? `<select class="input input-small member-group-add" data-member-group-add="${escapeHtml(p.user_id)}" aria-label="${t('그룹에 추가')}">
+        <option value="">${groups.length ? t('+ 그룹 추가') : t('그룹 선택')}</option>
+        ${others.map((g) => `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name)}</option>`).join('')}
+      </select>` : ''}
+    </div>`;
+}
+
+/** 전체 회원 표: 검색어·그룹 필터 적용 (다시 그리지 않고 줄만 숨김) */
+function applyMemberFilter(container) {
+  const q = adminState.memberSearch.trim().toLowerCase();
+  const f = adminState.memberGroupFilter;
+  let shown = 0;
+  container.querySelectorAll('[data-member-row]').forEach((tr) => {
+    const groups = tr.dataset.groups ? tr.dataset.groups.split(' ') : [];
+    const ok = (!q || tr.dataset.search.includes(q))
+      && (!f || (f === 'none' ? groups.length === 0 : groups.includes(f)));
+    tr.hidden = !ok;
+    if (ok) shown += 1;
+  });
+  const count = container.querySelector('#member-count');
+  if (count) count.textContent = shown;
+  const empty = container.querySelector('#member-empty');
+  if (empty) empty.hidden = shown > 0;
+}
+
+/** 관리자: 드롭다운으로 고른 그룹에 회원 추가 */
+async function adminAddToGroup(select) {
+  const groupId = select.value;
+  if (!groupId) return;
+  select.disabled = true;
+  try {
+    const { error } = await getSupabase().from(GROUP_MEMBERS_TABLE).insert({ group_id: groupId, user_id: select.dataset.memberGroupAdd });
+    if (error) throw error;
+    await Promise.all([adminLoadGroups(), loadGroups()]);
+    renderTopbar();
+    render();
+  } catch (err) {
+    alert(t('처리하지 못했습니다.\n\n{message}', { message: err.message || String(err) }));
+    select.value = '';
+    select.disabled = false;
+  }
 }
 
 /** 사람이 속한 그룹 태그 (리더면 "리더" 표시) */
@@ -5479,6 +5549,13 @@ function bindCoverDrop(container) {
 
 function bindAdminEvents(container, tab) {
   bindCoverDrop(container);
+  // 회원 관리: 검색
+  container.addEventListener('input', (e) => {
+    if (e.target.id !== 'member-search') return;
+    adminState.memberSearch = e.target.value;
+    applyMemberFilter(container);
+  });
+  if (tab === 'members') applyMemberFilter(container);
   // 회원 관리: 그룹 펼치기/접기 (펼칠 때 내용을 그린다)
   container.addEventListener('toggle', (e) => {
     const el = e.target;
@@ -5554,6 +5631,14 @@ function bindAdminEvents(container, tab) {
       e.target.value = '';
       if (file) setCoverDraftFile(container, file);
       return;
+    }
+    if (e.target.dataset.memberGroupAdd) {
+      adminAddToGroup(e.target);
+      return;
+    }
+    if (e.target.id === 'member-group-filter') {
+      adminState.memberGroupFilter = e.target.value;
+      applyMemberFilter(container);
     }
   });
 
@@ -7383,6 +7468,17 @@ const EN = {
   '추가': 'Add',
   '아직 참여한 멤버가 없습니다.': 'No members yet.',
   '도서관에서 바꾸기': 'Change in Library',
+  '이름 또는 이메일 검색…': 'Search name or email…',
+  '그룹으로 거르기': 'Filter by group',
+  '전체 그룹': 'All groups',
+  '그룹 없음': 'No group',
+  '이름 / 이메일': 'Name / Email',
+  '조건에 맞는 회원이 없습니다.': 'No members match.',
+  '리더는 그룹에서 뺄 수 없습니다': 'The leader cannot be removed from the group',
+  '{group}에서 빼기': (p) => `Remove from ${p.group}`,
+  '그룹에 추가': 'Add to group',
+  '+ 그룹 추가': '+ Add group',
+  '그룹 선택': 'Choose group',
 };
 
 /* =========================================================================
