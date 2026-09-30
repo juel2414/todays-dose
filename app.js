@@ -1546,16 +1546,14 @@ function findSubmissionForGoal(goalId) {
   return mySubmissions.find((b) => b.submittedGoalId === goalId) || null;
 }
 
-/** 책이 나에게 어떤 책인지: 'required'(내 그룹의 필독서) | 'assigned'(배정) | null */
+/** 책이 나에게 어떤 책인지: 'assigned'(배정) | null  (필독서는 그룹 공유 목표로 대신한다) */
 function bookTagKind(book) {
   if (!book) return null;
-  if (bookGroupLinks.some((l) => l.bookId === book.id && myGroups.some((g) => g.id === l.groupId))) return 'required';
   if (myAssignedBookIds.has(book.id)) return 'assigned';
   return null;
 }
 
 function renderBookTag(kind) {
-  if (kind === 'required') return `<span class="type-tag type-required">${t('필독서')}</span>`;
   if (kind === 'assigned') return `<span class="type-tag type-assigned">${t('배정')}</span>`;
   return '';
 }
@@ -1622,38 +1620,18 @@ async function adminLoadProfiles() {
   return data;
 }
 
-/** 모든 그룹 · 멤버 · 공유 목표 · 그룹 필독서 → adminState */
+/** 모든 그룹 · 멤버 · 공유 목표 → adminState */
 async function adminLoadGroups() {
   const sb = getSupabase();
-  const [groups, members, items, bookGroups] = await Promise.all([
+  const [groups, members, items] = await Promise.all([
     sb.from(GROUPS_TABLE).select('id, name, leader_id, invite_code, created_at').order('created_at'),
     sb.from(GROUP_MEMBERS_TABLE).select('group_id, user_id, joined_at').order('joined_at'),
     sb.from(GROUP_ITEMS_TABLE).select('id, group_id, type, title, content, cover_url, source_goal_id, updated_at').order('created_at'),
-    sb.from(BOOK_GROUPS_TABLE).select('book_id, group_id'),
   ]);
-  for (const res of [groups, members, items, bookGroups]) if (res.error) throw res.error;
+  for (const res of [groups, members, items]) if (res.error) throw res.error;
   adminState.groups = groups.data;
   adminState.groupMembers = members.data;
   adminState.groupItems = items.data.map(rowToGroupItem).filter((i) => isValidShareContent(i.type, i.content));
-  adminState.bookGroups = bookGroups.data;
-}
-
-/** 책의 그룹 필독서를 groupIds로 맞춘다 */
-async function adminSyncBookGroups(bookId, groupIds) {
-  const before = adminState.bookGroups.filter((x) => x.book_id === bookId).map((x) => x.group_id);
-  const add = groupIds.filter((id) => !before.includes(id));
-  const remove = before.filter((id) => !groupIds.includes(id));
-  const sb = getSupabase();
-  if (add.length) {
-    const { error } = await sb.from(BOOK_GROUPS_TABLE).insert(add.map((group_id) => ({ book_id: bookId, group_id })));
-    if (error) throw error;
-  }
-  if (remove.length) {
-    const { error } = await sb.from(BOOK_GROUPS_TABLE).delete().eq('book_id', bookId).in('group_id', remove);
-    if (error) throw error;
-  }
-  adminState.bookGroups = adminState.bookGroups.filter((x) => x.book_id !== bookId)
-    .concat(groupIds.map((group_id) => ({ book_id: bookId, group_id })));
 }
 
 /** 관리자: 그룹 한 곳의 사람들 (리더 포함 여부 선택) → 프로필 목록 */
@@ -1669,12 +1647,6 @@ function adminGroupPeople(groupId, withLeader = false) {
 function adminGroupsOf(userId) {
   return adminState.groups.filter((g) => g.leader_id === userId
     || adminState.groupMembers.some((m) => m.group_id === g.id && m.user_id === userId));
-}
-
-/** 관리자: 책이 필독서로 지정된 그룹들 */
-function adminBookGroupsOf(bookId) {
-  const ids = adminState.bookGroups.filter((x) => x.book_id === bookId).map((x) => x.group_id);
-  return adminState.groups.filter((g) => ids.includes(g.id));
 }
 
 /** 도서관 책 저장 (id가 없으면 새로 만들기) → 저장된 책. status를 주면 상태도 바꾼다 (검토 승인) */
@@ -2200,6 +2172,14 @@ function runPlanSelfTests() {
   check('그룹: 형식 검사', checkGoalShape(mine, 0) === null && isValidShareContent('book', shared.content)
     && isValidShareContent('custom', goalShareContent(cg)) && !isValidShareContent('lecture', { titles: [] }));
 
+  // 예전 필독서 계획 → 그룹 공유 목표 연결
+  const legacy = createBookGoal({ ...goalToInput(src), startDate: '2026-10-01', dueDate: '2026-10-09', requiredBookId: 'oldbook' });
+  const savedGroups = [myGroups, groupItems];
+  myGroups = [{ id: 'grp1', isLeader: false }];
+  groupItems = [{ ...shared, content: goalShareContent(src) }];
+  check('그룹: 예전 필독서 계획 자동 연결', linkLegacyRequiredGoals([legacy]) && legacy.groupItemId === 'item1' && !legacy.requiredBookId);
+  [myGroups, groupItems] = savedGroups;
+
   console.group('■ 검사 결과');
   console.table(results);
   console.groupEnd();
@@ -2382,7 +2362,6 @@ async function startApp(user) {
     console.warn('[group] 그룹을 불러오지 못했습니다:', err);
     myGroups = [];
     groupItems = [];
-    bookGroupLinks = [];
   }
   renderTopbar();
 
@@ -2400,6 +2379,7 @@ async function startApp(user) {
   }
   // 도서관 검토가 끝난 내 책 목표는 도서관 책과 연결 (관리자가 고친 내용은 상세 화면에서 적용 여부를 묻는다)
   linkReviewedSubmissions();
+  if (linkLegacyRequiredGoals()) commit();
   // 로그인 전에 초대 링크로 들어왔으면 그 화면으로
   const pendingJoin = takePendingJoin();
   if (pendingJoin && location.hash !== pendingJoin) { location.hash = pendingJoin; return; }
@@ -2577,7 +2557,7 @@ function importBackup(file) {
   reader.readAsText(file);
 }
 
-/** 대시보드 위쪽에 보여줄 책: 팀 필독서(팀원·관리자) + 나에게 배정된 책 */
+/** 대시보드 위쪽에 보여줄 책: 나에게 배정된 책 */
 function getMyLibraryBooks() {
   return requiredBooks.filter((b) => bookTagKind(b) !== null);
 }
@@ -2606,7 +2586,7 @@ function renderRequiredSection(today, books) {
   }).join('');
   return `
     <section class="required-section">
-      <h2 class="section-title">${books.some((b) => bookTagKind(b) === 'assigned') ? t('필독서 · 배정된 책') : t('필독서')} <span class="count">${books.length}</span></h2>
+      <h2 class="section-title">${t('배정된 책')} <span class="count">${books.length}</span></h2>
       <div class="card-grid">${cards}</div>
     </section>`;
 }
@@ -4704,12 +4684,11 @@ const adminState = {
   editingBookId: null, // null | 'new' | 책 id
   cover: null, // 편집 중인 표지 { file?, previewUrl, removed? }
   assignments: [], // [{ book_id, user_id }] 모든 배정
-  libraryFilter: 'all', // 'all' | 'pending' | 'required' | 'public' | 'assigned'
+  libraryFilter: 'all', // 'all' | 'pending' | 'public' | 'assigned'
   mergingId: null, // "기존 책과 연결"을 고르는 중인 제출 id
   groups: [], // 모든 그룹 [{ id, name, leader_id, invite_code, created_at }]
   groupMembers: [], // [{ group_id, user_id, joined_at }]
   groupItems: [], // 모든 공유 목표 (rowToGroupItem)
-  bookGroups: [], // [{ book_id, group_id }] 도서관 책 ↔ 그룹 필독서
   openGroups: new Set(), // 회원 관리에서 펼친 그룹
   memberSearch: '', // 전체 회원 검색어
   memberGroupFilter: '', // '' 전체 | 'none' 그룹 없음 | 그룹 id
@@ -4805,16 +4784,15 @@ function renderAdmin(root, tab, route = {}) {
 
 /* ----- 진도 현황 ----- */
 
-/** 책을 받아야 하는 사람: 필독서로 지정된 그룹의 사람(리더 포함) + 배정된 사람 */
+/** 책을 받아야 하는 사람: 배정된 사람 */
 function bookAudience(book) {
   const ids = new Set(adminState.assignments.filter((a) => a.book_id === book.id).map((a) => a.user_id));
-  adminBookGroupsOf(book.id).forEach((g) => adminGroupPeople(g.id, true).forEach((p) => ids.add(p.user_id)));
   return adminState.profiles.filter((p) => ids.has(p.user_id));
 }
 
 function renderAdminProgress() {
-  const books = requiredBooks.filter((b) => adminBookGroupsOf(b.id).length || adminState.assignments.some((a) => a.book_id === b.id));
-  if (!books.length) return `<div class="empty">${t('아직 필독서나 배정된 책이 없습니다. <a href="#/admin/books">도서관</a>에서 정하세요.')}</div>`;
+  const books = requiredBooks.filter((b) => adminState.assignments.some((a) => a.book_id === b.id));
+  if (!books.length) return `<div class="empty">${t('아직 배정된 책이 없습니다. <a href="#/admin/books">도서관</a>에서 정하세요. (그룹의 진도는 <a href="#/admin/members">회원 관리</a>의 그룹에서 봅니다)')}</div>`;
   const today = todayStr();
 
   return books.map((book) => {
@@ -4987,7 +4965,6 @@ function renderAdminMemberGoal(userId, goalId) {
 const LIBRARY_FILTERS = [
   ['all', '전체||filter'],
   ['pending', '검토 대기'],
-  ['required', '필독서'],
   ['public', '공개'],
   ['assigned', '배정'],
 ];
@@ -5000,7 +4977,6 @@ function bookAssignees(bookId) {
 function renderLibraryBadges(book) {
   const n = bookAssignees(book.id).length;
   return [
-    ...adminBookGroupsOf(book.id).map((g) => `<span class="type-tag type-required">${t('필독서 · {group}', { group: escapeHtml(g.name) })}</span>`),
     book.isPublic ? `<span class="type-tag type-public">${t('공개')}</span>` : '',
     n ? `<span class="type-tag type-assigned">${t('배정 {n}명', { n })}</span>` : '',
   ].filter(Boolean).join(' ');
@@ -5048,14 +5024,6 @@ function renderAdminBooks() {
       ${renderChapterEditorHtml(book ? book.lastPage : '')}
       <fieldset class="field distribution">
         <legend class="field-label">${t('누구에게 보일까요?')} <span class="muted">${t('(아무것도 고르지 않으면 도서관에 보관만 합니다)')}</span></legend>
-        <div class="check-line-group">
-          <span class="check-line-title"><b>${t('그룹 필독서')}</b> <span class="muted">${t('고른 그룹의 모든 사람(리더 포함) 대시보드에 필독서로 보입니다')}</span></span>
-          ${adminState.groups.length ? `<div class="group-checks">
-            ${adminState.groups.map((g) => `<label class="group-check"><input type="checkbox" name="book-group" value="${escapeHtml(g.id)}"
-              ${book && adminState.bookGroups.some((x) => x.book_id === book.id && x.group_id === g.id) ? 'checked' : ''}>
-              ${escapeHtml(g.name)} <span class="muted small">${t('{n}명', { n: adminGroupPeople(g.id, true).length })}</span></label>`).join('')}
-          </div>` : `<span class="muted small">${t('아직 그룹이 없습니다.')}</span>`}
-        </div>
         <label class="check-line"><input type="checkbox" id="f-public" ${book && book.isPublic ? 'checked' : ''}>
           <span><b>${t('공개')}</b> <span class="muted">${t('누구나 새 목표에서 "도서관에서 고르기"로 고를 수 있습니다')}</span></span></label>
         <div class="assign-picker">
@@ -5104,8 +5072,7 @@ function renderAdminBooks() {
 
 /** 승인된 책 중 필터에 맞는 것 */
 function filterLibrary(filter) {
-  return requiredBooks.filter((b) => filter === 'required' ? adminBookGroupsOf(b.id).length > 0
-    : filter === 'public' ? b.isPublic
+  return requiredBooks.filter((b) => filter === 'public' ? b.isPublic
     : filter === 'assigned' ? bookAssignees(b.id).length > 0
     : true);
 }
@@ -5216,7 +5183,6 @@ async function submitBookForm(form) {
     isPublic: form.querySelector('#f-public').checked,
   };
   const assignees = [...form.querySelectorAll('input[name="assign"]:checked')].map((el) => el.value);
-  const bookGroupIds = [...form.querySelectorAll('input[name="book-group"]:checked')].map((el) => el.value);
   const errors = [];
   if (!input.title.trim()) errors.push(t('책 제목을 입력하세요.'));
   errors.push(...validateBookStructure(input));
@@ -5240,8 +5206,6 @@ async function submitBookForm(form) {
     if (oldCover && oldCover !== coverUrl) adminRemoveCoverFile(oldCover);
     replaceLibraryRow(saved);
     await adminSyncAssignments(saved.id, assignees);
-    await adminSyncBookGroups(saved.id, bookGroupIds);
-    bookGroupLinks = adminState.bookGroups.map((x) => ({ bookId: x.book_id, groupId: x.group_id }));
     myAssignedBookIds = new Set(adminState.assignments.filter((a) => a.user_id === currentUser.id).map((a) => a.book_id));
     adminState.editingBookId = null;
     resetCoverDraft();
@@ -5396,7 +5360,6 @@ function renderAdminGroup(g) {
   const members = adminGroupPeople(g.id);
   const memberIds = new Set(members.map((m) => m.user_id));
   const items = adminState.groupItems.filter((i) => i.groupId === g.id);
-  const books = requiredBooks.filter((b) => adminState.bookGroups.some((x) => x.book_id === b.id && x.group_id === g.id));
   const memberGoals = adminState.goals.filter((x) => x.goal.groupId === g.id && memberIds.has(x.userId));
   const candidates = adminState.profiles.filter((p) => !memberIds.has(p.user_id) && p.user_id !== g.leader_id);
   const open = adminState.openGroups.has(g.id);
@@ -5408,7 +5371,6 @@ function renderAdminGroup(g) {
         <span class="muted">${t('리더 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })}</span>
         <span class="muted">${t('멤버 {n}명', { n: members.length })}</span>
         <span class="muted">${t('공유 목표 {n}개', { n: items.length })}</span>
-        ${books.length ? `<span class="type-tag type-required">${t('필독서 {n}권', { n: books.length })}</span>` : ''}
       </summary>
       ${open ? `
       <div class="admin-group-body">
@@ -5442,10 +5404,6 @@ function renderAdminGroup(g) {
             }).join('')}
           </tbody>
         </table>` : `<p class="muted small">${t('아직 참여한 멤버가 없습니다.')}</p>`}
-
-        ${books.length ? `
-        <h3 class="admin-group-sub">${t('그룹 필독서')}</h3>
-        <p class="small">${books.map((b) => escapeHtml(b.title)).join(', ')} <a class="muted" href="#/admin/books">${t('도서관에서 바꾸기')}</a></p>` : ''}
 
         <h3 class="admin-group-sub">${t('공유한 목표')}</h3>
         ${items.length ? items.map((item) => renderGroupItemProgress(item, members, memberGoals,
@@ -5823,7 +5781,8 @@ async function drawPlanImage(goal, options) {
   const LW = 640;
   let y = P;
   const libraryTag = bookTagKind(libraryBookForGoal(goal));
-  const isRequired = !!libraryTag;
+  const groupName = goal.groupId ? groupNameOf(goal.groupId) : '';
+  const isRequired = !!libraryTag || !!groupName;
 
   // 표지 + 제목
   let tx = P;
@@ -5841,7 +5800,7 @@ async function drawPlanImage(goal, options) {
   let ty = y;
   if (isRequired) {
     ctx.font = font(22, 700);
-    const tagText = libraryTag === 'assigned' ? t('배정된 책') : t('사역자 필독서');
+    const tagText = groupName || t('배정된 책');
     const tw = ctx.measureText(tagText).width + 26;
     roundRect(ctx, tx, ty, tw, 38, 8, C.requiredSoft);
     ctx.fillStyle = C.required;
@@ -6169,15 +6128,12 @@ async function onExportDialogChange(e) {
 const GROUPS_TABLE = 'study_planner_groups';
 const GROUP_MEMBERS_TABLE = 'study_planner_group_members';
 const GROUP_ITEMS_TABLE = 'study_planner_group_items';
-const BOOK_GROUPS_TABLE = 'study_planner_book_groups';
 const PENDING_JOIN_KEY = 'study-planner:pending-join';
 
 /** 내 그룹 [{ id, name, leaderId, leaderName, inviteCode(리더만), memberCount, isLeader }] */
 let myGroups = [];
 /** 내 그룹들에 공유된 목표 [{ id, groupId, type, title, content, coverUrl, sourceGoalId, updatedAt }] */
 let groupItems = [];
-/** 도서관 책 ↔ 그룹 필독서 [{ bookId, groupId }] (회원: 내 그룹 것만, 관리자: 전부) */
-let bookGroupLinks = [];
 
 /** 그룹 상세 화면 상태 (리더: 멤버 목록 · 멤버들의 공유 목표) */
 const groupState = {
@@ -6278,6 +6234,26 @@ function isValidShareContent(type, content) {
   return false;
 }
 
+/**
+ * 예전 필독서(도서관)로 세운 계획을 같은 내용의 그룹 공유 목표에 연결한다 (필독서 → 그룹 공유 목표 전환).
+ * 서버에서 한 번 옮겼지만, 열려 있던 옛 화면이 저장하며 되돌린 경우를 위해 로그인할 때마다 확인한다.
+ */
+function linkLegacyRequiredGoals(goals = appData.goals) {
+  let changed = false;
+  goals.forEach((goal) => {
+    if (!goal.requiredBookId || goal.groupItemId || goal.type !== 'book') return;
+    const item = groupItems.find((i) => {
+      const g = myGroups.find((x) => x.id === i.groupId);
+      return g && !g.isLeader && i.type === 'book' && !findGoalForGroupItem(goals, i.id) && !isGroupItemChanged(goal, i);
+    });
+    if (!item) return;
+    delete goal.requiredBookId;
+    linkGoalToGroupItem(goal, item);
+    changed = true;
+  });
+  return changed;
+}
+
 /* ----- 초대 링크 (로그인 전에 들어온 경우 기억) ----- */
 
 function rememberPendingJoin() {
@@ -6329,9 +6305,6 @@ async function loadGroups() {
     memberCount: r.member_count,
     isLeader: r.is_leader,
   }));
-  const links = await sb.from(BOOK_GROUPS_TABLE).select('book_id, group_id');
-  if (links.error) throw links.error;
-  bookGroupLinks = links.data.map((r) => ({ bookId: r.book_id, groupId: r.group_id }));
   if (!myGroups.length) {
     groupItems = [];
     return;
@@ -7479,6 +7452,7 @@ const EN = {
   '그룹에 추가': 'Add to group',
   '+ 그룹 추가': '+ Add group',
   '그룹 선택': 'Choose group',
+  '아직 배정된 책이 없습니다. <a href="#/admin/books">도서관</a>에서 정하세요. (그룹의 진도는 <a href="#/admin/members">회원 관리</a>의 그룹에서 봅니다)': 'No assigned books yet. Assign them in the <a href="#/admin/books">Library</a>. (See group progress under groups in <a href="#/admin/members">Members</a>.)',
 };
 
 /* =========================================================================
@@ -7551,7 +7525,6 @@ async function boot() {
       myAssignedBookIds = new Set();
       myGroups = [];
       groupItems = [];
-      bookGroupLinks = [];
       groupState.groupId = null;
       adminState.loaded = false;
       renderTopbar();
