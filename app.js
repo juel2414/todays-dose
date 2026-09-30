@@ -1961,6 +1961,13 @@ function runPlanSelfTests() {
   check('성경: 범위 역순 차단', validateBibleInput({ title: 'x', startDate: '2026-10-01', dueDate: '2026-10-02', bibleStart: 5, bibleEnd: 2 }).length > 0);
   check('성경: 백업 형식 검사 통과', checkGoalShape(bg, 0) === null);
 
+  // 목차 사진 여러 장 합치기
+  const merged = mergeTocResults([
+    { chapters: [{ name: '1장', startPage: 1 }, { name: '2장', startPage: 30 }], lastPage: null },
+    { chapters: [{ name: '2장', startPage: 30 }, { name: '3장', startPage: 60 }], lastPage: 120 },
+  ]);
+  check('목차 사진: 여러 장 합치기(겹침 제거)', merged.chapters.map((c) => c.name).join(',') === '1장,2장,3장' && merged.lastPage === 120);
+
   // 입력 검증
   check(
     '검증: 오름차순 아님 차단',
@@ -2738,10 +2745,11 @@ function renderChapterEditorHtml(lastPage) {
         <button type="button" class="btn btn-small" data-action="toc-paste">${t('목차 붙여넣기')}</button>
         <label class="btn btn-small" id="toc-photo-label">
           <span class="toc-photo-text">${t('목차 사진으로 채우기')}</span>
-          <input type="file" id="toc-photo" accept="image/*" hidden>
+          <input type="file" id="toc-photo" accept="image/*" multiple hidden>
         </label>
-        <span class="field-hint">${t('목차를 복사해 붙여넣거나 사진을 찍어 올리면 챕터를 자동으로 채웁니다.')}</span>
+        <span class="field-hint">${t('목차를 복사해 붙여넣거나 사진을 찍어 올리면 챕터를 자동으로 채웁니다. 목차가 여러 쪽이면 사진을 여러 장 함께 고르세요.')}</span>
       </div>
+      <p id="toc-result" class="toc-result" hidden></p>
       <div id="toc-paste-panel" class="toc-paste" hidden>
         <textarea id="toc-text" class="input textarea" rows="8"
           placeholder="${t('예:\n1장 도입 ········ 11\n2장 기도의 삶 ····· 35\n3장 말씀 묵상 (58)')}"></textarea>
@@ -2864,6 +2872,26 @@ function imageFileToJpegBase64(file, maxSide = 1600) {
   });
 }
 
+/**
+ * 여러 장의 목차 사진 결과를 순서대로 합친다.
+ * 사진이 겹쳐 찍혀 같은 항목(이름·페이지)이 바로 이어서 나오면 한 번만 남긴다.
+ */
+function mergeTocResults(results) {
+  const chapters = [];
+  let lastPage = null;
+  results.forEach((r) => {
+    (r.chapters || []).forEach((c) => {
+      const prev = chapters[chapters.length - 1];
+      const recent = chapters.slice(-5);
+      const dup = recent.some((x) => x.name === c.name && x.startPage === c.startPage);
+      if (prev && dup) return;
+      chapters.push({ name: c.name, startPage: c.startPage });
+    });
+    if (r.lastPage && (!lastPage || r.lastPage > lastPage)) lastPage = r.lastPage;
+  });
+  return { chapters, lastPage };
+}
+
 /** 목차 사진 → { chapters: [{ name, startPage|null }], lastPage|null } (서버에서 읽는다) */
 async function readTocFromImage(file) {
   const base64 = await imageFileToJpegBase64(file);
@@ -2919,19 +2947,37 @@ function bindTocTools(container, onChange) {
       ? t('{n}개 챕터 인식 (페이지 {p}개)', { n: chapters.length, p: withPage }) : '';
   });
   textEl.addEventListener('keydown', (e) => e.stopPropagation());
+  container.addEventListener('input', (e) => {
+    if (e.target.classList && e.target.classList.contains('ch-start') && e.target.value !== '') e.target.classList.remove('is-missing');
+  });
 
   photo.addEventListener('change', async () => {
-    const file = photo.files[0];
+    // 여러 장이면 파일 이름 순서(보통 찍은 순서)로 읽는다
+    const files = [...photo.files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
     photo.value = '';
-    if (!file) return;
+    if (!files.length) return;
     if (!confirmReplaceChapters()) return;
     const text = photoLabel.querySelector('.toc-photo-text');
     const label = text.textContent;
-    text.textContent = t('목차 읽는 중…');
+    const resultEl = container.querySelector('#toc-result');
+    resultEl.hidden = true;
     photoLabel.classList.add('is-loading');
     photo.disabled = true;
     try {
-      const { chapters, lastPage } = await readTocFromImage(file);
+      const results = [];
+      const failed = [];
+      for (let i = 0; i < files.length; i++) {
+        text.textContent = files.length > 1
+          ? t('목차 읽는 중… ({i}/{n})', { i: i + 1, n: files.length }) : t('목차 읽는 중…');
+        try {
+          results.push(await readTocFromImage(files[i]));
+        } catch (err) {
+          console.warn('[toc] 사진 읽기 실패:', files[i].name, err);
+          failed.push(files[i].name);
+          if (files.length === 1) throw err;
+        }
+      }
+      const { chapters, lastPage } = mergeTocResults(results);
       if (!chapters.length) throw new Error(t('사진에서 목차를 찾지 못했습니다. 목차가 잘 보이게 다시 찍어 주세요.'));
       replaceChapterRows(chapters);
       const lastEl = container.querySelector('#f-last-page');
@@ -2939,6 +2985,16 @@ function bindTocTools(container, onChange) {
       const box = container.querySelector('#form-errors');
       if (box) box.hidden = true;
       onChange();
+
+      // 결과 안내: 페이지를 못 읽은 행은 표시해서 확인하게 한다
+      const missing = [...container.querySelectorAll('#chapter-rows .ch-start')].filter((el) => el.value === '');
+      missing.forEach((el) => el.classList.add('is-missing'));
+      const parts = [t('챕터 {n}개를 채웠습니다.', { n: chapters.length })];
+      if (missing.length) parts.push(t('페이지를 읽지 못한 {n}개는 노란 칸에 직접 넣어 주세요.', { n: missing.length }));
+      if (failed.length) parts.push(t('사진 {n}장은 읽지 못했습니다.', { n: failed.length }));
+      parts.push(t('저장하기 전에 목차와 비교해 확인하세요.'));
+      resultEl.textContent = parts.join(' ');
+      resultEl.hidden = false;
     } catch (err) {
       console.warn('[toc] 목차 사진 읽기 실패:', err);
       showChapterEditorError(container, t('목차를 읽지 못했습니다'), err.message || String(err));
@@ -5355,6 +5411,12 @@ const EN = {
   '백업 내보내기': 'Export backup',
   '백업에서 복원': 'Restore from backup',
   '내보낼 목표가 없습니다.': 'There are no goals to export.',
+  '목차를 복사해 붙여넣거나 사진을 찍어 올리면 챕터를 자동으로 채웁니다. 목차가 여러 쪽이면 사진을 여러 장 함께 고르세요.': 'Paste the table of contents or upload a photo to fill in chapters automatically. If the contents run over several pages, select all the photos at once.',
+  '목차 읽는 중… ({i}/{n})': 'Reading contents… ({i}/{n})',
+  '챕터 {n}개를 채웠습니다.': (p) => `Filled in ${p.n} ${p.n === 1 ? 'chapter' : 'chapters'}.`,
+  '페이지를 읽지 못한 {n}개는 노란 칸에 직접 넣어 주세요.': (p) => `Enter the start page for the ${p.n} highlighted ${p.n === 1 ? 'row' : 'rows'} yourself.`,
+  '사진 {n}장은 읽지 못했습니다.': (p) => `Couldn't read ${p.n} ${p.n === 1 ? 'photo' : 'photos'}.`,
+  '저장하기 전에 목차와 비교해 확인하세요.': 'Check it against the book before saving.',
   '오늘분량': "Today's Dose",
   '언어': 'Language',
   '저장 중…': 'Saving…',
