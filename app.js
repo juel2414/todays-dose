@@ -2555,7 +2555,7 @@ function renderGoalForm(root, goal, bookId = null) {
         </div>
       </div>
 
-      ${!isEdit && !locked ? `
+      ${!isEdit && !locked && account.isAdmin ? `
       <div data-section="book-pick">
         <div class="library-pick">
           <button type="button" class="btn" data-action="library-open">${t('도서관에서 고르기')}</button>
