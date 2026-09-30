@@ -1,7 +1,7 @@
 'use strict';
 
 /* =========================================================================
- * 학습 진도 계획표 — app.js
+ * 오늘분량 (Today's Dose) — app.js
  *
  * 구성
  *   1. 날짜 유틸 (로컬 날짜 YYYY-MM-DD 문자열만 사용)
@@ -76,7 +76,7 @@ function applyLanguage(lang) {
   currentLang = isLang(lang) ? lang : 'ko';
   if (typeof document !== 'undefined') {
     document.documentElement.lang = currentLang;
-    document.title = t('학습 진도 계획표');
+    document.title = t('오늘분량');
   }
 }
 
@@ -1825,7 +1825,7 @@ function renderTopbar() {
   bar.innerHTML = `
     <div class="topbar-inner">
       <nav class="topbar-nav">
-        <a class="brand" href="#/">${t('학습 진도 계획표')}</a>
+        <a class="brand" href="#/">${t('오늘분량')}</a>
         ${account.isAdmin ? `<a class="nav-link" href="#/admin">${t('관리자')}</a>` : ''}
       </nav>
       <div class="topbar-right">
@@ -1840,6 +1840,7 @@ function renderTopbar() {
 /* ----- 로그인 · 시작 화면 ----- */
 
 function renderMessageScreen(root, title, html, withLang = false) {
+  document.body.classList.remove('is-landing');
   root.innerHTML = `
     <div class="login-screen">
       ${withLang ? `<div class="login-lang">${renderLangToggle()}</div>` : ''}
@@ -1852,22 +1853,20 @@ function renderMessageScreen(root, title, html, withLang = false) {
 
 function renderLogin(root, errorMessage = '') {
   const isFile = location.protocol === 'file:';
-  renderMessageScreen(root, t('학습 진도 계획표'), `
-    <p class="muted">${t('책·강의의 마감일까지 매일 할 분량을 계획하고 진도를 기록합니다.')}<br>
-      ${t('구글 계정으로 로그인하면 어느 기기에서든 같은 계획을 볼 수 있습니다.')}</p>
-    ${isFile ? `<p class="errors">${t('파일을 직접 연 상태에서는 로그인할 수 없습니다. 배포된 인터넷 주소(https://…)로 열어 주세요.')}</p>` : ''}
-    ${errorMessage ? `<p class="errors">${escapeHtml(errorMessage)}</p>` : ''}
-    <button type="button" class="btn btn-google" data-action="google-login" ${isFile ? 'disabled' : ''}>
-      <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 38.2 44 33 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
-      ${t('Google 계정으로 로그인')}
-    </button>`, true);
-  root.querySelector('[data-action="google-login"]').addEventListener('click', async (e) => {
-    e.currentTarget.disabled = true;
-    try {
-      await signInWithGoogle(); // 구글 로그인 페이지로 이동
-    } catch (err) {
-      renderLogin(root, t('로그인을 시작하지 못했습니다: {message}', { message: err.message }));
-    }
+  // 로그인 전 첫 화면 = 메인(랜딩) 페이지 (landing.js)
+  renderLanding(root, {
+    lang: currentLang,
+    message: errorMessage
+      || (isFile ? t('파일을 직접 연 상태에서는 로그인할 수 없습니다. 배포된 인터넷 주소(https://…)로 열어 주세요.') : ''),
+    loginDisabled: isFile,
+    onLang: (lang) => changeLanguage(lang),
+    onLogin: async () => {
+      try {
+        await signInWithGoogle(); // 구글 로그인 페이지로 이동
+      } catch (err) {
+        throw new Error(t('로그인을 시작하지 못했습니다: {message}', { message: err.message }));
+      }
+    },
   });
 }
 
@@ -1965,6 +1964,7 @@ function navigate(hash) {
 
 function render() {
   const root = document.getElementById('app');
+  document.body.classList.remove('is-landing');
   if (!appData) return; // 로그인 전이거나 불러오는 중
   const route = parseRoute();
   const goal = route.id ? getGoal(route.id) : null;
@@ -2013,7 +2013,7 @@ function renderDashboard(root) {
   root.innerHTML = `
     <header class="page-header">
       <div>
-        <h1>${t('학습 진도 계획표')}</h1>
+        <h1>${t('오늘분량')}</h1>
         <p class="muted">${escapeHtml(today)} (${weekdayLabel(today)})</p>
       </div>
       <div class="header-actions">
@@ -4449,7 +4449,7 @@ async function drawPlanImage(goal, options) {
   // 바닥글
   ctx.font = font(20);
   ctx.fillStyle = C.muted;
-  ctx.fillText(t('학습 진도 계획표 · {date} ({weekday}) 기준', { date: today, weekday: weekdayLabel(today) }), P, H - P + 16);
+  ctx.fillText(t('오늘분량 · {date} ({weekday}) 기준', { date: today, weekday: weekdayLabel(today) }), P, H - P + 16);
 
   /* ===== 오른쪽: 날짜별 계획 ===== */
   const RX = P + LW + 40;
@@ -4661,7 +4661,7 @@ async function onExportDialogChange(e) {
 
 const EN = {
   // 공통 · 상단 바 · 로그인
-  '학습 진도 계획표': 'Study Planner',
+  '오늘분량': "Today's Dose",
   '언어': 'Language',
   '저장 중…': 'Saving…',
   '저장됨': 'Saved',
@@ -5038,7 +5038,7 @@ const EN = {
   '현재 진도': 'Current progress',
   '초록 = 실제 진도   |   검정 선 = 오늘까지 권장': 'Green = actual progress   |   Black line = target by today',
   '남은 공부일': 'Study days left',
-  '학습 진도 계획표 · {date} ({weekday}) 기준': 'Study Planner · as of {date} ({weekday})',
+  '오늘분량 · {date} ({weekday}) 기준': "Today's Dose · as of {date} ({weekday})",
   '매일 들을 분량': 'Daily listening plan',
   '매일 읽을 분량': 'Daily reading plan',
   '오늘부터': 'From today',
