@@ -606,3 +606,112 @@ input[type="date"].input { width: 180px; }
   height: 46px;
   font-weight: 600;
 }
+
+/* ===== 우리 팀 · 사역자 필독서 ===== */
+.topbar-nav { display: flex; align-items: center; gap: 20px; }
+.nav-link { font-size: 14px; font-weight: 600; color: var(--muted); text-decoration: none; }
+.nav-link:hover { color: var(--text); }
+
+.type-required { background: #fff1e0; color: #b35c00; }
+.card-tags { display: inline-flex; align-items: center; gap: 6px; }
+.required-section { margin-bottom: 36px; }
+.required-empty { justify-content: space-between; border-style: dashed; }
+.required-empty .btn { align-self: flex-start; }
+
+.notice-info { background: #fff1e0; color: #8a4600; }
+.notice-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+#goal-form.is-locked input[readonly] { background: var(--neutral-soft); color: var(--muted); }
+
+/* ===== 관리자 ===== */
+.admin-tabs { margin-bottom: 20px; }
+.admin-tabs .tab { text-decoration: none; }
+.admin-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.admin-toolbar p { margin: 0; }
+.admin-editor { max-width: 820px; margin-bottom: 20px; }
+.admin-book { margin-bottom: 20px; }
+.admin-book-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 12px;
+}
+.admin-book-head .section-title { margin: 0; }
+.text-danger { color: var(--danger); }
+
+.admin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.panel-table {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.admin-table th {
+  padding: 10px 14px;
+  border-bottom: 2px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: left;
+  white-space: nowrap;
+}
+.admin-table td { padding: 12px 14px; border-bottom: 1px solid var(--neutral-soft); vertical-align: middle; }
+.admin-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.admin-table .center { text-align: center; }
+.admin-table tr.is-empty td { color: var(--muted); }
+.admin-table tr.is-team td { background: #fbfcff; }
+.admin-table .col-bar { width: 230px; white-space: nowrap; }
+.row-actions { text-align: right; white-space: nowrap; }
+.row-actions .btn + .btn { margin-left: 6px; }
+.mini-bar {
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+  width: 140px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--neutral-soft);
+}
+.mini-bar .compare-fill { min-width: 8px; }
+.mini-bar .compare-marker { top: -4px; height: 16px; width: 2px; margin-left: -1px; }
+.mini-pct { margin-left: 8px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.admin-legend { font-size: 13px; }
+
+/* 켜기/끄기 스위치 */
+.switch { position: relative; display: inline-block; width: 40px; height: 22px; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.switch span {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: #cfd4dc;
+  transition: background 0.15s;
+  pointer-events: none;
+}
+.switch span::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+.switch input:checked + span { background: var(--primary); }
+.switch input:checked + span::after { transform: translateX(18px); }
+.switch input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: 2px; }
+.switch input:disabled + span { opacity: 0.5; }
+.btn-primary:disabled { opacity: 0.45; }

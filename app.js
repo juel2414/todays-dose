@@ -296,7 +296,7 @@ function buildInitialPlans(goal) {
   return plans;
 }
 
-function createBookGoal({ title, startDate, dueDate, restWeekdays = [], chapters, lastPage }) {
+function createBookGoal({ title, startDate, dueDate, restWeekdays = [], chapters, lastPage, requiredBookId = null }) {
   const now = new Date().toISOString();
   const goal = {
     id: generateId(),
@@ -314,6 +314,7 @@ function createBookGoal({ title, startDate, dueDate, restWeekdays = [], chapters
     progress: { current: 0, history: [] },
     plans: null,
   };
+  if (requiredBookId) goal.requiredBookId = requiredBookId; // 사역자 필독서로 만든 목표
   goal.progress.current = bookFirstPage(goal.book) - 1;
   goal.plans = buildInitialPlans(goal);
   return goal;
@@ -366,7 +367,12 @@ function validateCommonInput({ title, startDate, dueDate, restWeekdays = [] }) {
 }
 
 function validateBookInput(input) {
-  const errors = validateCommonInput(input);
+  return [...validateCommonInput(input), ...validateBookStructure(input)];
+}
+
+/** 책 구성(챕터·마지막 페이지) 검증 — 목표 입력과 필독서 관리에서 공용 */
+function validateBookStructure(input) {
+  const errors = [];
   const { chapters, lastPage } = input;
   const last = Number(lastPage);
 
@@ -636,6 +642,13 @@ function describeChaptersForPages(book, startPage, endPage) {
   return `${list[0]} ~ ${list.at(-1)}`;
 }
 
+/** 받침에 따라 조사 선택: josa('페이지', '을', '를') → '를' */
+function josa(word, withBatchim, withoutBatchim) {
+  const code = String(word).charCodeAt(String(word).length - 1);
+  const hasBatchim = code >= 0xac00 && code <= 0xd7a3 && (code - 0xac00) % 28 !== 0;
+  return hasBatchim ? withBatchim : withoutBatchim;
+}
+
 function formatDday(dday) {
   if (dday > 0) return `D-${dday}`;
   if (dday === 0) return 'D-Day';
@@ -690,6 +703,29 @@ function buildTimeline(goal, basis) {
     rows.push({ ...row, originalCumulative, isPreReplan: !activeRows.has(date) });
   }
   return rows;
+}
+
+/* ----- 사역자 필독서와 연결된 목표 ----- */
+
+/** 필독서로 만든 내 목표 (없으면 null) */
+function findGoalForBook(goals, bookId) {
+  return goals.find((g) => g.requiredBookId === bookId) || null;
+}
+
+/** 관리자가 필독서 내용을 바꿔서 내 목표와 달라졌는지 */
+function isRequiredBookChanged(goal, book) {
+  return goal.title !== book.title.trim()
+    || bookSignature(goal.book.chapters, goal.book.lastPage) !== bookSignature(book.chapters, book.lastPage);
+}
+
+/** 필독서 최신 내용을 반영한 수정 입력 (기간·쉬는 요일은 그대로) */
+function inputFromRequiredBook(goal, book) {
+  return {
+    ...goalToInput(goal),
+    title: book.title,
+    chapters: book.chapters.map((c) => ({ name: c.name, startPage: c.startPage })),
+    lastPage: book.lastPage,
+  };
 }
 
 /** 목표 삭제 */
@@ -768,7 +804,9 @@ async function signOut() {
 let syncedSnapshot = new Map();
 
 async function loadData() {
-  const { data: rows, error } = await getSupabase().from(GOALS_TABLE).select('id, data, schema_version');
+  // 관리자는 팀원의 필독서 목표도 읽을 수 있으므로 반드시 본인 것만 가져온다
+  const { data: rows, error } = await getSupabase().from(GOALS_TABLE)
+    .select('id, data, schema_version').eq('user_id', currentUser.id);
   if (error) throw error;
   const version = rows.reduce((min, r) => Math.min(min, r.schema_version), SCHEMA_VERSION);
   const data = migrateData({ schemaVersion: version, goals: rows.map((r) => r.data) });
@@ -794,10 +832,84 @@ async function saveData(data) {
     changed.forEach((g) => syncedSnapshot.set(g.id, JSON.stringify(g)));
   }
   if (removed.length) {
-    const { error } = await sb.from(GOALS_TABLE).delete().in('id', removed);
+    const { error } = await sb.from(GOALS_TABLE).delete().eq('user_id', currentUser.id).in('id', removed);
     if (error) throw error;
     removed.forEach((id) => syncedSnapshot.delete(id));
   }
+}
+
+/* ----- 계정 · 우리 팀 · 사역자 필독서 ----- */
+
+const PROFILES_TABLE = 'study_planner_profiles';
+const REQUIRED_BOOKS_TABLE = 'study_planner_required_books';
+
+/** 로그인할 때마다 프로필 갱신 + 관리자/팀 여부 확인 → { isAdmin, inTeam } */
+async function loadAccount(user) {
+  const sb = getSupabase();
+  const meta = user.user_metadata || {};
+  const [profile, admin] = await Promise.all([
+    sb.rpc('study_planner_touch_profile', { p_name: meta.full_name || meta.name || null }),
+    sb.rpc('study_planner_is_admin'),
+  ]);
+  if (profile.error) throw profile.error;
+  if (admin.error) throw admin.error;
+  return { isAdmin: admin.data === true, inTeam: !!(profile.data && profile.data.in_team) };
+}
+
+function rowToRequiredBook(row) {
+  return { id: row.id, title: row.title, chapters: row.chapters, lastPage: row.last_page, updatedAt: row.updated_at };
+}
+
+/** 사역자 필독서 목록 (팀원·관리자만 읽을 수 있음) */
+async function loadRequiredBooks() {
+  const { data, error } = await getSupabase().from(REQUIRED_BOOKS_TABLE)
+    .select('id, title, chapters, last_page, updated_at').order('created_at');
+  if (error) throw error;
+  return data.map(rowToRequiredBook);
+}
+
+/* 관리자 전용 — 서버에서도 RLS/함수로 관리자만 허용된다 */
+
+async function adminLoadProfiles() {
+  const { data, error } = await getSupabase().from(PROFILES_TABLE)
+    .select('user_id, email, name, in_team, created_at, last_seen_at').order('created_at');
+  if (error) throw error;
+  return data;
+}
+
+async function adminSetTeam(userId, inTeam) {
+  const { error } = await getSupabase().rpc('study_planner_set_team', { p_user_id: userId, p_in_team: inTeam });
+  if (error) throw error;
+}
+
+/** 필독서 저장 (id가 없으면 새로 만들기) → 저장된 책 */
+async function adminSaveRequiredBook(book) {
+  const row = {
+    title: book.title.trim(),
+    chapters: book.chapters.map((c) => ({ name: c.name.trim(), startPage: Number(c.startPage) })),
+    last_page: Number(book.lastPage),
+    updated_at: new Date().toISOString(),
+  };
+  const sb = getSupabase();
+  const query = book.id
+    ? sb.from(REQUIRED_BOOKS_TABLE).update(row).eq('id', book.id)
+    : sb.from(REQUIRED_BOOKS_TABLE).insert(row);
+  const { data, error } = await query.select('id, title, chapters, last_page, updated_at').single();
+  if (error) throw error;
+  return rowToRequiredBook(data);
+}
+
+async function adminDeleteRequiredBook(id) {
+  const { error } = await getSupabase().from(REQUIRED_BOOKS_TABLE).delete().eq('id', id);
+  if (error) throw error;
+}
+
+/** 모든 사용자의 필독서 목표 → [{ userId, goal }] */
+async function adminLoadRequiredGoals() {
+  const { data, error } = await getSupabase().from(GOALS_TABLE)
+    .select('user_id, data').not('data->>requiredBookId', 'is', null);
+  if (error) throw error;
+  return data.map((r) => ({ userId: r.user_id, goal: r.data }));
 }
 
 /** 로그인 전 이 브라우저에 저장된 목표 (없으면 빈 배열) */
@@ -853,6 +965,10 @@ function checkGoalShape(goal, index) {
   }
   if (!BASES_BY_TYPE[goal.type]) return `${label}: 종류(type)가 올바르지 않습니다.`;
   if (!isValidDateStr(goal.startDate) || !isValidDateStr(goal.dueDate)) return `${label}: 날짜가 올바르지 않습니다.`;
+  if (goal.requiredBookId !== undefined && (typeof goal.requiredBookId !== 'string'
+    || !/^[\w-]{1,64}$/.test(goal.requiredBookId))) {
+    return `${label}: 필독서 연결 정보가 올바르지 않습니다.`;
+  }
   if (goal.restWeekdays !== undefined && (!Array.isArray(goal.restWeekdays)
     || !goal.restWeekdays.every((d) => Number.isInteger(d) && d >= 0 && d <= 6))) {
     return `${label}: 쉬는 요일 정보가 올바르지 않습니다.`;
@@ -1052,6 +1168,17 @@ function runPlanSelfTests() {
   setProgress(overdue, 1, '2026-09-10');
   check('마감 지난 목표도 이름 수정 가능', validateGoalEdit(overdue, { ...goalToInput(overdue), title: '새 이름' }, '2026-09-30').length === 0);
 
+  // 사역자 필독서 연결
+  const rb = { id: 'b1', title: '필독서', lastPage: 90, chapters: [{ name: '1장', startPage: 1 }, { name: '2장', startPage: 46 }] };
+  const linked = createBookGoal({ ...rb, startDate: '2026-10-01', dueDate: '2026-10-09', requiredBookId: rb.id });
+  check('필독서: 목표 연결', findGoalForBook([book, linked], 'b1') === linked && !isRequiredBookChanged(linked, rb));
+  const rb2 = { ...rb, chapters: [...rb.chapters, { name: '3장', startPage: 70 }] };
+  check('조사: 페이지를 / 강을', josa('페이지', '을', '를') === '를' && josa('3강', '을', '를') === '을');
+  check('필독서: 관리자 변경 감지', isRequiredBookChanged(linked, rb2));
+  applyGoalEdit(linked, inputFromRequiredBook(linked, rb2), '2026-09-30');
+  check('필독서: 변경 반영(시작 전 → 계획 새로)', linked.book.chapters.length === 3 && linked.plans.chapter.original.to === 3
+    && linked.requiredBookId === 'b1' && !isRequiredBookChanged(linked, rb2));
+
   // 입력 검증
   check(
     '검증: 오름차순 아님 차단',
@@ -1089,6 +1216,10 @@ function getGoal(id) {
 /* ----- 저장 (순서대로 한 번에 하나씩) ----- */
 
 let currentUser = null;
+/** 관리자 / 우리 팀 여부 (로그인 때 서버에서 확인) */
+let account = { isAdmin: false, inTeam: false };
+/** 사역자 필독서 목록 (팀원·관리자만) */
+let requiredBooks = [];
 let saveQueue = Promise.resolve();
 let pendingSaves = 0;
 let saveState = 'saved'; // 'saving' | 'saved' | 'error'
@@ -1137,7 +1268,10 @@ function renderTopbar() {
   bar.hidden = false;
   bar.innerHTML = `
     <div class="topbar-inner">
-      <a class="brand" href="#/">학습 진도 계획표</a>
+      <nav class="topbar-nav">
+        <a class="brand" href="#/">학습 진도 계획표</a>
+        ${account.isAdmin ? '<a class="nav-link" href="#/admin">관리자</a>' : ''}
+      </nav>
       <div class="topbar-right">
         ${status}
         <span class="user">${escapeHtml(name || currentUser.email || '')}</span>
@@ -1196,6 +1330,17 @@ async function startApp(user) {
     return;
   }
 
+  // 관리자·팀 정보와 필독서 — 실패해도 내 계획은 쓸 수 있게 경고만 남긴다
+  try {
+    account = await loadAccount(user);
+    requiredBooks = account.inTeam || account.isAdmin ? await loadRequiredBooks() : [];
+  } catch (err) {
+    console.warn('[account] 팀·필독서 정보를 불러오지 못했습니다:', err);
+    account = { isAdmin: false, inTeam: false };
+    requiredBooks = [];
+  }
+  renderTopbar();
+
   const legacy = readLegacyGoals().filter((g) => !getGoal(g.id));
   if (legacy.length) {
     const move = confirm(`이 브라우저에 로그인 전에 만든 목표 ${legacy.length}개가 있습니다.\n계정으로 옮길까요?\n\n`
@@ -1212,8 +1357,10 @@ async function startApp(user) {
 }
 
 function parseRoute() {
-  const [name, id] = location.hash.replace(/^#\/?/, '').split('/');
+  const [name, id, sub] = location.hash.replace(/^#\/?/, '').split('/');
+  if (name === 'new' && id === 'book' && sub) return { view: 'form', bookId: sub };
   if (name === 'new') return { view: 'form' };
+  if (name === 'admin') return { view: 'admin', tab: id || 'progress' };
   if (name === 'edit' && id) return { view: 'form', id };
   if (name === 'goal' && id) return { view: 'detail', id };
   return { view: 'dashboard' };
@@ -1235,7 +1382,10 @@ function render() {
   }
   // 미리보기는 상세 화면에서만 유효 (수정 → 미리보기 전환은 submitGoalForm이 상세로 바로 이동)
   if (route.view !== 'detail') detailState.preview = null;
-  if (route.view === 'form') renderGoalForm(root, goal);
+  if (route.view === 'admin') {
+    if (!account.isAdmin) { navigate('#/'); return; }
+    renderAdmin(root, route.tab);
+  } else if (route.view === 'form') renderGoalForm(root, goal, route.bookId || null);
   else if (route.view === 'detail') renderGoalDetail(root, goal);
   else renderDashboard(root);
   window.scrollTo(0, 0);
@@ -1256,7 +1406,12 @@ function escapeHtml(value) {
 
 function renderDashboard(root) {
   const today = todayStr();
-  const items = appData.goals.map((goal) => ({ goal, s: getGoalSummary(goal, undefined, today) }));
+  // 필독서로 만든 목표는 "사역자 필독서" 영역에 따로 보여준다
+  const showRequired = account.inTeam && requiredBooks.length > 0;
+  const linkedIds = new Set(showRequired
+    ? requiredBooks.map((b) => findGoalForBook(appData.goals, b.id)).filter(Boolean).map((g) => g.id) : []);
+  const items = appData.goals.filter((g) => !linkedIds.has(g.id))
+    .map((goal) => ({ goal, s: getGoalSummary(goal, undefined, today) }));
   const active = items.filter((x) => x.s.isActive)
     .sort((a, b) => diffDays(b.goal.dueDate, a.goal.dueDate));
   const finished = items.filter((x) => !x.s.isActive)
@@ -1276,6 +1431,8 @@ function renderDashboard(root) {
         <a class="btn btn-primary" href="#/new">+ 새 목표 추가</a>
       </div>
     </header>
+
+    ${showRequired ? renderRequiredSection(today) : ''}
 
     <section>
       <h2 class="section-title">진행 중 <span class="count">${active.length}</span></h2>
@@ -1338,12 +1495,40 @@ function importBackup(file) {
   reader.readAsText(file);
 }
 
-function renderGoalCard(goal, s) {
+function renderRequiredSection(today) {
+  const cards = requiredBooks.map((book) => {
+    const goal = findGoalForBook(appData.goals, book.id);
+    if (goal) return renderGoalCard(goal, getGoalSummary(goal, undefined, today), book);
+    const pages = book.lastPage - book.chapters[0].startPage + 1;
+    return `
+      <div class="goal-card required-empty">
+        <div class="card-top">
+          <span class="type-tag type-required">필독서</span>
+          <span class="badge badge-waiting">계획 없음</span>
+        </div>
+        <h3 class="card-title">${escapeHtml(book.title)}</h3>
+        <p class="card-meta">${pages}페이지 · ${book.chapters.length}개 챕터</p>
+        <a class="btn btn-primary" href="#/new/book/${escapeHtml(book.id)}">계획 세우기</a>
+      </div>`;
+  }).join('');
+  return `
+    <section class="required-section">
+      <h2 class="section-title">사역자 필독서 <span class="count">${requiredBooks.length}</span></h2>
+      <div class="card-grid">${cards}</div>
+    </section>`;
+}
+
+/** 목표 카드. requiredBook이 있으면 필독서 표시와 변경 알림 */
+function renderGoalCard(goal, s, requiredBook = null) {
   const typeLabel = goal.type === 'book' ? '책' : '강의';
+  const changed = requiredBook && isRequiredBookChanged(goal, requiredBook);
   return `
     <a class="goal-card ${s.isActive ? '' : 'is-finished'}" href="#/goal/${escapeHtml(goal.id)}">
       <div class="card-top">
-        <span class="type-tag type-${goal.type}">${typeLabel}</span>
+        <span class="card-tags">
+          ${requiredBook ? '<span class="type-tag type-required">필독서</span>' : `<span class="type-tag type-${goal.type}">${typeLabel}</span>`}
+          ${changed ? '<span class="badge badge-ended">내용 변경됨</span>' : ''}
+        </span>
         ${renderStatusBadge(s)}
       </div>
       <h3 class="card-title">${escapeHtml(goal.title)}</h3>
@@ -1402,8 +1587,17 @@ function renderTodayAmount(goal, s) {
  * 9. 화면 — 목표 추가 / 수정
  * ========================================================================= */
 
-function renderGoalForm(root, goal) {
+function renderGoalForm(root, goal, bookId = null) {
   const isEdit = !!goal;
+  // 사역자 필독서로 계획 세우기: 책 정보는 필독서 것을 쓰고 잠근다
+  const requiredBook = bookId ? requiredBooks.find((b) => b.id === bookId)
+    : (goal && goal.requiredBookId ? requiredBooks.find((b) => b.id === goal.requiredBookId) : null);
+  if (bookId) {
+    if (!requiredBook) { navigate('#/'); return; }
+    const existing = findGoalForBook(appData.goals, bookId);
+    if (existing) { navigate(`#/goal/${existing.id}`); return; }
+  }
+  const locked = !!requiredBook;
   const type = goal ? goal.type : 'book';
   const started = isEdit && hasGoalStarted(goal);
   // 미리보기에서 "수정으로 돌아가기"를 누르면 입력하던 값(draft)으로 다시 채운다
@@ -1413,30 +1607,33 @@ function renderGoalForm(root, goal) {
     title: '', startDate: todayStr(), dueDate: '', restWeekdays: [],
     chapters: [{ name: '', startPage: '' }], lastPage: '', titles: [],
   });
+  if (bookId) Object.assign(v, { title: requiredBook.title, chapters: requiredBook.chapters, lastPage: requiredBook.lastPage });
 
   root.innerHTML = `
     <header class="page-header">
       <div>
         <a class="back-link" href="${isEdit ? `#/goal/${escapeHtml(goal.id)}` : '#/'}">← ${isEdit ? '목표 상세' : '대시보드'}</a>
-        <h1>${isEdit ? '목표 수정' : '새 목표 추가'}</h1>
+        <h1>${isEdit ? '목표 수정' : bookId ? '필독서 계획 세우기' : '새 목표 추가'}</h1>
       </div>
     </header>
 
-    <form id="goal-form" class="panel" novalidate>
+    <form id="goal-form" class="panel ${locked ? 'is-locked' : ''}" novalidate>
+      ${locked ? `<p class="notice notice-info">사역자 필독서입니다. 책 제목과 챕터는 관리자가 정하며,
+        여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.</p>` : ''}
       ${started ? `<p class="notice">진행 중인 목표입니다. 날짜·쉬는 요일·챕터·강의 목록을 바꾸면 원래 계획은 보관하고,
         오늘부터 마감일까지 남은 분량을 다시 나눕니다. 저장하면 새 계획을 먼저 미리보기로 보여드립니다.</p>` : ''}
 
       <div class="field">
         <span class="field-label">종류</span>
         <div class="segmented">
-          <label><input type="radio" name="type" value="book" ${type === 'book' ? 'checked' : ''} ${isEdit ? 'disabled' : ''}> 책</label>
-          <label><input type="radio" name="type" value="lecture" ${type === 'lecture' ? 'checked' : ''} ${isEdit ? 'disabled' : ''}> 강의</label>
+          <label><input type="radio" name="type" value="book" ${type === 'book' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> 책</label>
+          <label><input type="radio" name="type" value="lecture" ${type === 'lecture' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> 강의</label>
         </div>
       </div>
 
       <div class="field">
         <label class="field-label" for="f-title" id="f-title-label"></label>
-        <input id="f-title" type="text" class="input input-wide" value="${escapeHtml(v.title)}">
+        <input id="f-title" type="text" class="input input-wide" value="${escapeHtml(v.title)}" ${locked ? 'readonly' : ''}>
       </div>
 
       <div class="field-row">
@@ -1467,27 +1664,7 @@ function renderGoalForm(root, goal) {
       </div>
 
       <div data-section="book">
-        <div class="field">
-          <span class="field-label">챕터 목록</span>
-          <table class="chapter-table">
-            <thead>
-              <tr><th class="col-no">#</th><th>챕터 이름</th><th class="col-page">시작 페이지</th><th class="col-page">끝 페이지</th><th class="col-del"></th></tr>
-            </thead>
-            <tbody id="chapter-rows"></tbody>
-          </table>
-          <button type="button" class="btn btn-small" id="add-chapter">+ 챕터 추가</button>
-        </div>
-        <div class="field-row">
-          <div class="field">
-            <label class="field-label" for="f-last-page">마지막 페이지</label>
-            <input id="f-last-page" type="number" min="1" class="input input-num"
-              value="${Number.isFinite(Number(v.lastPage)) && v.lastPage !== '' ? v.lastPage : ''}">
-          </div>
-          <div class="field">
-            <span class="field-label">합계</span>
-            <span id="f-book-summary" class="field-value">-</span>
-          </div>
-        </div>
+        ${renderChapterEditorHtml(v.lastPage)}
       </div>
 
       <div data-section="lecture">
@@ -1507,30 +1684,102 @@ function renderGoalForm(root, goal) {
     </form>
   `;
 
-  const chapters = v.chapters.length ? v.chapters : [{ name: '', startPage: '' }];
-  chapters.forEach((ch) => addChapterRow({ name: ch.name, startPage: Number.isFinite(ch.startPage) ? ch.startPage : '' }));
+  fillChapterEditor(v.chapters, locked);
 
   const form = root.querySelector('#goal-form');
   form.addEventListener('change', (e) => { if (e.target.name === 'type') updateFormView(); });
   form.addEventListener('input', updateFormView);
-  form.addEventListener('click', (e) => {
+  bindChapterEditor(form, updateFormView);
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitGoalForm(goal, requiredBook && !goal ? requiredBook.id : null);
+  });
+  updateFormView();
+}
+
+/* ----- 챕터 편집기 (목표 입력 · 필독서 관리 공용, 한 화면에 하나) ----- */
+
+function renderChapterEditorHtml(lastPage) {
+  return `
+    <div class="field">
+      <span class="field-label">챕터 목록</span>
+      <table class="chapter-table">
+        <thead>
+          <tr><th class="col-no">#</th><th>챕터 이름</th><th class="col-page">시작 페이지</th><th class="col-page">끝 페이지</th><th class="col-del"></th></tr>
+        </thead>
+        <tbody id="chapter-rows"></tbody>
+      </table>
+      <button type="button" class="btn btn-small" id="add-chapter">+ 챕터 추가</button>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label class="field-label" for="f-last-page">마지막 페이지</label>
+        <input id="f-last-page" type="number" min="1" class="input input-num"
+          value="${Number.isFinite(Number(lastPage)) && lastPage !== '' && lastPage !== null ? Number(lastPage) : ''}">
+      </div>
+      <div class="field">
+        <span class="field-label">합계</span>
+        <span id="f-book-summary" class="field-value">-</span>
+      </div>
+    </div>`;
+}
+
+/** 챕터 행 채우기. locked면 읽기 전용 (필독서) */
+function fillChapterEditor(chapters, locked = false) {
+  const list = chapters && chapters.length ? chapters : [{ name: '', startPage: '' }];
+  list.forEach((ch) => addChapterRow({ name: ch.name, startPage: Number.isFinite(Number(ch.startPage)) && ch.startPage !== '' ? ch.startPage : '' }));
+  if (locked) {
+    document.querySelectorAll('#chapter-rows input, #f-last-page').forEach((el) => { el.readOnly = true; });
+    document.getElementById('add-chapter').hidden = true;
+    document.querySelectorAll('.ch-del').forEach((el) => { el.hidden = true; });
+  }
+}
+
+function bindChapterEditor(container, onChange) {
+  container.addEventListener('click', (e) => {
     if (e.target.id === 'add-chapter') {
       addChapterRow({ name: '', startPage: '' });
-      updateFormView();
-      const inputs = form.querySelectorAll('.ch-name');
+      onChange();
+      const inputs = container.querySelectorAll('.ch-name');
       inputs[inputs.length - 1].focus();
     }
     if (e.target.classList.contains('ch-del')) {
-      const rows = form.querySelectorAll('#chapter-rows tr');
+      const rows = container.querySelectorAll('#chapter-rows tr');
       if (rows.length > 1) e.target.closest('tr').remove();
-      updateFormView();
+      onChange();
     }
   });
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    submitGoalForm(goal);
+}
+
+function readChapterEditor() {
+  const rows = [...document.querySelectorAll('#chapter-rows tr')];
+  const last = document.getElementById('f-last-page').value;
+  return {
+    chapters: rows.map((tr) => ({
+      name: tr.querySelector('.ch-name').value,
+      startPage: tr.querySelector('.ch-start').value === '' ? NaN : Number(tr.querySelector('.ch-start').value),
+    })),
+    lastPage: last === '' ? NaN : Number(last),
+  };
+}
+
+/** 끝 페이지 자동 계산, 합계 표시 */
+function refreshChapterEditor() {
+  const { chapters, lastPage } = readChapterEditor();
+  const rows = [...document.querySelectorAll('#chapter-rows tr')];
+  rows.forEach((tr, i) => {
+    tr.querySelector('.ch-no').textContent = i + 1;
+    const nextStart = i < rows.length - 1 ? chapters[i + 1].startPage : lastPage + 1;
+    const start = chapters[i].startPage;
+    const end = nextStart - 1;
+    tr.querySelector('.ch-end').textContent = Number.isInteger(start) && Number.isInteger(end) && end >= start ? end : '-';
+    tr.querySelector('.ch-del').disabled = rows.length === 1;
   });
-  updateFormView();
+  const first = chapters[0] && chapters[0].startPage;
+  document.getElementById('f-book-summary').textContent =
+    Number.isInteger(first) && Number.isInteger(lastPage) && lastPage >= first
+      ? `${lastPage - first + 1}페이지 · ${chapters.length}개 챕터`
+      : '-';
 }
 
 function addChapterRow(ch) {
@@ -1552,17 +1801,12 @@ function getFormType() {
 /** 폼의 현재 값을 입력 객체로 모은다 */
 function collectFormInput() {
   const val = (id) => document.getElementById(id).value;
-  const rows = [...document.querySelectorAll('#chapter-rows tr')];
   return {
     type: getFormType(),
     title: val('f-title'),
     startDate: val('f-start'),
     dueDate: val('f-due'),
-    chapters: rows.map((tr) => ({
-      name: tr.querySelector('.ch-name').value,
-      startPage: tr.querySelector('.ch-start').value === '' ? NaN : Number(tr.querySelector('.ch-start').value),
-    })),
-    lastPage: val('f-last-page') === '' ? NaN : Number(val('f-last-page')),
+    ...readChapterEditor(),
     titles: parseLectureLines(val('f-lectures')),
     restWeekdays: [...document.querySelectorAll('input[name="rest-weekday"]:checked')].map((el) => Number(el.value)),
   };
@@ -1586,25 +1830,11 @@ function updateFormView() {
   }
   document.getElementById('f-days').textContent = daysText;
 
-  const rows = [...document.querySelectorAll('#chapter-rows tr')];
-  rows.forEach((tr, i) => {
-    tr.querySelector('.ch-no').textContent = i + 1;
-    const nextStart = i < rows.length - 1 ? input.chapters[i + 1].startPage : input.lastPage + 1;
-    const start = input.chapters[i].startPage;
-    const end = nextStart - 1;
-    tr.querySelector('.ch-end').textContent = Number.isInteger(start) && Number.isInteger(end) && end >= start ? end : '-';
-    tr.querySelector('.ch-del').disabled = rows.length === 1;
-  });
-
-  const first = input.chapters[0] && input.chapters[0].startPage;
-  document.getElementById('f-book-summary').textContent =
-    Number.isInteger(first) && Number.isInteger(input.lastPage) && input.lastPage >= first
-      ? `${input.lastPage - first + 1}페이지 · ${input.chapters.length}개 챕터`
-      : '-';
+  refreshChapterEditor();
   document.getElementById('f-lecture-count').textContent = `${input.titles.length}개 강의`;
 }
 
-function submitGoalForm(goal) {
+function submitGoalForm(goal, requiredBookId = null) {
   const input = collectFormInput();
   const errors = goal
     ? validateGoalEdit(goal, input)
@@ -1629,10 +1859,10 @@ function submitGoalForm(goal) {
     }
     navigate(`#/goal/${goal.id}`);
   } else {
-    const created = input.type === 'book' ? createBookGoal(input) : createLectureGoal(input);
+    const created = input.type === 'book' ? createBookGoal({ ...input, requiredBookId }) : createLectureGoal(input);
     appData.goals.push(created);
     commit();
-    navigate('#/');
+    navigate(requiredBookId ? `#/goal/${created.id}` : '#/');
   }
 }
 
@@ -1683,6 +1913,7 @@ function renderGoalDetail(root, goal) {
         </div>
       </header>
 
+      ${renderRequiredBookNotice(goal)}
       ${renderSummaryPanel(goal, s)}
       ${detailState.preview ? renderPreviewPanel(goal, basis) : renderPlanPanel(goal, basis)}
     </div>
@@ -1733,13 +1964,13 @@ function getCompareMessage(goal, s) {
   const u = (n) => formatAmount(n, s.basis);
   if (s.isComplete) return { tone: 'done', html: '모두 완료했습니다. 수고하셨어요!' };
   if (s.isOverdue) {
-    return { tone: 'ended', html: `마감일이 지났습니다. 남은 <b>${u(s.remaining)}</b>은 <b>마감일 변경</b>으로 다시 계획할 수 있어요.` };
+    return { tone: 'ended', html: `마감일이 지났습니다. 남은 <b>${u(s.remaining)}</b>${josa(u(s.remaining), '은', '는')} <b>마감일 변경</b>으로 다시 계획할 수 있어요.` };
   }
   if (s.notStarted) {
     return { tone: 'neutral', html: `${formatShortDate(goal.startDate)}에 시작합니다. 공부하는 날마다 <b>하루 ${u(s.dailyPlan)}</b>씩 하면 됩니다.` };
   }
   if (s.remainingStudyDays === 0) {
-    return { tone: 'behind', html: `마감일까지 공부하는 날이 남아 있지 않습니다. 남은 <b>${u(s.remaining)}</b>을 하려면 마감일을 변경해 주세요.` };
+    return { tone: 'behind', html: `마감일까지 공부하는 날이 남아 있지 않습니다. 남은 <b>${u(s.remaining)}</b>${josa(u(s.remaining), '을', '를')} 하려면 마감일을 변경해 주세요.` };
   }
   const rest = `남은 공부일 ${s.remainingStudyDays}일 동안 <b>하루 ${u(s.needPerDay)}</b>씩`;
   if (s.diff < 0) return { tone: 'behind', html: `계획보다 <b>${u(-s.diff)} 밀렸습니다.</b> ${rest} 하면 기한을 맞출 수 있어요.` };
@@ -1747,6 +1978,17 @@ function getCompareMessage(goal, s) {
   if (s.todayRow && s.todayRow.isRestDay) return { tone: 'ontrack', html: '오늘은 쉬는 날이에요. 계획대로 진행 중입니다.' };
   if (s.done >= s.target) return { tone: 'ontrack', html: '오늘 분량을 마쳤어요. 계획대로 진행 중입니다.' };
   return { tone: 'ontrack', html: `계획대로 진행 중이에요. 오늘 <b>${u(s.target - s.done)}</b> 남았어요.` };
+}
+
+/** 관리자가 필독서 내용을 바꿨으면 반영 안내 */
+function renderRequiredBookNotice(goal) {
+  const book = goal.requiredBookId ? requiredBooks.find((b) => b.id === goal.requiredBookId) : null;
+  if (!book || !isRequiredBookChanged(goal, book) || detailState.preview) return '';
+  return `
+    <div class="notice notice-row">
+      <span>관리자가 이 필독서의 책 정보(제목·챕터·페이지)를 바꿨습니다. 내 계획에 반영하려면 미리보기를 확인하세요.</span>
+      <button type="button" class="btn btn-small" data-action="sync-required">반영 미리보기</button>
+    </div>`;
 }
 
 function renderSummaryPanel(goal, s) {
@@ -1910,7 +2152,7 @@ function renderPreviewBody(goal, clone, basis, preview, today) {
   const lines = [];
   if (preview.kind === 'edit') lines.push(`바뀌는 항목: ${describeEditChanges(goal, preview.input).join(', ')}`);
   if (preview.kind === 'due') lines.push(`마감일 ${goal.dueDate} → <b>${preview.dueDate}</b>`);
-  lines.push(`남은 <b>${newPlan.to - newPlan.from}${unit}</b>을 ${formatShortDate(newPlan.startDate)}부터 ${formatShortDate(newPlan.endDate)}까지 공부하는 날 <b>${studyDays}일</b>에 나눕니다.`);
+  lines.push(`남은 <b>${newPlan.to - newPlan.from}${unit}</b>${josa(unit, '을', '를')} ${formatShortDate(newPlan.startDate)}부터 ${formatShortDate(newPlan.endDate)}까지 공부하는 날 <b>${studyDays}일</b>에 나눕니다.`);
   lines.push(`하루 <b>${lo === hi ? lo : `${lo}~${hi}`}${unit}</b> <span class="muted">(지금 계획: 하루 평균 ${oldAvg}${unit})</span>`);
   lines.push(rebuilt
     ? '<span class="muted">아직 시작 전이라 원래 계획을 새로 만듭니다.</span>'
@@ -2160,6 +2402,12 @@ function bindDetailEvents(container, goal) {
       return;
     }
     const action = e.target.closest('[data-action]')?.dataset.action;
+    if (action === 'sync-required') {
+      const book = requiredBooks.find((b) => b.id === goal.requiredBookId);
+      openPreview(goal, { kind: 'edit', input: inputFromRequiredBook(goal, book) });
+      rerenderDetail(goal);
+      return;
+    }
     if (action === 'replan') {
       openPreview(goal, { kind: 'replan' });
       rerenderDetail(goal);
@@ -2233,6 +2481,324 @@ function bindDetailEvents(container, goal) {
 }
 
 /* =========================================================================
+ * 11. 화면 — 관리자 (진도 현황 · 사역자 필독서 · 회원 관리)
+ *     서버에서도 관리자만 허용되므로, 화면은 편의를 위한 것이다.
+ * ========================================================================= */
+
+const adminState = {
+  loaded: false,
+  loading: false,
+  error: null,
+  profiles: [],
+  goals: [], // [{ userId, goal }] 모든 사용자의 필독서 목표
+  editingBookId: null, // null | 'new' | 책 id
+};
+
+const ADMIN_TABS = [
+  ['progress', '진도 현황'],
+  ['books', '사역자 필독서'],
+  ['members', '회원 관리'],
+];
+
+async function loadAdminData() {
+  adminState.loading = true;
+  adminState.error = null;
+  try {
+    const [profiles, books, goals] = await Promise.all([
+      adminLoadProfiles(), loadRequiredBooks(), adminLoadRequiredGoals(),
+    ]);
+    adminState.profiles = profiles;
+    adminState.goals = goals.filter((x) => checkGoalShape(x.goal, 0) === null);
+    requiredBooks = books;
+    adminState.loaded = true;
+  } catch (err) {
+    console.error('[admin] 불러오기 실패:', err);
+    adminState.error = err.message || String(err);
+  }
+  adminState.loading = false;
+  if (parseRoute().view === 'admin') render();
+}
+
+function timestampToDate(iso) {
+  return iso ? formatDate(new Date(iso)) : '-';
+}
+
+function profileName(p) {
+  return p.name || p.email;
+}
+
+function renderAdmin(root, tab) {
+  if (!ADMIN_TABS.some(([t]) => t === tab)) tab = 'progress';
+  let body;
+  if (adminState.error) {
+    body = `<div class="errors">불러오지 못했습니다: ${escapeHtml(adminState.error)}</div>`;
+  } else if (!adminState.loaded) {
+    body = '<div class="empty">불러오는 중…</div>';
+    if (!adminState.loading) loadAdminData();
+  } else if (tab === 'books') {
+    body = renderAdminBooks();
+  } else if (tab === 'members') {
+    body = renderAdminMembers();
+  } else {
+    body = renderAdminProgress();
+  }
+
+  root.innerHTML = `
+    <div id="admin">
+      <header class="page-header">
+        <div>
+          <a class="back-link" href="#/">← 내 계획</a>
+          <h1>관리자</h1>
+        </div>
+        <div class="header-actions">
+          <button type="button" class="btn" data-action="admin-refresh" ${adminState.loading ? 'disabled' : ''}>새로고침</button>
+        </div>
+      </header>
+      <nav class="tabs admin-tabs" aria-label="관리자 메뉴">
+        ${ADMIN_TABS.map(([t, label]) => `<a class="tab ${t === tab ? 'is-active' : ''}" href="#/admin/${t}">${label}</a>`).join('')}
+      </nav>
+      ${body}
+    </div>`;
+  bindAdminEvents(root.querySelector('#admin'), tab);
+  if (tab === 'books' && adminState.editingBookId && adminState.loaded) {
+    const book = requiredBooks.find((b) => b.id === adminState.editingBookId);
+    fillChapterEditor(book ? book.chapters : []);
+    refreshChapterEditor();
+  }
+}
+
+/* ----- 진도 현황 ----- */
+
+function renderAdminProgress() {
+  const team = adminState.profiles.filter((p) => p.in_team);
+  if (!requiredBooks.length) return '<div class="empty">아직 필독서가 없습니다. <a href="#/admin/books">사역자 필독서</a>에서 추가하세요.</div>';
+  if (!team.length) return '<div class="empty">우리 팀으로 지정된 사람이 없습니다. <a href="#/admin/members">회원 관리</a>에서 지정하세요.</div>';
+  const today = todayStr();
+
+  return requiredBooks.map((book) => {
+    const rows = team.map((p) => {
+      const entry = adminState.goals.find((x) => x.userId === p.user_id && x.goal.requiredBookId === book.id);
+      return { p, goal: entry ? entry.goal : null, s: entry ? getGoalSummary(entry.goal, 'page', today) : null };
+    });
+    const planned = rows.filter((r) => r.goal).length;
+    const behind = rows.filter((r) => r.s && r.s.isActive && !r.s.notStarted && r.s.diff < 0).length;
+    // 밀린 사람 → 진행 중 → 계획 없음 순
+    const order = (r) => (!r.s ? 3 : r.s.diff < 0 && r.s.isActive ? 0 : r.s.isComplete ? 2 : 1);
+    rows.sort((a, b) => order(a) - order(b) || profileName(a.p).localeCompare(profileName(b.p)));
+
+    return `
+      <section class="panel admin-book">
+        <div class="admin-book-head">
+          <h2 class="section-title">${escapeHtml(book.title)}</h2>
+          <span class="muted">계획 세운 사람 ${planned}/${team.length}명${behind ? ` · <b class="text-danger">밀림 ${behind}명</b>` : ''}</span>
+        </div>
+        <table class="admin-table">
+          <thead>
+            <tr><th>이름</th><th>기간</th><th class="num">오늘까지 권장</th><th class="num">실제 완료</th><th class="num">전체</th><th class="col-bar">진도</th><th>상태</th></tr>
+          </thead>
+          <tbody>
+            ${rows.map(({ p, goal, s }) => {
+              if (!goal) {
+                return `<tr class="is-empty"><td>${escapeHtml(profileName(p))}</td><td colspan="5" class="muted">아직 계획을 세우지 않았습니다</td><td><span class="badge badge-waiting">계획 없음</span></td></tr>`;
+              }
+              const targetPct = s.total ? Math.min(100, (s.target / s.total) * 100) : 0;
+              const donePct = s.total ? Math.min(100, (s.done / s.total) * 100) : 0;
+              return `
+                <tr>
+                  <td><strong>${escapeHtml(profileName(p))}</strong></td>
+                  <td class="muted">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
+                  <td class="num">${s.target}페이지</td>
+                  <td class="num">${s.done}페이지</td>
+                  <td class="num">${s.total}페이지</td>
+                  <td class="col-bar">
+                    <div class="mini-bar"><div class="compare-fill" style="width:${donePct}%"></div><div class="compare-marker" style="left:${targetPct}%"></div></div>
+                    <span class="mini-pct">${s.percent}%</span>
+                  </td>
+                  <td>${renderStatusBadge(s)}</td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </section>`;
+  }).join('') + '<p class="muted admin-legend">진도 막대: 초록 = 실제 진도, 검정 선 = 오늘까지 권장 · 각자 정한 기간 기준입니다.</p>';
+}
+
+/* ----- 사역자 필독서 ----- */
+
+function renderAdminBooks() {
+  const team = adminState.profiles.filter((p) => p.in_team);
+  const editing = adminState.editingBookId;
+  const book = editing && editing !== 'new' ? requiredBooks.find((b) => b.id === editing) : null;
+
+  const editor = editing ? `
+    <form id="book-form" class="panel admin-editor" novalidate>
+      <h2 class="section-title">${book ? '필독서 수정' : '필독서 추가'}</h2>
+      ${book ? `<p class="notice">저장하면 이미 계획을 세운 팀원에게 "내용 변경됨"이 표시되고,
+        각자 미리보기를 확인한 뒤 자기 계획에 반영합니다.</p>` : ''}
+      <div class="field">
+        <label class="field-label" for="f-title">책 제목</label>
+        <input id="f-title" type="text" class="input input-wide" value="${escapeHtml(book ? book.title : '')}">
+      </div>
+      ${renderChapterEditorHtml(book ? book.lastPage : '')}
+      <div id="form-errors" class="errors" hidden></div>
+      <div class="form-actions">
+        <button type="button" class="btn" data-action="book-cancel">취소</button>
+        <button type="submit" class="btn btn-primary">저장</button>
+      </div>
+    </form>` : '';
+
+  const list = requiredBooks.length ? `
+    <table class="admin-table panel-table">
+      <thead><tr><th>책 제목</th><th class="num">챕터</th><th class="num">페이지</th><th class="num">계획 세운 팀원</th><th></th></tr></thead>
+      <tbody>
+        ${requiredBooks.map((b) => {
+          const planned = team.filter((p) => adminState.goals.some((x) => x.userId === p.user_id && x.goal.requiredBookId === b.id)).length;
+          return `
+            <tr>
+              <td><strong>${escapeHtml(b.title)}</strong></td>
+              <td class="num">${b.chapters.length}개</td>
+              <td class="num">${b.lastPage - b.chapters[0].startPage + 1}페이지</td>
+              <td class="num">${planned}/${team.length}명</td>
+              <td class="row-actions">
+                <button type="button" class="btn btn-small" data-action="book-edit" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>수정</button>
+                <button type="button" class="btn btn-small btn-danger" data-action="book-delete" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>삭제</button>
+              </td>
+            </tr>`;
+        }).join('')}
+      </tbody>
+    </table>` : '<div class="empty">아직 필독서가 없습니다.</div>';
+
+  return `
+    <div class="admin-toolbar">
+      <p class="muted">여기서 정한 책 정보(제목·챕터·페이지)가 우리 팀 모두에게 공유됩니다. 기간은 각자 정합니다.</p>
+      <button type="button" class="btn btn-primary" data-action="book-new" ${editing ? 'disabled' : ''}>+ 필독서 추가</button>
+    </div>
+    ${editor}
+    ${list}`;
+}
+
+async function submitBookForm(form) {
+  const input = { title: document.getElementById('f-title').value, ...readChapterEditor() };
+  const errors = [];
+  if (!input.title.trim()) errors.push('책 제목을 입력하세요.');
+  errors.push(...validateBookStructure(input));
+  const box = form.querySelector('#form-errors');
+  if (errors.length) {
+    box.innerHTML = `<strong>저장할 수 없습니다</strong><ul>${errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`;
+    box.hidden = false;
+    return;
+  }
+  const id = adminState.editingBookId === 'new' ? null : adminState.editingBookId;
+  form.querySelector('button[type="submit"]').disabled = true;
+  try {
+    const saved = await adminSaveRequiredBook({ ...input, id });
+    const idx = requiredBooks.findIndex((b) => b.id === saved.id);
+    if (idx >= 0) requiredBooks[idx] = saved;
+    else requiredBooks.push(saved);
+    adminState.editingBookId = null;
+    render();
+  } catch (err) {
+    box.innerHTML = `<strong>저장하지 못했습니다</strong><ul><li>${escapeHtml(err.message || String(err))}</li></ul>`;
+    box.hidden = false;
+    form.querySelector('button[type="submit"]').disabled = false;
+  }
+}
+
+/* ----- 회원 관리 ----- */
+
+function renderAdminMembers() {
+  const profiles = adminState.profiles;
+  if (!profiles.length) return '<div class="empty">아직 로그인한 사람이 없습니다.</div>';
+  const teamCount = profiles.filter((p) => p.in_team).length;
+  return `
+    <div class="admin-toolbar">
+      <p class="muted">앱에 한 번이라도 로그인한 사람들입니다. <b>우리 팀</b>으로 지정하면 사역자 필독서가 보입니다. (우리 팀 ${teamCount}명)</p>
+    </div>
+    <table class="admin-table panel-table">
+      <thead><tr><th>이름</th><th>이메일</th><th>처음 로그인</th><th>마지막 접속</th><th class="center">우리 팀</th></tr></thead>
+      <tbody>
+        ${profiles.map((p) => `
+          <tr class="${p.in_team ? 'is-team' : ''}">
+            <td><strong>${escapeHtml(p.name || '-')}</strong>${p.user_id === currentUser.id ? ' <span class="muted">(나)</span>' : ''}</td>
+            <td>${escapeHtml(p.email)}</td>
+            <td class="muted">${timestampToDate(p.created_at)}</td>
+            <td class="muted">${timestampToDate(p.last_seen_at)}</td>
+            <td class="center">
+              <label class="switch">
+                <input type="checkbox" data-action="team-toggle" data-id="${escapeHtml(p.user_id)}" ${p.in_team ? 'checked' : ''}
+                  aria-label="${escapeHtml(profileName(p))} 우리 팀 지정">
+                <span></span>
+              </label>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+function bindAdminEvents(container, tab) {
+  container.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    if (action === 'admin-refresh') {
+      adminState.loaded = false;
+      adminState.editingBookId = null;
+      render();
+    } else if (action === 'book-new') {
+      adminState.editingBookId = 'new';
+      render();
+    } else if (action === 'book-edit') {
+      adminState.editingBookId = btn.dataset.id;
+      render();
+    } else if (action === 'book-cancel') {
+      adminState.editingBookId = null;
+      render();
+    } else if (action === 'book-delete') {
+      const book = requiredBooks.find((b) => b.id === btn.dataset.id);
+      if (!confirm(`'${book.title}' 필독서를 삭제할까요?\n팀원들이 이미 세운 계획은 지워지지 않고 일반 목표로 남습니다.`)) return;
+      btn.disabled = true;
+      try {
+        await adminDeleteRequiredBook(book.id);
+        requiredBooks = requiredBooks.filter((b) => b.id !== book.id);
+        render();
+      } catch (err) {
+        alert(`삭제하지 못했습니다: ${err.message}`);
+        btn.disabled = false;
+      }
+    }
+  });
+
+  container.addEventListener('change', async (e) => {
+    if (e.target.dataset.action !== 'team-toggle') return;
+    const el = e.target;
+    const profile = adminState.profiles.find((p) => p.user_id === el.dataset.id);
+    el.disabled = true;
+    try {
+      await adminSetTeam(profile.user_id, el.checked);
+      profile.in_team = el.checked;
+      if (profile.user_id === currentUser.id) account.inTeam = el.checked;
+      render();
+    } catch (err) {
+      alert(`변경하지 못했습니다: ${err.message}`);
+      el.checked = !el.checked;
+      el.disabled = false;
+    }
+  });
+
+  if (tab === 'books') {
+    const form = container.querySelector('#book-form');
+    if (form) {
+      form.addEventListener('input', refreshChapterEditor);
+      bindChapterEditor(form, refreshChapterEditor);
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        submitBookForm(form);
+      });
+    }
+  }
+}
+
+/* =========================================================================
  * 시작
  * ========================================================================= */
 
@@ -2264,6 +2830,9 @@ async function boot() {
       currentUser = null;
       appData = null;
       syncedSnapshot = new Map();
+      account = { isAdmin: false, inTeam: false };
+      requiredBooks = [];
+      adminState.loaded = false;
       renderTopbar();
       renderLogin(root);
     }
