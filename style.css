@@ -818,3 +818,20 @@ body.modal-open { overflow: hidden; }
 .bible-range { display: flex; align-items: center; gap: 10px; }
 .bible-select { width: 170px; }
 .progress-form .bible-select { width: 160px; }
+
+/* ===== 챕터 순서 바꾸기 ===== */
+.chapter-table .col-drag { width: 28px; padding-left: 0; padding-right: 0; text-align: center; }
+.drag-handle {
+  display: inline-block;
+  padding: 4px 2px;
+  font-size: 18px;
+  line-height: 1;
+  color: #aab0b8;
+  cursor: grab;
+  user-select: none;
+}
+.drag-handle:hover { color: var(--text); }
+.chapter-table tr.is-dragging { opacity: 0.4; }
+.chapter-table tr.is-dragging td { background: var(--primary-soft); }
+.chapter-table .col-del { width: 76px; white-space: nowrap; }
+.btn-icon.ch-insert:hover:not(:disabled) { background: var(--primary-soft); color: var(--primary); }

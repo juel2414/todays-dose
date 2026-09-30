@@ -1986,7 +1986,7 @@ function renderChapterEditorHtml(lastPage) {
       <span class="field-label">챕터 목록</span>
       <table class="chapter-table">
         <thead>
-          <tr><th class="col-no">#</th><th>챕터 이름</th><th class="col-page">시작 페이지</th><th class="col-page">끝 페이지</th><th class="col-del"></th></tr>
+          <tr><th class="col-drag"></th><th class="col-no">#</th><th>챕터 이름</th><th class="col-page">시작 페이지</th><th class="col-page">끝 페이지</th><th class="col-del"></th></tr>
         </thead>
         <tbody id="chapter-rows"></tbody>
       </table>
@@ -2012,7 +2012,8 @@ function fillChapterEditor(chapters, locked = false) {
   if (locked) {
     document.querySelectorAll('#chapter-rows input, #f-last-page').forEach((el) => { el.readOnly = true; });
     document.getElementById('add-chapter').hidden = true;
-    document.querySelectorAll('.ch-del').forEach((el) => { el.hidden = true; });
+    document.querySelectorAll('.ch-del, .ch-insert, .drag-handle').forEach((el) => { el.hidden = true; });
+    document.getElementById('chapter-rows').classList.add('is-locked');
   }
 }
 
@@ -2024,11 +2025,56 @@ function bindChapterEditor(container, onChange) {
       const inputs = container.querySelectorAll('.ch-name');
       inputs[inputs.length - 1].focus();
     }
+    if (e.target.classList.contains('ch-insert')) {
+      const tr = addChapterRow({ name: '', startPage: '' }, e.target.closest('tr'));
+      onChange();
+      tr.querySelector('.ch-name').focus();
+    }
     if (e.target.classList.contains('ch-del')) {
       const rows = container.querySelectorAll('#chapter-rows tr');
       if (rows.length > 1) e.target.closest('tr').remove();
       onChange();
     }
+  });
+  bindChapterDrag(container.querySelector('#chapter-rows'), onChange);
+}
+
+/** 손잡이(⠿)를 잡고 끌어서 챕터 순서 바꾸기 */
+function bindChapterDrag(tbody, onChange) {
+  if (!tbody || tbody.classList.contains('is-locked')) return;
+  let dragging = null;
+
+  // 손잡이를 누를 때만 행을 끌 수 있게 (입력칸 글자 선택과 충돌 방지)
+  tbody.addEventListener('mousedown', (e) => {
+    const handle = e.target.closest('.drag-handle');
+    if (handle) handle.closest('tr').draggable = true;
+  });
+  tbody.addEventListener('mouseup', () => {
+    tbody.querySelectorAll('tr[draggable="true"]').forEach((tr) => { tr.draggable = false; });
+  });
+  tbody.addEventListener('dragstart', (e) => {
+    dragging = e.target.closest('tr');
+    if (!dragging) return;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', '');
+    dragging.classList.add('is-dragging');
+  });
+  tbody.addEventListener('dragover', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    const over = e.target.closest('tr');
+    if (!over || over === dragging) return;
+    const rect = over.getBoundingClientRect();
+    const after = e.clientY > rect.top + rect.height / 2;
+    tbody.insertBefore(dragging, after ? over.nextSibling : over);
+  });
+  tbody.addEventListener('drop', (e) => e.preventDefault());
+  tbody.addEventListener('dragend', () => {
+    if (!dragging) return;
+    dragging.classList.remove('is-dragging');
+    dragging.draggable = false;
+    dragging = null;
+    onChange();
   });
 }
 
@@ -2063,16 +2109,24 @@ function refreshChapterEditor() {
       : '-';
 }
 
-function addChapterRow(ch) {
+/** 챕터 행 만들기. before가 있으면 그 행 위에 넣는다 */
+function addChapterRow(ch, before = null) {
   const tr = document.createElement('tr');
   tr.innerHTML = `
+    <td class="col-drag"><span class="drag-handle" title="끌어서 순서 바꾸기" aria-hidden="true">⠿</span></td>
     <td class="col-no ch-no"></td>
     <td><input type="text" class="input ch-name" value="${escapeHtml(ch.name)}" placeholder="예: 1장 도입"></td>
     <td class="col-page"><input type="number" min="1" class="input input-num ch-start" value="${escapeHtml(ch.startPage)}"></td>
     <td class="col-page ch-end muted">-</td>
-    <td class="col-del"><button type="button" class="btn-icon ch-del" title="행 삭제">×</button></td>
+    <td class="col-del">
+      <button type="button" class="btn-icon ch-insert" title="이 위에 챕터 추가">+</button>
+      <button type="button" class="btn-icon ch-del" title="행 삭제">×</button>
+    </td>
   `;
-  document.getElementById('chapter-rows').appendChild(tr);
+  const tbody = document.getElementById('chapter-rows');
+  if (before) tbody.insertBefore(tr, before);
+  else tbody.appendChild(tr);
+  return tr;
 }
 
 /** 성경 통독: 이름이 비어 있거나 자동으로 채운 이름이면 범위에 맞춰 이름을 바꿔 준다 */
