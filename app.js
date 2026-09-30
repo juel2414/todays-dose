@@ -281,6 +281,26 @@ function buildSchedule(plan) {
   return rows;
 }
 
+/**
+ * 하루 perDay씩(여유 있는 날은 배수만큼) 하면 total을 끝내는 날.
+ * 쉬는 요일·쉬는 날은 건너뛴다. 10년 안에 못 끝나면 null.
+ */
+function dueDateForPace(startDate, total, perDay, restWeekdays = [], restDates = [], extraDates = []) {
+  if (!isValidDateStr(startDate) || !(total > 0) || !(perDay > 0)) return null;
+  const rest = restDateList(restDates);
+  const weights = Object.fromEntries((extraDates || []).map((x) => [x.date, x.weight]));
+  let done = 0;
+  let date = startDate;
+  for (let i = 0; i < 3660; i++) {
+    if (!isRestDate(date, restWeekdays, rest)) {
+      done += perDay * (weights[date] || 1);
+      if (done >= total - 1e-9) return date;
+    }
+    date = addDays(date, 1);
+  }
+  return null;
+}
+
 /** 특정 날짜의 누적 목표 (계획 시작 전이면 from, 마감 후면 to) */
 function cumulativeOnDate(plan, date) {
   if (diffDays(plan.startDate, date) < 0) return plan.from;
@@ -1996,6 +2016,12 @@ function runPlanSelfTests() {
   check('이미 읽은 곳: 범위 밖 차단', validateBookInput({ title: 'x', startDate: '2026-10-01', dueDate: '2026-10-02', lastPage: 110,
     chapters: [{ name: '1장', startPage: 11 }], readPage: 200 }).length > 0);
 
+  // 하루 분량으로 마감일 계산
+  check('하루 분량: 100페이지를 하루 30씩 → 4일째', dueDateForPace('2026-10-01', 100, 30) === '2026-10-04');
+  check('하루 분량: 쉬는 요일 건너뜀 (토·일)', dueDateForPace('2026-10-01', 100, 30, [0, 6]) === '2026-10-06');
+  check('하루 분량: 여유 있는 날 2배', dueDateForPace('2026-10-01', 100, 30, [], [], [{ date: '2026-10-02', weight: 2 }]) === '2026-10-03');
+  check('하루 분량: 0이면 계산 안 함', dueDateForPace('2026-10-01', 100, 0) === null);
+
   // 입력 검증
   check(
     '검증: 오름차순 아님 차단',
@@ -2456,14 +2482,19 @@ function renderTodayAmount(goal, s) {
   if (row.amount === 0) return `<span class="today-main">${t('휴식(분량 없음)')}</span>`;
 
   const doneToday = s.done >= row.cumulative;
+  // 오늘 분량 중 일부를 이미 읽었으면(전날 더 읽었거나 오늘 조금 읽음) 남은 부분만 보여준다
+  const partial = !doneToday && s.done > row.prevCumulative;
+  const from = partial ? s.done : row.prevCumulative;
   let sub = '';
   if (s.basis === 'page') {
-    sub = describeChaptersForPages(goal.book, unitsToPage(goal.book, row.prevCumulative + 1),
+    sub = describeChaptersForPages(goal.book, unitsToPage(goal.book, from + 1),
       unitsToPage(goal.book, row.cumulative));
   }
   return `
-    <span class="today-main">${escapeHtml(describeUnitsRange(goal, s.basis, row.prevCumulative, row.cumulative))}
-      <span class="muted">(${formatAmount(row.amount, s.basis)})</span>
+    <span class="today-main">${escapeHtml(describeUnitsRange(goal, s.basis, from, row.cumulative))}
+      <span class="muted">(${partial
+        ? t('{left} 남음 · 오늘 분량 {amount}', { left: formatAmount(row.cumulative - from, s.basis), amount: formatAmount(row.amount, s.basis) })
+        : formatAmount(row.amount, s.basis)})</span>
       ${doneToday ? `<span class="today-check">✓ ${t('완료')}</span>` : ''}
     </span>
     ${sub ? `<span class="today-sub">${escapeHtml(sub)}</span>` : ''}
@@ -2552,7 +2583,20 @@ function renderGoalForm(root, goal, bookId = null) {
           <span id="f-days" class="field-value">-</span>
         </div>
       </div>
-      <div class="quick-due">
+      ${isEdit ? '' : `<div class="plan-mode">
+        <div class="segmented segmented-small" role="radiogroup" aria-label="${t('기간 정하는 방법')}">
+          <label><input type="radio" name="plan-mode" value="due" checked> ${t('마감일로 정하기')}</label>
+          <label><input type="radio" name="plan-mode" value="pace"> ${t('하루 분량으로 정하기')}</label>
+        </div>
+        <div class="pace-row" id="pace-row" hidden>
+          <span>${t('하루')}</span>
+          <input id="f-pace" type="number" min="1" class="input input-num" placeholder="20">
+          <span id="f-pace-unit"></span>
+          <span>${t('씩 하면')}</span>
+          <strong id="f-pace-result" class="pace-result">-</strong>
+        </div>
+      </div>`}
+      <div class="quick-due" id="quick-due">
         <span class="field-hint">${t('마감일 빠르게 정하기 (시작일부터)')}</span>
         ${[1, 2, 4, 6, 8].map((w) => `<button type="button" class="btn btn-small" data-weeks="${w}"
           title="${t('시작일부터 {w}주 뒤를 마감일로 정합니다', { w })}">${t('{w}주 동안', { w })}</button>`).join('')}
@@ -2656,6 +2700,10 @@ function renderGoalForm(root, goal, bookId = null) {
   form.addEventListener('change', (e) => {
     if (e.target.name === 'type' || e.target.classList.contains('bible-select')) {
       syncBibleAutoTitle(form);
+      updateFormView();
+    }
+    if (e.target.name === 'plan-mode') {
+      if (e.target.value === 'pace') form.querySelector('#f-pace').focus();
       updateFormView();
     }
   });
@@ -3316,6 +3364,33 @@ function updateFormView() {
     ? t('{books}권 · {chapters}장', { books: input.bibleEnd - input.bibleStart + 1, chapters: bibleChapters })
     : t('시작 권이 끝 권보다 뒤에 있습니다');
 
+  // 하루 분량으로 정하기: 하루 분량 → 마감일 자동 계산
+  const paceMode = document.querySelector('input[name="plan-mode"]:checked')?.value === 'pace';
+  const paceRow = document.getElementById('pace-row');
+  if (paceRow) paceRow.hidden = !paceMode;
+  document.getElementById('quick-due').hidden = paceMode;
+  const dueEl = document.getElementById('f-due');
+  dueEl.readOnly = paceMode;
+  if (paceRow) document.getElementById('f-pace-unit').textContent = getUnitLabel(isBook ? 'page' : isBible ? 'bible' : 'lecture', 2);
+  if (paceMode) {
+    const firstPage = input.chapters[0] && input.chapters[0].startPage;
+    const readFrom = Number.isInteger(input.readPage) ? input.readPage : (Number.isInteger(firstPage) ? firstPage - 1 : NaN);
+    const remaining = isBook
+      ? (Number.isInteger(input.lastPage) && Number.isInteger(readFrom) ? input.lastPage - readFrom : 0)
+      : isBible ? bibleChapters : input.titles.length;
+    const perDay = Number(document.getElementById('f-pace').value);
+    const due = dueDateForPace(input.startDate, remaining, perDay, input.restWeekdays, input.restDates, input.extraDates);
+    const resultEl = document.getElementById('f-pace-result');
+    if (!(perDay > 0)) resultEl.textContent = t('하루 분량을 입력하세요');
+    else if (!(remaining > 0)) resultEl.textContent = isBook ? t('챕터와 마지막 페이지를 먼저 입력하세요') : t('목록을 먼저 입력하세요');
+    else if (!due) resultEl.textContent = t('공부하는 날이 없어 계산할 수 없어요');
+    else {
+      dueEl.value = due;
+      input.dueDate = due;
+      resultEl.textContent = t('{date} ({wd})에 끝나요', { date: due, wd: weekdayLabel(due) });
+    }
+  }
+
   const days = isValidDateStr(input.startDate) && isValidDateStr(input.dueDate)
     ? countDaysInclusive(input.startDate, input.dueDate) : null;
   let daysText = '-';
@@ -3754,6 +3829,14 @@ function renderPreviewPanel(goal, basis) {
           <label class="field-label" for="preview-due">${t('새 마감일')}</label>
           <input id="preview-due" type="date" class="input" value="${escapeHtml(preview.dueDate)}" min="${today}">
           <span class="muted">${t('현재 마감일 {date}', { date: goal.dueDate })}</span>
+        </div>
+        <div class="due-picker pace-row">
+          <span class="field-label">${t('또는 하루 분량으로')}</span>
+          <span>${t('오늘부터 하루')}</span>
+          <input id="preview-pace" type="number" min="1" class="input input-num" placeholder="20">
+          <span>${escapeHtml(getUnitLabel(basis, 2))}</span>
+          <span>${t('씩 하면')}</span>
+          <strong id="preview-pace-result" class="pace-result">-</strong>
         </div>` : ''}
 
       <div id="preview-body">${body}</div>
@@ -4240,6 +4323,11 @@ function bindDetailEvents(container, goal) {
     });
   }
 
+  // 마감일 변경 미리보기의 '하루 분량으로': 입력할 때마다 바로 계산
+  container.addEventListener('input', (e) => {
+    if (e.target.id === 'preview-pace') e.target.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+
   // 방식 2: 계획표 체크박스 (+ 마감일 변경 미리보기의 날짜 선택)
   container.addEventListener('change', (e) => {
     if (e.target.classList.contains('adjust-input') && detailState.adjust) {
@@ -4250,6 +4338,23 @@ function bindDetailEvents(container, goal) {
       const inputs = [...document.querySelectorAll('.adjust-input')];
       const idx = inputs.findIndex((el) => el.dataset.date === date);
       if (idx >= 0) inputs[idx].focus();
+      return;
+    }
+    if (e.target.id === 'preview-pace') {
+      const basis = detailState.basis;
+      const perDay = Number(e.target.value);
+      const today = todayStr();
+      const from = diffDays(today, goal.startDate) > 0 ? goal.startDate : today;
+      const remaining = getTotalUnits(goal, basis) - getDoneUnits(goal, basis);
+      const due = dueDateForPace(from, remaining, perDay, getRestWeekdays(goal), getRestDates(goal), getExtraDates(goal));
+      const resultEl = container.querySelector('#preview-pace-result');
+      if (!(perDay > 0)) { resultEl.textContent = '-'; return; }
+      if (!(remaining > 0)) { resultEl.textContent = t('이미 다 끝냈어요'); return; }
+      if (!due) { resultEl.textContent = t('공부하는 날이 없어 계산할 수 없어요'); return; }
+      resultEl.textContent = t('{date} ({wd})에 끝나요', { date: due, wd: weekdayLabel(due) });
+      const dueInput = container.querySelector('#preview-due');
+      dueInput.value = due;
+      dueInput.dispatchEvent(new Event('change', { bubbles: true }));
       return;
     }
     if (e.target.id === 'preview-due') {
@@ -5526,6 +5631,20 @@ const EN = {
   '마지막으로 읽은 페이지는 {a}~{b} 사이로 입력하세요. 처음부터 읽을 거면 비워 두세요.': 'Enter a last page read between {a} and {b}, or leave it blank to start from the beginning.',
   '사진을 이 상자에 끌어다 놓아도 돼요.': 'You can also drag photos onto this box.',
   '이미지 파일(JPG·PNG 등)을 끌어다 놓아 주세요.': 'Drop image files (JPG, PNG, etc.).',
+  '기간 정하는 방법': 'How to set the schedule',
+  '마감일로 정하기': 'By due date',
+  '하루 분량으로 정하기': 'By daily amount',
+  '하루': 'Do',
+  '씩 하면': 'a day →',
+  '하루 분량을 입력하세요': 'Enter a daily amount',
+  '챕터와 마지막 페이지를 먼저 입력하세요': 'Enter the chapters and last page first',
+  '목록을 먼저 입력하세요': 'Enter the list first',
+  '공부하는 날이 없어 계산할 수 없어요': 'No study days to calculate with',
+  '{date} ({wd})에 끝나요': "you'll finish on {date} ({wd})",
+  '또는 하루 분량으로': 'Or by daily amount',
+  '오늘부터 하루': 'From today, do',
+  '이미 다 끝냈어요': 'Already finished',
+  '{left} 남음 · 오늘 분량 {amount}': '{left} left · today {amount}',
   '오늘분량': "Today's Dose",
   '언어': 'Language',
   '저장 중…': 'Saving…',
