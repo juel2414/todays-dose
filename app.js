@@ -2277,6 +2277,7 @@ function renderPreviewBody(goal, clone, basis, preview, today) {
         <td class="col-date">${row.date}${dayDiff === 0 ? ' <span class="today-tag">오늘</span>' : ''}</td>
         <td class="col-weekday">${weekdayKo(row.date)}</td>
         <td class="col-content">${describeRowContent(clone, basis, row)}</td>
+        <td class="col-amount">${renderAmountCell(basis, row)}</td>
         <td class="col-cum"><strong>${formatCumulative(clone, basis, row.cumulative)}</strong></td>
         <td class="col-cum col-original">${formatCumulative(goal, basis, cumulativeOnDate(oldPlan, row.date))}</td>
       </tr>`;
@@ -2289,7 +2290,8 @@ function renderPreviewBody(goal, clone, basis, preview, today) {
         <tr>
           <th class="col-date">날짜</th>
           <th class="col-weekday">요일</th>
-          <th>오늘 분량</th>
+          <th>${goal.type === 'book' ? '읽을 내용' : '들을 강의'}</th>
+          <th class="col-amount">분량</th>
           <th class="col-cum">새 누적 목표</th>
           <th class="col-cum">지금 계획 누적</th>
         </tr>
@@ -2310,7 +2312,7 @@ function describeRowContent(goal, basis, row) {
     const a = unitsToPage(goal.book, from + 1);
     const b = unitsToPage(goal.book, to);
     return `<strong>${a === b ? `p.${a}` : `p.${a}~${b}`}</strong>
-      <span class="muted">· ${escapeHtml(describeChaptersForPages(goal.book, a, b))} (${row.amount}페이지)</span>`;
+      <span class="muted">· ${escapeHtml(describeChaptersForPages(goal.book, a, b))}</span>`;
   }
   if (basis === 'chapter') {
     return getChapterRanges(goal.book).slice(from, to)
@@ -2343,6 +2345,11 @@ function getRowState(row, done, today, replanned) {
   return { dayDiff, checked, classes };
 }
 
+/** 그날 분량 칸: 예) 35페이지 */
+function renderAmountCell(basis, row) {
+  return row.amount === 0 ? '<span class="muted">-</span>' : `<strong>${row.amount}${getUnitLabel(basis)}</strong>`;
+}
+
 function renderPlanTable(goal, basis) {
   const today = todayStr();
   const rows = buildTimeline(goal, basis);
@@ -2357,8 +2364,8 @@ function renderPlanTable(goal, basis) {
         <td class="col-date">${row.date}${dayDiff === 0 ? ' <span class="today-tag">오늘</span>' : ''}</td>
         <td class="col-weekday">${weekdayKo(row.date)}</td>
         <td class="col-content">${describeRowContent(goal, basis, row)}</td>
+        <td class="col-amount">${renderAmountCell(basis, row)}</td>
         <td class="col-cum">${formatCumulative(goal, basis, row.cumulative)}</td>
-        ${replanned ? `<td class="col-cum col-original">${formatCumulative(goal, basis, row.originalCumulative)}</td>` : ''}
         <td class="col-check">
           ${row.amount === 0 ? '<span class="muted">-</span>'
             : `<input type="checkbox" class="row-check" data-date="${row.date}" ${checked ? 'checked' : ''}
@@ -2373,9 +2380,9 @@ function renderPlanTable(goal, basis) {
         <tr>
           <th class="col-date">날짜</th>
           <th class="col-weekday">요일</th>
-          <th>오늘 분량</th>
+          <th>${goal.type === 'book' ? '읽을 내용' : '들을 강의'}</th>
+          <th class="col-amount">분량</th>
           <th class="col-cum">누적 목표</th>
-          ${replanned ? '<th class="col-cum">원래 계획 누적</th>' : ''}
           <th class="col-check">완료</th>
         </tr>
       </thead>

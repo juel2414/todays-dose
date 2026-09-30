@@ -796,3 +796,4 @@ body.modal-open { overflow: hidden; }
 .export-preview img { width: 100%; height: auto; border-radius: 6px; box-shadow: var(--shadow); }
 .modal-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .modal-actions #export-status { margin-right: auto; font-size: 13px; }
+.plan-table .col-amount { width: 100px; white-space: nowrap; font-variant-numeric: tabular-nums; }
