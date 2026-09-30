@@ -838,3 +838,19 @@ body.modal-open { overflow: hidden; }
 .progress-form .chapter-select { width: 260px; }
 .progress-or { margin: 0 4px; }
 .summary-actions { flex-wrap: wrap; }
+
+/* 진도 입력: 한 줄 배치는 가운데 정렬, 책은 두 줄 격자로 이름표·입력칸 세로 맞춤 */
+.progress-form .btn { height: 40px; }
+.progress-control { display: flex; align-items: center; gap: 10px; }
+.progress-form.is-two-rows {
+  display: grid;
+  grid-template-columns: max-content max-content max-content;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 10px;
+}
+.progress-form.is-two-rows .field-label { margin-right: 0; }
+.progress-form.is-two-rows .chapter-select { width: 100%; min-width: 260px; }
+.progress-form.is-two-rows .progress-submit { grid-column: 3; grid-row: 1 / span 2; align-self: center; }
+.progress-form.is-two-rows .progress-error { grid-column: 1 / -1; }
+.progress-or { margin: 0 2px 0 0; font-weight: 400; }

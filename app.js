@@ -2398,13 +2398,15 @@ function renderSummaryPanel(goal, s) {
       </div>
 
       <div class="summary-actions">
-        <form class="progress-form" data-action="progress" novalidate>
+        <form class="progress-form ${isBook ? 'is-two-rows' : ''}" data-action="progress" novalidate>
           ${goal.type === 'bible' ? renderBibleProgressInputs(goal) : `
           <label for="progress-input" class="field-label">${isBook ? '마지막으로 읽은 페이지' : '완료한 강의 수'}</label>
-          <input id="progress-input" type="number" class="input input-num" min="${min}" max="${max}" value="${cur}">
-          <span class="muted">${isBook ? `(p.${min}~${max})` : `(0~${max}강)`}</span>
+          <div class="progress-control">
+            <input id="progress-input" type="number" class="input input-num" min="${min}" max="${max}" value="${cur}">
+            <span class="muted">${isBook ? `(p.${min}~${max})` : `(0~${max}강)`}</span>
+          </div>
           ${isBook ? renderChapterProgressSelect(goal) : ''}`}
-          <button type="submit" class="btn btn-primary">진도 기록</button>
+          <button type="submit" class="btn btn-primary progress-submit">진도 기록</button>
           <span class="progress-error" hidden></span>
         </form>
         <div class="plan-actions">
@@ -2421,8 +2423,7 @@ function renderSummaryPanel(goal, s) {
 function renderChapterProgressSelect(goal) {
   const doneCount = completedChapterCount(goal.book, goal.progress.current);
   return `
-    <span class="muted progress-or">또는</span>
-    <label for="progress-chapter-select" class="field-label">완료한 챕터</label>
+    <label for="progress-chapter-select" class="field-label"><span class="muted progress-or">또는</span> 완료한 챕터</label>
     <select id="progress-chapter-select" class="input chapter-select">
       <option value="0" ${doneCount === 0 ? 'selected' : ''}>없음</option>
       ${getChapterRanges(goal.book).map((c, i) => `
