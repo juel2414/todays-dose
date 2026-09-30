@@ -1515,6 +1515,42 @@ async function submitGoalToLibrary(goal) {
   }
 }
 
+/** 검토 대기 중인 제출본이 내 목표의 지금 책 내용(제목·저자·목차·마지막 페이지)과 다른지 */
+function submissionNeedsSync(goal, sub) {
+  return !!goal && goal.type === 'book' && sub.status === 'pending' && (
+    goal.title.trim() !== String(sub.title || '').trim()
+    || getBookAuthor(goal) !== String(sub.author || '').trim()
+    || bookSignature(goal.book.chapters, goal.book.lastPage) !== bookSignature(sub.chapters || [], sub.lastPage));
+}
+
+let syncingSubmissions = false;
+
+/** 검토 대기 중인 내 제출본을 목표의 지금 내용으로 맞춘다 (승인·반려 뒤에는 바꾸지 않는다) */
+async function syncPendingSubmissions() {
+  if (syncingSubmissions || !currentUser) return;
+  syncingSubmissions = true;
+  try {
+    for (const sub of mySubmissions) {
+      const goal = getGoal(sub.submittedGoalId);
+      if (!submissionNeedsSync(goal, sub)) continue;
+      const { data, error } = await getSupabase().rpc('study_planner_update_submission', {
+        p_goal_id: goal.id,
+        p_title: goal.title.trim(),
+        p_author: getBookAuthor(goal),
+        p_chapters: goal.book.chapters.map((c) => ({ name: c.name, startPage: Number(c.startPage) })),
+        p_last_page: goal.book.lastPage,
+      });
+      if (error) throw error;
+      // 그사이 관리자가 검토했으면 결과가 비어 온다 → 다음 로그인 때 새 상태를 받는다
+      if (data && data.id) setLibraryRows(libraryRows.map((b) => (b.id === data.id ? rowToRequiredBook(data) : b)));
+    }
+  } catch (err) {
+    console.warn('[library] 검토 대기 제출본 수정 실패:', err);
+  } finally {
+    syncingSubmissions = false;
+  }
+}
+
 /**
  * 검토가 끝난 내 제출을 목표와 연결할 목록 → [{ goalId, bookId }]
  *  승인됨 → 제출한 책 / 기존 책과 연결됨 → 그 책. 읽을 수 없는 책(books에 없음)이나 이미 연결된 목표는 건너뛴다.
@@ -2180,6 +2216,12 @@ function runPlanSelfTests() {
   check('그룹: 예전 필독서 계획 자동 연결', linkLegacyRequiredGoals([legacy]) && legacy.groupItemId === 'item1' && !legacy.requiredBookId);
   [myGroups, groupItems] = savedGroups;
 
+  const subGoal = createBookGoal({ title: '제출 책', startDate: '2026-10-01', dueDate: '2026-10-09', chapters: [{ name: '1장', startPage: 1 }], lastPage: 50 });
+  const sub = { status: 'pending', title: '제출 책', author: '', chapters: [{ name: '1장', startPage: 1 }], lastPage: 50 };
+  check('제출본: 같으면 수정 안 함', !submissionNeedsSync(subGoal, sub));
+  check('제출본: 목차 바뀌면 수정', submissionNeedsSync(subGoal, { ...sub, lastPage: 60 }));
+  check('제출본: 검토 끝나면 수정 안 함', !submissionNeedsSync(subGoal, { ...sub, lastPage: 60, status: 'rejected' }));
+
   console.group('■ 검사 결과');
   console.table(results);
   console.groupEnd();
@@ -2228,6 +2270,7 @@ function commit() {
     .then(() => {
       pendingSaves--;
       if (pendingSaves === 0) setSaveState('saved');
+      syncPendingSubmissions();
     })
     .catch((err) => {
       pendingSaves--;
