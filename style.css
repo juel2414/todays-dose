@@ -882,3 +882,25 @@ body.modal-open { overflow: hidden; }
   font-size: 15px; line-height: 1; cursor: pointer;
 }
 .rest-chip-del:hover { background: var(--danger-soft); color: var(--danger); }
+.extra-weight-select { width: 150px !important; }
+.extra-chip { border-color: #b7dfc6; background: #f1faf4; }
+.extra-chip-weight { font-weight: 700; color: var(--success); }
+
+/* ===== 여유·직접 표시, 분량 직접 조정 ===== */
+.amount-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.tag-extra { background: var(--success-soft); color: var(--success); }
+.tag-fixed { background: #fff1e0; color: #b35c00; }
+.plan-table .col-adjust { width: 220px; white-space: nowrap; }
+.adjust-input { width: 80px; height: 34px; padding: 0 8px; }
+.adjust-input.is-fixed { border-color: #f0b46a; background: #fffaf2; font-weight: 700; }
+.adjust-reset { width: 26px; height: 26px; font-size: 15px; }
+.adjust-reset:hover { background: var(--neutral-soft) !important; color: var(--text) !important; }
+.plan-table tr.is-past td { opacity: 0.55; }
