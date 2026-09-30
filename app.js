@@ -4792,7 +4792,36 @@ function bookAudience(book) {
 
 function renderAdminProgress() {
   const books = requiredBooks.filter((b) => adminState.assignments.some((a) => a.book_id === b.id));
-  if (!books.length) return `<div class="empty">${t('아직 배정된 책이 없습니다. <a href="#/admin/books">도서관</a>에서 정하세요. (그룹의 진도는 <a href="#/admin/members">회원 관리</a>의 그룹에서 봅니다)')}</div>`;
+  const groups = renderAdminGroupProgress();
+  if (!books.length && !groups) {
+    return `<div class="empty">${t('아직 그룹의 필독서·필수 시청이나 배정된 책이 없습니다.')}</div>`;
+  }
+  return `${groups}${books.length ? `
+    <div class="progress-group-head"><h2 class="section-title">${t('배정된 책')} <span class="count">${books.length}</span></h2></div>
+    ${renderAssignedProgress(books)}` : ''}`;
+}
+
+/** 진도 현황: 그룹마다 필독서 · 필수 시청의 멤버 진도 */
+function renderAdminGroupProgress() {
+  return adminState.groups.map((g) => {
+    const items = adminState.groupItems.filter((i) => i.groupId === g.id);
+    if (!items.length) return '';
+    const leader = adminState.profiles.find((p) => p.user_id === g.leader_id);
+    const members = adminGroupPeople(g.id);
+    const memberIds = new Set(members.map((m) => m.user_id));
+    const memberGoals = adminState.goals.filter((x) => x.goal.groupId === g.id && memberIds.has(x.userId));
+    return `
+      <div class="progress-group-head">
+        <h2 class="section-title">${escapeHtml(g.name)}</h2>
+        <span class="muted">${t('리더 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })} · ${t('멤버 {n}명', { n: members.length })}</span>
+      </div>
+      ${groupItemsByKind(items).map(({ items: list }) => list.map((item) => renderGroupItemProgress(item, members, memberGoals, '',
+        (m, goal) => `#/admin/member/${m.user_id}/${goal.id}`)).join('')).join('')}`;
+  }).join('');
+}
+
+/** 진도 현황: 개별 배정된 책 */
+function renderAssignedProgress(books) {
   const today = todayStr();
 
   return books.map((book) => {
@@ -6567,7 +6596,17 @@ function renderMemberGroup(group) {
 function renderGroupItemProgress(item, members, memberGoals, actionsHtml, linkFor) {
   const today = todayStr();
   const entries = memberGoals.filter((x) => x.goal.groupItemId === item.id);
-  const memberRows = (members || []).map((m) => {
+  // 밀린 사람 → 진행 중 → 완료 → 계획 없음 순
+  const rank = (m) => {
+    const entry = entries.find((x) => x.userId === m.user_id);
+    if (!entry) return 3;
+    const s = getGoalSummary(entry.goal, undefined, today);
+    return s.isActive && !s.notStarted && s.diff < 0 ? 0 : s.isComplete ? 2 : 1;
+  };
+  const sorted = (members || []).map((m) => ({ m, r: rank(m) }))
+    .sort((a, b) => a.r - b.r || profileName(a.m).localeCompare(profileName(b.m))).map((x) => x.m);
+  const behind = sorted.filter((m) => rank(m) === 0).length;
+  const memberRows = sorted.map((m) => {
     const entry = entries.find((x) => x.userId === m.user_id);
     if (!entry) return `<tr><td>${escapeHtml(profileName(m))}</td><td colspan="4" class="muted">${t('아직 계획 없음')}</td></tr>`;
     const goal = entry.goal;
@@ -6594,7 +6633,8 @@ function renderGroupItemProgress(item, members, memberGoals, actionsHtml, linkFo
         ${renderCoverThumb(item.coverUrl, 'sm')}
         <div class="group-item-main">
           <div>${renderSharedTag(item.type)} <strong>${escapeHtml(item.title)}</strong></div>
-          <div class="muted small">${escapeHtml(describeShareContent(item))}${members ? ` · ${t('계획 세운 멤버 {n}/{total}명', { n: plannedCount, total: members.length })}` : ''}</div>
+          <div class="muted small">${escapeHtml(describeShareContent(item))}${members ? ` · ${t('계획 세운 멤버 {n}/{total}명', { n: plannedCount, total: members.length })}` : ''}${
+            behind ? ` · <b class="text-danger">${t('밀림 {n}명', { n: behind })}</b>` : ''}</div>
         </div>
         <div class="group-item-side">${actionsHtml}</div>
       </div>
@@ -7498,6 +7538,7 @@ const EN = {
   '아직 필독서나 필수 시청이 없습니다. 내 책·강의 목표를 공유하면 멤버들이 같은 내용으로 계획을 세울 수 있어요.': 'No required books or lectures yet. Share one of your book or lecture goals so members can plan with the same contents.',
   '그룹 필독서 · 필수 시청': 'Required in your groups',
   "'{group}' 그룹의 {kind}입니다. 이름과 내용은 리더가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.": (p) => `${p.kind} in the group '${p.group}'. The leader sets its name and contents; here you can only set the start date, due date and rest days.`,
+  '아직 그룹의 필독서·필수 시청이나 배정된 책이 없습니다.': 'No group required books/lectures or assigned books yet.',
 };
 
 /* =========================================================================

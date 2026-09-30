@@ -1182,3 +1182,12 @@ body.modal-open { overflow: hidden; }
 .shared-lecture { background: #e2f4f4; color: #0e8a8a; }
 .shared-other { background: var(--neutral-soft); color: var(--muted); }
 .shared-kind-title { font-size: 15px; margin: 18px 0 10px; display: flex; align-items: center; gap: 8px; }
+.progress-group-head { display: flex; align-items: baseline; gap: 12px; margin: 28px 0 12px; }
+.progress-group-head:first-child { margin-top: 8px; }
+.progress-group-head .section-title { margin: 0; }
+.group-share { margin-bottom: 14px; }
+.group-share .admin-table { table-layout: fixed; width: 100%; }
+.group-share .admin-table th:nth-child(1) { width: 18%; }
+.group-share .admin-table th:nth-child(2) { width: 24%; }
+.group-share .admin-table th:nth-child(3) { width: 24%; }
+.group-share .admin-table th:nth-child(4) { width: 18%; }
