@@ -2121,7 +2121,7 @@ function renderTopbar() {
   bar.innerHTML = `
     <div class="topbar-inner">
       <nav class="topbar-nav">
-        <a class="brand" href="#/">${t('오늘분량')}</a>
+        <a class="brand" href="#/"><img class="brand-logo" src="logo/symbol.svg" alt="" width="26" height="26">${t('오늘분량')}</a>
         ${account.isAdmin ? `<a class="nav-link" href="#/admin">${t('관리자')}</a>` : ''}
       </nav>
       <div class="topbar-right">

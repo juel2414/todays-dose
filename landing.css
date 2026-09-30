@@ -455,3 +455,5 @@
 body.is-landing { min-width: 0; }
 body.is-landing #app { max-width: none; padding: 0; }
 .landing .lp-ai-result .lp-mini-table th { white-space: nowrap; }
+
+.landing .lp-brand-logo { width: 32px; height: 32px; display: block; }
