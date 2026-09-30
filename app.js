@@ -2071,6 +2071,16 @@ function formatAmount(n, basis) {
   return `${n}${getUnitLabel(basis)}`;
 }
 
+/** 위치 표시: 책(페이지 기준)은 페이지 번호 "p.42", 그 외는 개수 "3강" */
+function formatPosition(goal, basis, units) {
+  if (basis === 'page') return units > 0 ? `p.${unitsToPage(goal.book, units)}` : '-';
+  return formatAmount(units, basis);
+}
+
+function totalLabel(basis) {
+  return basis === 'page' ? '마지막 페이지' : '전체';
+}
+
 /** 현황 안내 문구와 색 */
 function getCompareMessage(goal, s) {
   const u = (n) => formatAmount(n, s.basis);
@@ -2159,9 +2169,9 @@ function renderCompareBlock(goal, s) {
 
       <div class="stat-boxes">
         <div class="stat-box"><strong>${formatAmount(s.dailyPlan, s.basis)}</strong><span>하루 권장</span></div>
-        <div class="stat-box"><strong>${formatAmount(s.target, s.basis)}</strong><span>오늘까지 권장</span></div>
-        <div class="stat-box"><strong>${formatAmount(s.done, s.basis)}</strong><span>실제 완료</span></div>
-        <div class="stat-box"><strong>${formatAmount(s.total, s.basis)}</strong><span>전체</span></div>
+        <div class="stat-box"><strong>${formatPosition(goal, s.basis, s.target)}</strong><span>오늘까지 권장</span></div>
+        <div class="stat-box"><strong>${formatPosition(goal, s.basis, s.done)}</strong><span>실제 완료</span></div>
+        <div class="stat-box"><strong>${formatPosition(goal, s.basis, s.total)}</strong><span>${totalLabel(s.basis)}</span></div>
       </div>
 
       <div class="compare-bar" role="img"
@@ -2744,7 +2754,7 @@ function renderAdminProgress() {
         </div>
         <table class="admin-table">
           <thead>
-            <tr><th>이름</th><th>기간</th><th class="num">오늘까지 권장</th><th class="num">실제 완료</th><th class="num">전체</th><th class="col-bar">진도</th><th>상태</th></tr>
+            <tr><th>이름</th><th>기간</th><th class="num">오늘까지 권장</th><th class="num">실제 완료</th><th class="num">끝</th><th class="col-bar">진도</th><th>상태</th></tr>
           </thead>
           <tbody>
             ${rows.map(({ p, goal, s }) => {
@@ -2757,9 +2767,9 @@ function renderAdminProgress() {
                 <tr>
                   <td><a class="member-link" href="#/admin/member/${escapeHtml(p.user_id)}/${escapeHtml(goal.id)}">${escapeHtml(profileName(p))}</a></td>
                   <td class="muted">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
-                  <td class="num">${s.target}페이지</td>
-                  <td class="num">${s.done}페이지</td>
-                  <td class="num">${s.total}페이지</td>
+                  <td class="num">${formatPosition(goal, s.basis, s.target)}</td>
+                  <td class="num">${formatPosition(goal, s.basis, s.done)}</td>
+                  <td class="num">${formatPosition(goal, s.basis, s.total)}</td>
                   <td class="col-bar">
                     <div class="mini-bar"><div class="compare-fill" style="width:${donePct}%"></div><div class="compare-marker" style="left:${targetPct}%"></div></div>
                     <span class="mini-pct">${s.percent}%</span>
@@ -2801,7 +2811,7 @@ function renderAdminPlans() {
         </div>
         <table class="admin-table">
           <thead>
-            <tr><th>목표</th><th>기간</th><th class="num">오늘까지 권장</th><th class="num">실제 완료</th><th class="num">전체</th><th class="col-bar">진도</th><th>상태</th></tr>
+            <tr><th>목표</th><th>기간</th><th class="num">오늘까지 권장</th><th class="num">실제 완료</th><th class="num">끝</th><th class="col-bar">진도</th><th>상태</th></tr>
           </thead>
           <tbody>
             ${items.map(({ goal, s }) => renderAdminGoalRow(p, goal, s)).join('')}
@@ -2817,7 +2827,6 @@ function renderAdminPlans() {
 }
 
 function renderAdminGoalRow(p, goal, s) {
-  const unit = getUnitLabel(s.basis);
   const targetPct = s.total ? Math.min(100, (s.target / s.total) * 100) : 0;
   const donePct = s.total ? Math.min(100, (s.done / s.total) * 100) : 0;
   const book = goal.requiredBookId ? requiredBooks.find((b) => b.id === goal.requiredBookId) : null;
@@ -2828,9 +2837,9 @@ function renderAdminGoalRow(p, goal, s) {
         <div class="muted small">${book ? '필독서' : goal.type === 'book' ? '책' : '강의'}${getBookAuthor(goal) ? ` · ${escapeHtml(getBookAuthor(goal))}` : ''}</div>
       </td>
       <td class="muted">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
-      <td class="num">${s.target}${unit}</td>
-      <td class="num">${s.done}${unit}</td>
-      <td class="num">${s.total}${unit}</td>
+      <td class="num">${formatPosition(goal, s.basis, s.target)}</td>
+      <td class="num">${formatPosition(goal, s.basis, s.done)}</td>
+      <td class="num">${formatPosition(goal, s.basis, s.total)}</td>
       <td class="col-bar">
         <div class="mini-bar"><div class="compare-fill" style="width:${donePct}%"></div><div class="compare-marker" style="left:${targetPct}%"></div></div>
         <span class="mini-pct">${s.percent}%</span>
@@ -3303,9 +3312,9 @@ async function drawPlanImage(goal, options) {
   const boxW = (inner - 72 - boxGap * 3) / 4;
   const stats = [
     [`${s.dailyPlan}${unit}`, '하루 권장'],
-    [`${s.target}${unit}`, '오늘까지 권장'],
-    [`${s.done}${unit}`, '실제 완료'],
-    [`${s.total}${unit}`, '전체'],
+    [formatPosition(goal, s.basis, s.target), '오늘까지 권장'],
+    [formatPosition(goal, s.basis, s.done), '실제 완료'],
+    [formatPosition(goal, s.basis, s.total), totalLabel(s.basis)],
   ];
   stats.forEach(([value, label], i) => {
     const bx = P + 36 + i * (boxW + boxGap);
