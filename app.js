@@ -1314,6 +1314,10 @@ async function saveAccountLanguage(lang) {
   }
 }
 
+const LIBRARY_COLUMNS = 'id, title, author, cover_url, chapters, last_page, created_at, updated_at, status, team_required, is_public, '
+  + 'submitted_by, submitted_goal_id, merged_into, review_note';
+const ASSIGNMENTS_TABLE = 'study_planner_book_assignments';
+
 function rowToRequiredBook(row) {
   return {
     id: row.id,
@@ -1322,16 +1326,168 @@ function rowToRequiredBook(row) {
     coverUrl: row.cover_url || null,
     chapters: row.chapters,
     lastPage: row.last_page,
+    createdAt: row.created_at || null,
     updatedAt: row.updated_at,
+    status: row.status || 'approved',
+    teamRequired: !!row.team_required,
+    isPublic: !!row.is_public,
+    submittedBy: row.submitted_by || null,
+    submittedGoalId: row.submitted_goal_id || null,
+    mergedInto: row.merged_into || null,
+    reviewNote: row.review_note || '',
   };
 }
 
-/** 사역자 필독서 목록 (팀원·관리자만 읽을 수 있음) */
-async function loadRequiredBooks() {
+/** 도서관의 책 전체 (RLS로 볼 수 있는 행만: 관리자는 전부, 회원은 승인된 공개·필독서·배정 + 내가 제출한 책) */
+async function loadLibraryRows() {
   const { data, error } = await getSupabase().from(REQUIRED_BOOKS_TABLE)
-    .select('id, title, author, cover_url, chapters, last_page, updated_at').order('created_at');
+    .select(LIBRARY_COLUMNS).order('created_at');
   if (error) throw error;
   return data.map(rowToRequiredBook);
+}
+
+/** 나에게 배정된 책 id 목록 */
+async function loadMyAssignments() {
+  const { data, error } = await getSupabase().from(ASSIGNMENTS_TABLE)
+    .select('book_id').eq('user_id', currentUser.id);
+  if (error) throw error;
+  return data.map((r) => r.book_id);
+}
+
+/** 도서관 행 목록을 화면용 상태로 나눈다 (승인된 책 / 내가 제출한 책) */
+function setLibraryRows(rows) {
+  libraryRows = rows;
+  requiredBooks = rows.filter((b) => b.status === 'approved');
+  mySubmissions = currentUser ? rows.filter((b) => b.submittedBy === currentUser.id) : [];
+}
+
+/** 도서관 · 배정 정보를 불러와 상태에 반영 */
+async function loadLibrary() {
+  const [rows, assigned] = await Promise.all([loadLibraryRows(), loadMyAssignments()]);
+  myAssignedBookIds = new Set(assigned);
+  setLibraryRows(rows);
+}
+
+/** 내가 만든 책 목표를 도서관에 검토 요청 (실패해도 목표 만들기는 그대로) */
+async function submitGoalToLibrary(goal) {
+  try {
+    if (!goal || goal.type !== 'book' || goal.requiredBookId || !currentUser) return;
+    if (mySubmissions.some((b) => b.submittedGoalId === goal.id)) return;
+    const row = {
+      status: 'pending',
+      submitted_by: currentUser.id,
+      submitted_goal_id: goal.id,
+      title: goal.title.trim(),
+      author: getBookAuthor(goal) || null,
+      chapters: goal.book.chapters.map((c) => ({ name: c.name, startPage: c.startPage })),
+      last_page: goal.book.lastPage,
+      team_required: false,
+      is_public: false,
+    };
+    const { data, error } = await getSupabase().from(REQUIRED_BOOKS_TABLE).insert(row).select(LIBRARY_COLUMNS).single();
+    if (error) throw error;
+    setLibraryRows([...libraryRows, rowToRequiredBook(data)]);
+  } catch (err) {
+    console.warn('[library] 도서관 제출 실패:', err);
+  }
+}
+
+/**
+ * 검토가 끝난 내 제출을 목표와 연결할 목록 → [{ goalId, bookId }]
+ *  승인됨 → 제출한 책 / 기존 책과 연결됨 → 그 책. 읽을 수 없는 책(books에 없음)이나 이미 연결된 목표는 건너뛴다.
+ */
+function planSubmissionLinks(goals, submissions, books) {
+  const links = [];
+  const taken = new Set(goals.map((g) => g.requiredBookId).filter(Boolean));
+  submissions.forEach((sub) => {
+    const goal = goals.find((g) => g.id === sub.submittedGoalId);
+    if (!goal || goal.type !== 'book' || goal.requiredBookId) return;
+    const bookId = sub.status === 'approved' ? sub.id : sub.status === 'merged' ? sub.mergedInto : null;
+    if (!bookId || taken.has(bookId) || !books.some((b) => b.id === bookId && b.status === 'approved')) return;
+    taken.add(bookId);
+    links.push({ goalId: goal.id, bookId });
+  });
+  return links;
+}
+
+/** 앱을 열 때: 검토가 끝난 제출을 내 목표와 연결 */
+function linkReviewedSubmissions() {
+  const links = planSubmissionLinks(appData.goals, mySubmissions, requiredBooks);
+  links.forEach(({ goalId, bookId }) => { getGoal(goalId).requiredBookId = bookId; });
+  if (links.length) commit();
+  return links.length;
+}
+
+/** 이 목표로 도서관에 제출한 기록 (없으면 null) */
+function findSubmissionForGoal(goalId) {
+  return mySubmissions.find((b) => b.submittedGoalId === goalId) || null;
+}
+
+/** 책이 나에게 어떤 책인지: 'required'(팀 필독서) | 'assigned'(배정) | null */
+function bookTagKind(book) {
+  if (!book) return null;
+  if (book.teamRequired && (account.inTeam || account.isAdmin)) return 'required';
+  if (myAssignedBookIds.has(book.id)) return 'assigned';
+  return null;
+}
+
+function renderBookTag(kind) {
+  if (kind === 'required') return `<span class="type-tag type-required">${t('필독서')}</span>`;
+  if (kind === 'assigned') return `<span class="type-tag type-assigned">${t('배정')}</span>`;
+  return '';
+}
+
+/** 목표가 연결된 도서관 책 (없으면 null) */
+function libraryBookForGoal(goal) {
+  return goal && goal.requiredBookId ? requiredBooks.find((b) => b.id === goal.requiredBookId) || null : null;
+}
+
+/** 제목 비교용: 소문자, 공백·문장부호 제거 */
+function normalizeBookTitle(title) {
+  return String(title || '').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
+}
+
+/** 비슷한 제목인지 (같거나, 두 글자 이상이 한쪽에 포함) */
+function isSimilarBookTitle(a, b) {
+  const x = normalizeBookTitle(a);
+  const y = normalizeBookTitle(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+  return short.length >= 2 && long.includes(short);
+}
+
+/**
+ * 목차 글을 챕터 목록으로 → [{ name, startPage|null }]
+ *  줄 끝의 페이지: "····· 23", ".... 23", "… 23", 탭, " - 23", "(23)", "p.23", "23쪽"
+ *  숫자만 있는 줄은 무시한다.
+ */
+function parseTocText(text) {
+  const chapters = [];
+  String(text || '').split(/\r?\n/).forEach((raw) => {
+    const line = raw.replace(/ /g, ' ').trim();
+    if (!line) return;
+    if (/^(?:p\.?\s*)?\d+\s*(?:쪽|페이지|p)?$/i.test(line)) return;
+    let name = line;
+    let startPage = null;
+    // 1) 뚜렷한 구분: 점선·탭·대시·괄호·p.·쪽
+    let m = line.match(/^(.*?\S)\s*(?:[.·…‥・•_]{2,}|…|‥|\t+|\s[-–—:]\s?|\s*[-–—]{2,})\s*(?:p\.?\s*)?(\d{1,4})\s*(?:쪽|페이지)?$/i)
+      || line.match(/^(.*?\S)\s*[([]\s*(?:p\.?\s*)?(\d{1,4})\s*(?:쪽|페이지)?\s*[)\]]$/i)
+      || line.match(/^(.*?\S)\s*(?:p\.|pp\.|p)\s*(\d{1,4})$/i)
+      || line.match(/^(.*?\S)\s*(\d{1,4})\s*(?:쪽|페이지)$/);
+    // 2) 공백 하나 + 숫자 ("1장 도입 23"). "Chapter 12"처럼 이름이 번호로 끝나는 경우는 제외
+    if (!m) {
+      const w = line.match(/^(.*\S)\s+(\d{1,4})$/);
+      if (w && !/^(?:chapter|part|section|lesson|unit|step|day|제|부|장)$/i.test(w[1].trim())) m = w;
+    }
+    if (m) {
+      name = m[1].replace(/[\s.·…‥・•_\-–—:]+$/, '').trim();
+      startPage = Number(m[2]);
+      if (!name) return;
+    }
+    chapters.push({ name: name.replace(/\s+/g, ' '), startPage });
+  });
+  return chapters;
 }
 
 /* 관리자 전용 — 서버에서도 RLS/함수로 관리자만 허용된다 */
@@ -1348,7 +1504,7 @@ async function adminSetTeam(userId, inTeam) {
   if (error) throw error;
 }
 
-/** 필독서 저장 (id가 없으면 새로 만들기) → 저장된 책 */
+/** 도서관 책 저장 (id가 없으면 새로 만들기) → 저장된 책. status를 주면 상태도 바꾼다 (검토 승인) */
 async function adminSaveRequiredBook(book) {
   const row = {
     title: book.title.trim(),
@@ -1356,15 +1512,53 @@ async function adminSaveRequiredBook(book) {
     cover_url: book.coverUrl || null,
     chapters: book.chapters.map((c) => ({ name: c.name.trim(), startPage: Number(c.startPage) })),
     last_page: Number(book.lastPage),
+    team_required: !!book.teamRequired,
+    is_public: !!book.isPublic,
     updated_at: new Date().toISOString(),
   };
+  if (book.status) row.status = book.status;
+  if (book.status === 'approved') row.review_note = null;
   const sb = getSupabase();
   const query = book.id
     ? sb.from(REQUIRED_BOOKS_TABLE).update(row).eq('id', book.id)
-    : sb.from(REQUIRED_BOOKS_TABLE).insert(row);
-  const { data, error } = await query.select('id, title, author, cover_url, chapters, last_page, updated_at').single();
+    : sb.from(REQUIRED_BOOKS_TABLE).insert({ status: 'approved', ...row });
+  const { data, error } = await query.select(LIBRARY_COLUMNS).single();
   if (error) throw error;
   return rowToRequiredBook(data);
+}
+
+/** 제출된 책의 검토 상태만 바꾸기 (승인 · 반려 · 기존 책과 연결) → 바뀐 책 */
+async function adminSetBookStatus(id, { status, reviewNote = null, mergedInto = null }) {
+  const { data, error } = await getSupabase().from(REQUIRED_BOOKS_TABLE)
+    .update({ status, review_note: reviewNote, merged_into: mergedInto, updated_at: new Date().toISOString() })
+    .eq('id', id).select(LIBRARY_COLUMNS).single();
+  if (error) throw error;
+  return rowToRequiredBook(data);
+}
+
+/** 모든 배정 → [{ book_id, user_id }] */
+async function adminLoadAssignments() {
+  const { data, error } = await getSupabase().from(ASSIGNMENTS_TABLE).select('book_id, user_id');
+  if (error) throw error;
+  return data;
+}
+
+/** 책의 배정을 userIds로 맞춘다 (새로 넣고, 빠진 사람은 지움) → 최종 배정 목록 */
+async function adminSyncAssignments(bookId, userIds) {
+  const before = adminState.assignments.filter((a) => a.book_id === bookId).map((a) => a.user_id);
+  const add = userIds.filter((id) => !before.includes(id));
+  const remove = before.filter((id) => !userIds.includes(id));
+  const sb = getSupabase();
+  if (add.length) {
+    const { error } = await sb.from(ASSIGNMENTS_TABLE).insert(add.map((user_id) => ({ book_id: bookId, user_id })));
+    if (error) throw error;
+  }
+  if (remove.length) {
+    const { error } = await sb.from(ASSIGNMENTS_TABLE).delete().eq('book_id', bookId).in('user_id', remove);
+    if (error) throw error;
+  }
+  adminState.assignments = adminState.assignments.filter((a) => a.book_id !== bookId)
+    .concat(userIds.map((user_id) => ({ book_id: bookId, user_id })));
 }
 
 const COVERS_BUCKET = 'study-planner-covers';
@@ -1724,6 +1918,38 @@ function runPlanSelfTests() {
   check('필독서: 변경 반영(시작 전 → 계획 새로)', linked.book.chapters.length === 3 && linked.plans.chapter.original.to === 3
     && linked.requiredBookId === 'b1' && !isRequiredBookChanged(linked, rb2));
 
+  // 도서관: 목차 붙여넣기
+  const toc = parseTocText('1장 도입 ····· 23\n2장 본론....45\n\n3장\t67\n4장 결론 - 89\n부록 (101)\n머리말 p.5\n맺음말 120쪽\n12\n들어가며\nChapter 12\n5장 끝…130');
+  const tocPages = toc.map((c) => c.startPage);
+  check('목차: 줄 수 (숫자만 있는 줄·빈 줄 제외)', toc.length === 10, JSON.stringify(toc));
+  check('목차: 점선·탭·대시·괄호·p.·쪽 페이지 인식',
+    JSON.stringify(tocPages.slice(0, 7)) === JSON.stringify([23, 45, 67, 89, 101, 5, 120]) && tocPages[9] === 130, tocPages.join(','));
+  check('목차: 이름 정리', toc[0].name === '1장 도입' && toc[1].name === '2장 본론' && toc[3].name === '4장 결론' && toc[4].name === '부록'
+    && toc[6].name === '맺음말' && toc[9].name === '5장 끝');
+  check('목차: 페이지 없는 줄', toc[7].name === '들어가며' && toc[7].startPage === null
+    && toc[8].name === 'Chapter 12' && toc[8].startPage === null);
+  check('목차: 공백 + 숫자', parseTocText('1장 기도의 삶 35')[0].startPage === 35 && parseTocText('')?.length === 0);
+
+  // 도서관: 비슷한 제목 · 검토 후 연결
+  check('도서관: 비슷한 제목', isSimilarBookTitle('기도의 삶', '기도의  삶!') && isSimilarBookTitle('The Prayer Life', 'prayer life')
+    && !isSimilarBookTitle('기도', '말씀') && !isSimilarBookTitle('', '말씀'));
+  const g1 = createBookGoal({ title: 'x', startDate: '2026-10-01', dueDate: '2026-10-09', lastPage: 90, chapters: [{ name: 'a', startPage: 1 }] });
+  const g2 = createBookGoal({ title: 'y', startDate: '2026-10-01', dueDate: '2026-10-09', lastPage: 90, chapters: [{ name: 'a', startPage: 1 }] });
+  const g3 = createBookGoal({ title: 'z', startDate: '2026-10-01', dueDate: '2026-10-09', lastPage: 90, chapters: [{ name: 'a', startPage: 1 }] });
+  const subs = [
+    { id: 's1', status: 'approved', submittedGoalId: g1.id },
+    { id: 's2', status: 'merged', mergedInto: 'lib1', submittedGoalId: g2.id },
+    { id: 's3', status: 'merged', mergedInto: 'hidden', submittedGoalId: g3.id },
+    { id: 's4', status: 'pending', submittedGoalId: 'none' },
+  ];
+  const libBooks = [{ id: 's1', status: 'approved' }, { id: 'lib1', status: 'approved' }];
+  const links = planSubmissionLinks([g1, g2, g3], subs, libBooks);
+  check('도서관: 승인·연결된 제출만 목표와 연결', links.length === 2
+    && links[0].goalId === g1.id && links[0].bookId === 's1' && links[1].goalId === g2.id && links[1].bookId === 'lib1', JSON.stringify(links));
+  g2.requiredBookId = 'lib1';
+  check('도서관: 이미 연결된 목표는 건너뜀', planSubmissionLinks([g1, g2, g3], subs, libBooks).length === 1);
+  check('도서관: 검색', filterLibraryBooks([{ title: '기도의 삶', author: '홍길동' }, { title: '말씀', author: '' }], '길동').length === 1);
+
   // 성경 통독
   check('성경: 전체 1189장 · 구약 929 · 신약 260', bibleTotalChapters({ books: bibleBooksInRange(0, 65) }) === 1189
     && bibleTotalChapters({ books: bibleBooksInRange(0, 38) }) === 929 && bibleTotalChapters({ books: bibleBooksInRange(39, 65) }) === 260);
@@ -1774,8 +2000,14 @@ function getGoal(id) {
 let currentUser = null;
 /** 관리자 / 우리 팀 여부 (로그인 때 서버에서 확인) */
 let account = { isAdmin: false, inTeam: false };
-/** 사역자 필독서 목록 (팀원·관리자만) */
+/** 도서관 — 볼 수 있는 모든 행 (관리자는 검토 대기 포함 전부) */
+let libraryRows = [];
+/** 승인된 도서관 책 (필독서 · 공개 · 배정 · 내가 제출해 승인된 책) */
 let requiredBooks = [];
+/** 내가 도서관에 제출한 책 (모든 상태) */
+let mySubmissions = [];
+/** 나에게 배정된 책 id */
+let myAssignedBookIds = new Set();
 let saveQueue = Promise.resolve();
 let pendingSaves = 0;
 let saveState = 'saved'; // 'saving' | 'saved' | 'error'
@@ -1891,11 +2123,16 @@ async function startApp(user) {
   try {
     account = await loadAccount(user);
     syncAccountLanguage(account.language);
-    requiredBooks = account.inTeam || account.isAdmin ? await loadRequiredBooks() : [];
   } catch (err) {
-    console.warn('[account] 팀·필독서 정보를 불러오지 못했습니다:', err);
+    console.warn('[account] 팀 정보를 불러오지 못했습니다:', err);
     account = { isAdmin: false, inTeam: false };
-    requiredBooks = [];
+  }
+  try {
+    await loadLibrary();
+  } catch (err) {
+    console.warn('[library] 도서관을 불러오지 못했습니다:', err);
+    myAssignedBookIds = new Set();
+    setLibraryRows([]);
   }
   renderTopbar();
 
@@ -1911,6 +2148,8 @@ async function startApp(user) {
       clearLegacyGoals(false);
     }
   }
+  // 도서관 검토가 끝난 내 책 목표는 도서관 책과 연결 (관리자가 고친 내용은 상세 화면에서 적용 여부를 묻는다)
+  linkReviewedSubmissions();
   render();
 }
 
@@ -1999,10 +2238,10 @@ function escapeHtml(value) {
 
 function renderDashboard(root) {
   const today = todayStr();
-  // 필독서로 만든 목표는 "사역자 필독서" 영역에 따로 보여준다
-  const showRequired = (account.inTeam || account.isAdmin) && requiredBooks.length > 0;
-  const linkedIds = new Set(showRequired
-    ? requiredBooks.map((b) => findGoalForBook(appData.goals, b.id)).filter(Boolean).map((g) => g.id) : []);
+  // 필독서·배정된 책으로 만든 목표는 위쪽 영역에 따로 보여준다
+  const myBooks = getMyLibraryBooks();
+  const showRequired = myBooks.length > 0;
+  const linkedIds = new Set(myBooks.map((b) => findGoalForBook(appData.goals, b.id)).filter(Boolean).map((g) => g.id));
   const items = appData.goals.filter((g) => !linkedIds.has(g.id))
     .map((goal) => ({ goal, s: getGoalSummary(goal, undefined, today) }));
   const active = items.filter((x) => x.s.isActive)
@@ -2025,7 +2264,7 @@ function renderDashboard(root) {
       </div>
     </header>
 
-    ${showRequired ? renderRequiredSection(today) : ''}
+    ${showRequired ? renderRequiredSection(today, myBooks) : ''}
 
     <section>
       <h2 class="section-title">${t('진행 중')} <span class="count">${active.length}</span></h2>
@@ -2088,15 +2327,20 @@ function importBackup(file) {
   reader.readAsText(file);
 }
 
-function renderRequiredSection(today) {
-  const cards = requiredBooks.map((book) => {
+/** 대시보드 위쪽에 보여줄 책: 팀 필독서(팀원·관리자) + 나에게 배정된 책 */
+function getMyLibraryBooks() {
+  return requiredBooks.filter((b) => bookTagKind(b) !== null);
+}
+
+function renderRequiredSection(today, books) {
+  const cards = books.map((book) => {
     const goal = findGoalForBook(appData.goals, book.id);
-    if (goal) return renderGoalCard(goal, getGoalSummary(goal, undefined, today), book);
+    if (goal) return renderGoalCard(goal, getGoalSummary(goal, undefined, today));
     const pages = book.lastPage - book.chapters[0].startPage + 1;
     return `
       <div class="goal-card required-empty">
         <div class="card-top">
-          <span class="type-tag type-required">${t('필독서')}</span>
+          ${renderBookTag(bookTagKind(book))}
           <span class="badge badge-waiting">${t('계획 없음')}</span>
         </div>
         <div class="card-book">
@@ -2112,7 +2356,7 @@ function renderRequiredSection(today) {
   }).join('');
   return `
     <section class="required-section">
-      <h2 class="section-title">${t('사역자 필독서')} <span class="count">${requiredBooks.length}</span></h2>
+      <h2 class="section-title">${books.some((b) => bookTagKind(b) === 'assigned') ? t('필독서 · 배정된 책') : t('사역자 필독서')} <span class="count">${books.length}</span></h2>
       <div class="card-grid">${cards}</div>
     </section>`;
 }
@@ -2123,14 +2367,16 @@ function renderCoverThumb(url, size = 'md') {
   return `<img class="cover cover-${size}" src="${escapeHtml(url)}" alt="" loading="lazy">`;
 }
 
-/** 목표 카드. requiredBook이 있으면 필독서 표시와 변경 알림 */
-function renderGoalCard(goal, s, requiredBook = null) {
+/** 목표 카드. 도서관 책과 연결돼 있으면 표지 · 필독서/배정 표시 · 변경 알림 */
+function renderGoalCard(goal, s) {
+  const requiredBook = libraryBookForGoal(goal);
+  const tagKind = bookTagKind(requiredBook);
   const changed = requiredBook && isRequiredBookChanged(goal, requiredBook);
   return `
     <a class="goal-card ${s.isActive ? '' : 'is-finished'}" href="#/goal/${escapeHtml(goal.id)}">
       <div class="card-top">
         <span class="card-tags">
-          ${requiredBook ? `<span class="type-tag type-required">${t('필독서')}</span>` : `<span class="type-tag type-${goal.type}">${typeLabel(goal.type)}</span>`}
+          ${tagKind ? renderBookTag(tagKind) : `<span class="type-tag type-${goal.type}">${typeLabel(goal.type)}</span>`}
           ${changed ? `<span class="badge badge-ended">${t('내용 변경됨')}</span>` : ''}
         </span>
         ${renderStatusBadge(s)}
@@ -2228,12 +2474,12 @@ function renderGoalForm(root, goal, bookId = null) {
     <header class="page-header">
       <div>
         <a class="back-link" href="${isEdit ? `#/goal/${escapeHtml(goal.id)}` : '#/'}">← ${isEdit ? t('목표 상세') : t('대시보드')}</a>
-        <h1>${isEdit ? t('목표 수정') : bookId ? t('필독서 계획 세우기') : t('새 목표 추가')}</h1>
+        <h1>${isEdit ? t('목표 수정') : bookId ? t('도서관 책으로 계획 세우기') : t('새 목표 추가')}</h1>
       </div>
     </header>
 
     <form id="goal-form" class="panel ${locked ? 'is-locked' : ''}" novalidate>
-      ${locked ? `<p class="notice notice-info">${t('사역자 필독서입니다. 책 제목과 챕터는 관리자가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.')}</p>` : ''}
+      ${locked ? `<p class="notice notice-info">${t('도서관에 있는 책입니다. 책 제목과 챕터는 관리자가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.')}</p>` : ''}
       ${started ? `<p class="notice">${t('진행 중인 목표입니다. 날짜·쉬는 요일·챕터·강의 목록을 바꾸면 원래 계획은 보관하고, 오늘부터 마감일까지 남은 분량을 다시 나눕니다. 저장하면 새 계획을 먼저 미리보기로 보여드립니다.')}</p>` : ''}
 
       <div class="field">
@@ -2244,6 +2490,15 @@ function renderGoalForm(root, goal, bookId = null) {
           <label><input type="radio" name="type" value="bible" ${type === 'bible' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> ${typeLabel('bible')}</label>
         </div>
       </div>
+
+      ${!isEdit && !locked ? `
+      <div data-section="book-pick">
+        <div class="library-pick">
+          <button type="button" class="btn" data-action="library-open">${t('도서관에서 고르기')}</button>
+          <span class="field-hint">${t('도서관에 있는 책을 고르면 제목과 챕터를 입력하지 않아도 됩니다.')}</span>
+        </div>
+        <div id="library-picker" class="library-picker" hidden></div>
+      </div>` : ''}
 
       <div class="field">
         <label class="field-label" for="f-title" id="f-title-label"></label>
@@ -2365,6 +2620,7 @@ function renderGoalForm(root, goal, bookId = null) {
   });
   form.addEventListener('input', updateFormView);
   bindChapterEditor(form, updateFormView);
+  bindLibraryPicker(form);
   form.addEventListener('click', (e) => {
     if (e.target.id === 'add-rest-date') {
       const dateEl = form.querySelector('#f-rest-date');
@@ -2418,12 +2674,85 @@ function renderGoalForm(root, goal, bookId = null) {
   updateFormView();
 }
 
-/* ----- 챕터 편집기 (목표 입력 · 필독서 관리 공용, 한 화면에 하나) ----- */
+/* ----- 도서관에서 고르기 (새 책 목표) ----- */
+
+/** 고를 수 있는 도서관 책 (검색어: 제목·저자) */
+function filterLibraryBooks(books, query) {
+  const q = normalizeBookTitle(query);
+  if (!q) return books;
+  return books.filter((b) => normalizeBookTitle(b.title).includes(q) || normalizeBookTitle(b.author).includes(q));
+}
+
+function renderLibraryPickerList(query) {
+  const books = filterLibraryBooks(requiredBooks, query)
+    .slice().sort((a, b) => a.title.localeCompare(b.title));
+  if (!requiredBooks.length) return `<div class="empty">${t('아직 고를 수 있는 도서관 책이 없습니다.')}</div>`;
+  if (!books.length) return `<div class="empty">${t('검색 결과가 없습니다.')}</div>`;
+  return `<ul class="library-list">${books.map((b) => {
+    const mine = findGoalForBook(appData.goals, b.id);
+    const pages = b.lastPage - b.chapters[0].startPage + 1;
+    return `
+      <li>
+        <button type="button" class="library-item" data-pick-book="${escapeHtml(b.id)}">
+          ${renderCoverThumb(b.coverUrl, 'sm') || '<span class="cover cover-sm cover-blank"></span>'}
+          <span class="library-item-text">
+            <strong>${escapeHtml(b.title)}</strong>
+            <span class="muted small">${b.author ? `${escapeHtml(b.author)} · ` : ''}${t('{pages}페이지 · {n}개 챕터', { pages, n: b.chapters.length })}</span>
+          </span>
+          ${renderBookTag(bookTagKind(b))}
+          ${mine ? `<span class="badge badge-ontrack">${t('계획 있음')}</span>` : ''}
+        </button>
+      </li>`;
+  }).join('')}</ul>`;
+}
+
+function bindLibraryPicker(form) {
+  const picker = form.querySelector('#library-picker');
+  if (!picker) return;
+  form.addEventListener('click', (e) => {
+    if (e.target.closest('[data-action="library-open"]')) {
+      if (!picker.hidden) { picker.hidden = true; return; }
+      picker.innerHTML = `
+        <input type="search" id="library-search" class="input input-wide" placeholder="${t('제목이나 저자로 검색')}" aria-label="${t('도서관 검색')}">
+        <div id="library-results">${renderLibraryPickerList('')}</div>`;
+      picker.hidden = false;
+      const search = picker.querySelector('#library-search');
+      search.addEventListener('input', (ev) => {
+        ev.stopPropagation();
+        picker.querySelector('#library-results').innerHTML = renderLibraryPickerList(search.value);
+      });
+      search.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') ev.preventDefault(); });
+      search.focus();
+      return;
+    }
+    const pick = e.target.closest('[data-pick-book]');
+    if (pick) navigate(`#/new/book/${pick.dataset.pickBook}`);
+  });
+}
+
+/* ----- 챕터 편집기 (목표 입력 · 도서관 관리 공용, 한 화면에 하나) ----- */
 
 function renderChapterEditorHtml(lastPage) {
   return `
     <div class="field">
       <span class="field-label">${t('챕터 목록')}</span>
+      <div class="toc-tools">
+        <button type="button" class="btn btn-small" data-action="toc-paste">${t('목차 붙여넣기')}</button>
+        <label class="btn btn-small" id="toc-photo-label">
+          <span class="toc-photo-text">${t('목차 사진으로 채우기')}</span>
+          <input type="file" id="toc-photo" accept="image/*" hidden>
+        </label>
+        <span class="field-hint">${t('목차를 복사해 붙여넣거나 사진을 찍어 올리면 챕터를 자동으로 채웁니다.')}</span>
+      </div>
+      <div id="toc-paste-panel" class="toc-paste" hidden>
+        <textarea id="toc-text" class="input textarea" rows="8"
+          placeholder="${t('예:\n1장 도입 ········ 11\n2장 기도의 삶 ····· 35\n3장 말씀 묵상 (58)')}"></textarea>
+        <div class="toc-paste-actions">
+          <span id="toc-parse-count" class="field-hint"></span>
+          <button type="button" class="btn btn-small" data-action="toc-cancel">${t('취소')}</button>
+          <button type="button" class="btn btn-small btn-primary" data-action="toc-apply">${t('챕터 채우기')}</button>
+        </div>
+      </div>
       <table class="chapter-table">
         <thead>
           <tr><th class="col-drag"></th><th class="col-no">#</th><th>${t('챕터 이름')}</th><th class="col-page">${t('시작 페이지')}</th><th class="col-page">${t('끝 페이지')}</th><th class="col-del"></th></tr>
@@ -2452,12 +2781,13 @@ function fillChapterEditor(chapters, locked = false) {
   if (locked) {
     document.querySelectorAll('#chapter-rows input, #f-last-page').forEach((el) => { el.readOnly = true; });
     document.getElementById('add-chapter').hidden = true;
-    document.querySelectorAll('.ch-del, .ch-insert, .drag-handle').forEach((el) => { el.hidden = true; });
+    document.querySelectorAll('.ch-del, .ch-insert, .drag-handle, .toc-tools').forEach((el) => { el.hidden = true; });
     document.getElementById('chapter-rows').classList.add('is-locked');
   }
 }
 
 function bindChapterEditor(container, onChange) {
+  bindTocTools(container, onChange);
   container.addEventListener('click', (e) => {
     if (e.target.id === 'add-chapter') {
       addChapterRow({ name: '', startPage: '' });
@@ -2477,6 +2807,149 @@ function bindChapterEditor(container, onChange) {
     }
   });
   bindChapterDrag(container.querySelector('#chapter-rows'), onChange);
+}
+
+/* ----- 목차로 챕터 채우기 (붙여넣기 · 사진) ----- */
+
+/** 챕터 편집기에 입력한 내용이 있는지 */
+function hasChapterInput() {
+  return readChapterEditor().chapters.some((c) => c.name.trim() || Number.isFinite(c.startPage));
+}
+
+/** 챕터 행을 통째로 바꾼다 */
+function replaceChapterRows(chapters) {
+  document.getElementById('chapter-rows').innerHTML = '';
+  const list = chapters.length ? chapters : [{ name: '', startPage: null }];
+  list.forEach((ch) => addChapterRow({ name: ch.name || '', startPage: Number.isInteger(ch.startPage) ? ch.startPage : '' }));
+}
+
+function showChapterEditorError(container, title, message) {
+  const box = container.querySelector('#form-errors');
+  if (!box) { alert(`${title}\n${message}`); return; }
+  box.innerHTML = `<strong>${escapeHtml(title)}</strong><ul><li>${escapeHtml(message)}</li></ul>`;
+  box.hidden = false;
+  box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+/** 목차로 채우기 전에 기존 입력을 덮어써도 되는지 */
+function confirmReplaceChapters() {
+  return !hasChapterInput() || confirm(t('지금 입력한 챕터를 목차 내용으로 바꿀까요?'));
+}
+
+/** 이미지 파일 → 긴 변 maxSide 이하 JPEG의 base64 */
+function imageFileToJpegBase64(file, maxSide = 1600) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.85).split(',')[1]);
+      } catch (err) {
+        reject(err);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(t('이미지를 읽지 못했습니다. JPG나 PNG 사진으로 다시 시도하세요.')));
+    };
+    img.src = url;
+  });
+}
+
+/** 목차 사진 → { chapters: [{ name, startPage|null }], lastPage|null } (서버에서 읽는다) */
+async function readTocFromImage(file) {
+  const base64 = await imageFileToJpegBase64(file);
+  const { data, error } = await getSupabase().functions.invoke('study-planner-toc', { body: { base64, mediaType: 'image/jpeg' } });
+  if (error) {
+    let message = error.message || String(error);
+    try {
+      const body = await error.context.json();
+      if (body && body.error) message = body.error;
+    } catch {
+      // 본문이 JSON이 아니면 기본 메시지
+    }
+    throw new Error(message);
+  }
+  const chapters = (data && Array.isArray(data.chapters) ? data.chapters : [])
+    .filter((c) => c && typeof c.name === 'string' && c.name.trim())
+    .map((c) => ({ name: c.name.trim(), startPage: Number.isInteger(c.startPage) && c.startPage > 0 ? c.startPage : null }));
+  const lastPage = data && Number.isInteger(data.lastPage) && data.lastPage > 0 ? data.lastPage : null;
+  return { chapters, lastPage };
+}
+
+function bindTocTools(container, onChange) {
+  const panel = container.querySelector('#toc-paste-panel');
+  const textEl = container.querySelector('#toc-text');
+  const photo = container.querySelector('#toc-photo');
+  const photoLabel = container.querySelector('#toc-photo-label');
+  if (!panel || !photo) return;
+
+  container.addEventListener('click', (e) => {
+    const action = e.target.closest('[data-action]')?.dataset.action;
+    if (action === 'toc-paste') {
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) textEl.focus();
+    } else if (action === 'toc-cancel') {
+      panel.hidden = true;
+      textEl.value = '';
+      container.querySelector('#toc-parse-count').textContent = '';
+    } else if (action === 'toc-apply') {
+      const chapters = parseTocText(textEl.value);
+      if (!chapters.length) { textEl.focus(); return; }
+      if (!confirmReplaceChapters()) return;
+      replaceChapterRows(chapters);
+      panel.hidden = true;
+      textEl.value = '';
+      container.querySelector('#toc-parse-count').textContent = '';
+      onChange();
+    }
+  });
+  textEl.addEventListener('input', () => {
+    const chapters = parseTocText(textEl.value);
+    const withPage = chapters.filter((c) => c.startPage !== null).length;
+    container.querySelector('#toc-parse-count').textContent = chapters.length
+      ? t('{n}개 챕터 인식 (페이지 {p}개)', { n: chapters.length, p: withPage }) : '';
+  });
+  textEl.addEventListener('keydown', (e) => e.stopPropagation());
+
+  photo.addEventListener('change', async () => {
+    const file = photo.files[0];
+    photo.value = '';
+    if (!file) return;
+    if (!confirmReplaceChapters()) return;
+    const text = photoLabel.querySelector('.toc-photo-text');
+    const label = text.textContent;
+    text.textContent = t('목차 읽는 중…');
+    photoLabel.classList.add('is-loading');
+    photo.disabled = true;
+    try {
+      const { chapters, lastPage } = await readTocFromImage(file);
+      if (!chapters.length) throw new Error(t('사진에서 목차를 찾지 못했습니다. 목차가 잘 보이게 다시 찍어 주세요.'));
+      replaceChapterRows(chapters);
+      const lastEl = container.querySelector('#f-last-page');
+      if (lastPage && lastEl && lastEl.value === '') lastEl.value = lastPage;
+      const box = container.querySelector('#form-errors');
+      if (box) box.hidden = true;
+      onChange();
+    } catch (err) {
+      console.warn('[toc] 목차 사진 읽기 실패:', err);
+      showChapterEditorError(container, t('목차를 읽지 못했습니다'), err.message || String(err));
+    } finally {
+      text.textContent = label;
+      photoLabel.classList.remove('is-loading');
+      photo.disabled = false;
+    }
+  });
 }
 
 /** 손잡이(⠿)를 잡고 끌어서 챕터 순서 바꾸기 */
@@ -2692,6 +3165,8 @@ function updateFormView() {
   const isBook = input.type === 'book';
   const isBible = input.type === 'bible';
   document.querySelector('[data-section="book"]').hidden = !isBook;
+  const pickSection = document.querySelector('[data-section="book-pick"]');
+  if (pickSection) pickSection.hidden = !isBook;
   document.querySelector('[data-section="lecture"]').hidden = input.type !== 'lecture';
   document.querySelector('[data-section="bible"]').hidden = !isBible;
   document.getElementById('f-title-label').textContent = t({ book: '책 제목', lecture: '강의 이름', bible: '통독 이름' }[input.type]);
@@ -2764,6 +3239,8 @@ function submitGoalForm(goal, requiredBookId = null) {
     const created = createGoalFromInput(input, requiredBookId);
     appData.goals.push(created);
     commit();
+    // 도서관에 없는 책이면 관리자 검토를 위해 도서관에 제출 (실패해도 목표는 그대로)
+    if (!requiredBookId && created.type === 'book') submitGoalToLibrary(created);
     navigate(requiredBookId ? `#/goal/${created.id}` : '#/');
   }
 }
@@ -2808,12 +3285,13 @@ function renderGoalDetail(root, goal) {
           <h1>${escapeHtml(goal.title)}</h1>
           ${getBookAuthor(goal) ? `<p class="detail-author">${t('{author} 지음', { author: escapeHtml(getBookAuthor(goal)) })}</p>` : ''}
           <p class="muted">
-            ${goal.requiredBookId && requiredBooks.some((b) => b.id === goal.requiredBookId)
-              ? `<span class="type-tag type-required">${t('필독서')}</span>`
+            ${bookTagKind(libraryBookForGoal(goal))
+              ? renderBookTag(bookTagKind(libraryBookForGoal(goal)))
               : `<span class="type-tag type-${goal.type}">${typeLabel(goal.type)}</span>`}
             ${goal.startDate} ~ ${goal.dueDate} · ${formatDday(s.dday)}
             ${getRestWeekdays(goal).length ? ` · ${t('쉬는 요일 {days}', { days: weekdayListLabel(getRestWeekdays(goal)) })}` : ''}
           </p>
+          ${renderSubmissionStatus(goal)}
           </div>
         </div>
         <div class="header-actions">
@@ -2906,15 +3384,28 @@ function getCompareMessage(goal, s) {
   return { tone: 'ontrack', html: t('계획대로 진행 중이에요. 오늘 <b>{amount}</b> 남았어요.', { amount: u(s.target - s.done) }) };
 }
 
-/** 관리자가 필독서 내용을 바꿨으면 반영 안내 */
+/** 도서관 책 내용이 내 계획과 다르면 적용 안내 (내가 제출한 책이면 검토 중 수정으로 안내) */
 function renderRequiredBookNotice(goal) {
-  const book = goal.requiredBookId ? requiredBooks.find((b) => b.id === goal.requiredBookId) : null;
+  const book = libraryBookForGoal(goal);
   if (!book || !isRequiredBookChanged(goal, book) || detailState.preview) return '';
+  const reviewed = !!findSubmissionForGoal(goal.id);
   return `
     <div class="notice notice-row">
-      <span>${t('관리자가 이 필독서의 책 정보(제목·챕터·페이지)를 바꿨습니다. 내 계획에 반영하려면 미리보기를 확인하세요.')}</span>
-      <button type="button" class="btn btn-small" data-action="sync-required">${t('반영 미리보기')}</button>
+      <span>${reviewed
+        ? t('도서관 검토 중 관리자가 책 정보를 수정했습니다. 내 계획에 적용할까요?')
+        : t('관리자가 도서관의 책 정보(제목·챕터·페이지)를 수정했습니다. 내 계획에 적용할까요?')}</span>
+      <button type="button" class="btn btn-small" data-action="sync-required">${t('적용 미리보기')}</button>
     </div>`;
+}
+
+/** 내가 도서관에 제출한 책의 검토 상태 (작은 안내 한 줄) */
+function renderSubmissionStatus(goal) {
+  const sub = findSubmissionForGoal(goal.id);
+  if (!sub) return '';
+  const text = sub.status === 'pending' ? t('도서관 검토 대기 중')
+    : sub.status === 'rejected' ? t('도서관 등록 반려됨') + (sub.reviewNote ? ` · ${escapeHtml(sub.reviewNote)}` : '')
+    : t('도서관에 등록됨');
+  return `<p class="muted small submission-status">${text}</p>`;
 }
 
 function renderSummaryPanel(goal, s) {
@@ -3672,12 +4163,15 @@ const adminState = {
   viewBasis: null, // 회원 계획 보기에서 선택한 기준 (책: page/chapter)
   editingBookId: null, // null | 'new' | 책 id
   cover: null, // 편집 중인 표지 { file?, previewUrl, removed? }
+  assignments: [], // [{ book_id, user_id }] 모든 배정
+  libraryFilter: 'all', // 'all' | 'pending' | 'required' | 'public' | 'assigned'
+  mergingId: null, // "기존 책과 연결"을 고르는 중인 제출 id
 };
 
 const ADMIN_TABS = [
   ['progress', '진도 현황'],
   ['plans', '회원 계획'],
-  ['books', '사역자 필독서'],
+  ['books', '도서관'],
   ['members', '회원 관리'],
 ];
 
@@ -3685,12 +4179,14 @@ async function loadAdminData() {
   adminState.loading = true;
   adminState.error = null;
   try {
-    const [profiles, books, goals] = await Promise.all([
-      adminLoadProfiles(), loadRequiredBooks(), adminLoadAllGoals(),
+    const [profiles, rows, goals, assignments] = await Promise.all([
+      adminLoadProfiles(), loadLibraryRows(), adminLoadAllGoals(), adminLoadAssignments(),
     ]);
     adminState.profiles = profiles;
     adminState.goals = goals.filter((x) => checkGoalShape(x.goal, 0) === null);
-    requiredBooks = books;
+    adminState.assignments = assignments;
+    myAssignedBookIds = new Set(assignments.filter((a) => a.user_id === currentUser.id).map((a) => a.book_id));
+    setLibraryRows(rows);
     adminState.loaded = true;
   } catch (err) {
     console.error('[admin] 불러오기 실패:', err);
@@ -3746,7 +4242,7 @@ function renderAdmin(root, tab, route = {}) {
     </div>`;
   bindAdminEvents(root.querySelector('#admin'), tab);
   if (tab === 'books' && adminState.editingBookId && adminState.loaded) {
-    const book = requiredBooks.find((b) => b.id === adminState.editingBookId);
+    const book = libraryRows.find((b) => b.id === adminState.editingBookId);
     fillChapterEditor(book ? book.chapters : []);
     refreshChapterEditor();
   }
@@ -3754,14 +4250,20 @@ function renderAdmin(root, tab, route = {}) {
 
 /* ----- 진도 현황 ----- */
 
+/** 책을 받아야 하는 사람: 팀 필독서면 우리 팀 + 배정된 사람 */
+function bookAudience(book) {
+  const ids = new Set(adminState.assignments.filter((a) => a.book_id === book.id).map((a) => a.user_id));
+  return adminState.profiles.filter((p) => (book.teamRequired && p.in_team) || ids.has(p.user_id));
+}
+
 function renderAdminProgress() {
-  const team = adminState.profiles.filter((p) => p.in_team);
-  if (!requiredBooks.length) return `<div class="empty">${t('아직 필독서가 없습니다. <a href="#/admin/books">사역자 필독서</a>에서 추가하세요.')}</div>`;
-  if (!team.length) return `<div class="empty">${t('우리 팀으로 지정된 사람이 없습니다. <a href="#/admin/members">회원 관리</a>에서 지정하세요.')}</div>`;
+  const books = requiredBooks.filter((b) => b.teamRequired || adminState.assignments.some((a) => a.book_id === b.id));
+  if (!books.length) return `<div class="empty">${t('아직 필독서나 배정된 책이 없습니다. <a href="#/admin/books">도서관</a>에서 정하세요.')}</div>`;
   const today = todayStr();
 
-  return requiredBooks.map((book) => {
-    const rows = team.map((p) => {
+  return books.map((book) => {
+    const people = bookAudience(book);
+    const rows = people.map((p) => {
       const entry = adminState.goals.find((x) => x.userId === p.user_id && x.goal.requiredBookId === book.id);
       return { p, goal: entry ? entry.goal : null, s: entry ? getGoalSummary(entry.goal, 'page', today) : null };
     });
@@ -3781,13 +4283,14 @@ function renderAdminProgress() {
               ${book.author ? `<span class="muted">${escapeHtml(book.author)}</span>` : ''}
             </div>
           </div>
-          <span class="muted">${t('계획 세운 사람 {planned}/{total}명', { planned, total: team.length })}${behind ? ` · <b class="text-danger">${t('밀림 {n}명', { n: behind })}</b>` : ''}</span>
+          <span class="muted">${renderLibraryBadges(book)} ${t('계획 세운 사람 {planned}/{total}명', { planned, total: people.length })}${behind ? ` · <b class="text-danger">${t('밀림 {n}명', { n: behind })}</b>` : ''}</span>
         </div>
         <table class="admin-table">
           <thead>
             <tr><th>${t('이름')}</th><th>${t('기간')}</th><th class="num">${t('오늘까지 권장')}</th><th class="num">${t('실제 완료')}</th><th class="num">${t('끝')}</th><th class="col-bar">${t('진도')}</th><th>${t('상태')}</th></tr>
           </thead>
           <tbody>
+            ${!rows.length ? `<tr class="is-empty"><td colspan="7" class="muted">${t('아직 이 책을 받을 사람이 없습니다. (우리 팀 지정은 <a href="#/admin/members">회원 관리</a>에서)')}</td></tr>` : ''}
             ${rows.map(({ p, goal, s }) => {
               if (!goal) {
                 return `<tr class="is-empty"><td>${escapeHtml(profileName(p))}</td><td colspan="5" class="muted">${t('아직 계획을 세우지 않았습니다')}</td><td><span class="badge badge-waiting">${t('계획 없음')}</span></td></tr>`;
@@ -3865,7 +4368,7 @@ function renderAdminGoalRow(p, goal, s) {
     <tr class="${s.isActive ? '' : 'is-finished-row'}">
       <td>
         <a class="member-link" href="#/admin/member/${escapeHtml(p.user_id)}/${escapeHtml(goal.id)}">${escapeHtml(goal.title)}</a>
-        <div class="muted small">${book ? t('필독서') : typeLabel(goal.type)}${getBookAuthor(goal) ? ` · ${escapeHtml(getBookAuthor(goal))}` : ''}</div>
+        <div class="muted small">${book ? t('도서관') : typeLabel(goal.type)}${getBookAuthor(goal) ? ` · ${escapeHtml(getBookAuthor(goal))}` : ''}</div>
       </td>
       <td class="muted">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
       <td class="num">${formatPosition(goal, s.basis, s.target)}</td>
@@ -3923,17 +4426,48 @@ function renderAdminMemberGoal(userId, goalId) {
     </section>`;
 }
 
-/* ----- 사역자 필독서 ----- */
+/* ----- 도서관 (필독서 · 공개 · 배정 · 검토) ----- */
+
+const LIBRARY_FILTERS = [
+  ['all', '전체||filter'],
+  ['pending', '검토 대기'],
+  ['required', '필독서'],
+  ['public', '공개'],
+  ['assigned', '배정'],
+];
+
+function bookAssignees(bookId) {
+  return adminState.assignments.filter((a) => a.book_id === bookId).map((a) => a.user_id);
+}
+
+/** 책의 배포 표시: 필독서 · 공개 · 배정 N명 */
+function renderLibraryBadges(book) {
+  const n = bookAssignees(book.id).length;
+  return [
+    book.teamRequired ? `<span class="type-tag type-required">${t('필독서')}</span>` : '',
+    book.isPublic ? `<span class="type-tag type-public">${t('공개')}</span>` : '',
+    n ? `<span class="type-tag type-assigned">${t('배정 {n}명', { n })}</span>` : '',
+  ].filter(Boolean).join(' ');
+}
+
+function bookPages(book) {
+  const first = book.chapters && book.chapters[0] ? Number(book.chapters[0].startPage) : NaN;
+  return Number.isFinite(first) ? book.lastPage - first + 1 : 0;
+}
 
 function renderAdminBooks() {
-  const team = adminState.profiles.filter((p) => p.in_team);
   const editing = adminState.editingBookId;
-  const book = editing && editing !== 'new' ? requiredBooks.find((b) => b.id === editing) : null;
+  const book = editing && editing !== 'new' ? libraryRows.find((b) => b.id === editing) : null;
+  const reviewing = !!(book && book.status === 'pending');
+  const pending = libraryRows.filter((b) => b.status === 'pending');
+  const filter = adminState.libraryFilter;
+  const assigned = book ? bookAssignees(book.id) : [];
 
   const editor = editing ? `
     <form id="book-form" class="panel admin-editor" novalidate>
-      <h2 class="section-title">${book ? t('필독서 수정') : t('필독서 추가')}</h2>
-      ${book ? `<p class="notice">${t('저장하면 이미 계획을 세운 팀원에게 "내용 변경됨"이 표시되고, 각자 미리보기를 확인한 뒤 자기 계획에 반영합니다.')}</p>` : ''}
+      <h2 class="section-title">${reviewing ? t('제출된 책 검토') : book ? t('도서관 책 수정') : t('도서관에 책 추가')}</h2>
+      ${reviewing ? `<p class="notice notice-info">${t('{name}님이 {date}에 만든 계획에서 제출된 책입니다. 필요하면 고친 뒤 승인하세요. 고친 내용은 제출한 사람에게 적용 여부를 묻습니다.', { name: escapeHtml(submitterName(book)), date: timestampToDate(book.createdAt) })}</p>`
+        : book ? `<p class="notice">${t('저장하면 이미 계획을 세운 사람에게 "내용 변경됨"이 표시되고, 각자 미리보기를 확인한 뒤 자기 계획에 적용합니다.')}</p>` : ''}
       <div class="book-form-top">
         <div class="cover-picker">
           <div class="cover-preview" id="cover-preview">${renderCoverPreview(book)}</div>
@@ -3955,52 +4489,148 @@ function renderAdminBooks() {
         </div>
       </div>
       ${renderChapterEditorHtml(book ? book.lastPage : '')}
+      <fieldset class="field distribution">
+        <legend class="field-label">${t('누구에게 보일까요?')} <span class="muted">${t('(아무것도 고르지 않으면 도서관에 보관만 합니다)')}</span></legend>
+        <label class="check-line"><input type="checkbox" id="f-team-required" ${book && book.teamRequired ? 'checked' : ''}>
+          <span><b>${t('팀 필독서')}</b> <span class="muted">${t('우리 팀 모두의 대시보드에 필독서로 보입니다')}</span></span></label>
+        <label class="check-line"><input type="checkbox" id="f-public" ${book && book.isPublic ? 'checked' : ''}>
+          <span><b>${t('공개')}</b> <span class="muted">${t('누구나 새 목표에서 "도서관에서 고르기"로 고를 수 있습니다')}</span></span></label>
+        <div class="assign-picker">
+          <span class="check-line-title"><b>${t('특정 사람에게 배정')}</b> <span class="muted" id="assign-count">${t('{n}명 선택', { n: assigned.length })}</span></span>
+          <input type="search" id="assign-search" class="input" placeholder="${t('이름이나 이메일로 찾기')}" aria-label="${t('회원 찾기')}">
+          <div class="assign-list" id="assign-list">
+            ${adminState.profiles.map((p) => `
+              <label class="assign-item" data-search="${escapeHtml(`${p.name || ''} ${p.email || ''}`.toLowerCase())}">
+                <input type="checkbox" name="assign" value="${escapeHtml(p.user_id)}" ${assigned.includes(p.user_id) ? 'checked' : ''}>
+                <span>${escapeHtml(p.name || '-')}${p.in_team ? ` <span class="type-tag type-required">${t('우리 팀')}</span>` : ''}</span>
+                <span class="muted small">${escapeHtml(p.email || '')}</span>
+              </label>`).join('')}
+          </div>
+        </div>
+      </fieldset>
       <div id="form-errors" class="errors" hidden></div>
       <div class="form-actions">
         <button type="button" class="btn" data-action="book-cancel">${t('취소')}</button>
-        <button type="submit" class="btn btn-primary">${t('저장')}</button>
+        ${reviewing ? `
+          <button type="button" class="btn btn-danger" data-action="review-reject" data-id="${escapeHtml(book.id)}">${t('반려')}</button>
+          <button type="submit" class="btn btn-primary">${t('승인하고 저장')}</button>`
+          : `<button type="submit" class="btn btn-primary">${t('저장')}</button>`}
       </div>
     </form>` : '';
 
-  const list = requiredBooks.length ? `
+  const segments = `
+    <div class="tabs library-filter" role="tablist">
+      ${LIBRARY_FILTERS.map(([key, label]) => {
+        const count = key === 'pending' ? pending.length : filterLibrary(key).length;
+        return `<button type="button" role="tab" class="tab ${key === filter ? 'is-active' : ''}" data-action="library-filter" data-filter="${key}">
+          ${t(label)} <span class="${key === 'pending' && count ? 'count-badge' : 'muted'}">${count}</span></button>`;
+      }).join('')}
+    </div>`;
+
+  const body = filter === 'pending' ? renderReviewQueue(pending, editing) : renderLibraryTable(filterLibrary(filter), editing);
+
+  return `
+    <div class="admin-toolbar">
+      <p class="muted">${t('도서관의 책 정보(제목·챕터·페이지)는 고른 사람 모두에게 공유됩니다. 기간은 각자 정합니다. 회원이 직접 만든 책 목표는 검토 대기로 들어옵니다.')}</p>
+      <button type="button" class="btn btn-primary" data-action="book-new" ${editing ? 'disabled' : ''}>${t('+ 책 추가')}</button>
+    </div>
+    ${editor}
+    ${segments}
+    ${body}`;
+}
+
+/** 승인된 책 중 필터에 맞는 것 */
+function filterLibrary(filter) {
+  return requiredBooks.filter((b) => filter === 'required' ? b.teamRequired
+    : filter === 'public' ? b.isPublic
+    : filter === 'assigned' ? bookAssignees(b.id).length > 0
+    : true);
+}
+
+function submitterName(book) {
+  const p = adminState.profiles.find((x) => x.user_id === book.submittedBy);
+  return p ? profileName(p) : t('알 수 없음');
+}
+
+function renderLibraryTable(books, editing) {
+  if (!books.length) return `<div class="empty">${t('해당하는 책이 없습니다.')}</div>`;
+  return `
     <table class="admin-table panel-table">
-      <thead><tr><th>${t('책 제목')}</th><th class="num">${t('챕터')}</th><th class="num">${t('페이지')}</th><th class="num">${t('계획 세운 팀원')}</th><th></th></tr></thead>
+      <thead><tr><th>${t('책 제목')}</th><th class="num">${t('챕터')}</th><th class="num">${t('페이지')}</th><th class="num">${t('계획 세운 사람')}</th><th></th></tr></thead>
       <tbody>
-        ${requiredBooks.map((b) => {
-          const planned = team.filter((p) => adminState.goals.some((x) => x.userId === p.user_id && x.goal.requiredBookId === b.id)).length;
+        ${books.map((b) => {
+          const planned = new Set(adminState.goals.filter((x) => x.goal.requiredBookId === b.id).map((x) => x.userId)).size;
+          const mine = findGoalForBook(appData.goals, b.id);
           return `
             <tr>
               <td>
                 <div class="book-cell">
                   ${renderCoverThumb(b.coverUrl, 'sm')}
-                  <div><strong>${escapeHtml(b.title)}</strong>${b.author ? `<div class="muted">${escapeHtml(b.author)}</div>` : ''}</div>
+                  <div>
+                    <strong>${escapeHtml(b.title)}</strong>${b.author ? `<div class="muted">${escapeHtml(b.author)}</div>` : ''}
+                    <div class="library-badges">${renderLibraryBadges(b) || `<span class="muted small">${t('보관만')}</span>`}</div>
+                  </div>
                 </div>
               </td>
               <td class="num">${t('{n}개', { n: b.chapters.length })}</td>
-              <td class="num">${formatAmount(b.lastPage - b.chapters[0].startPage + 1, 'page')}</td>
-              <td class="num">${t('{planned}/{total}명', { planned, total: team.length })}</td>
+              <td class="num">${formatAmount(bookPages(b), 'page')}</td>
+              <td class="num">${t('{n}명', { n: planned })}</td>
               <td class="row-actions">
-                ${(() => {
-                  const mine = findGoalForBook(appData.goals, b.id);
-                  return mine
-                    ? `<a class="btn btn-small" href="#/goal/${escapeHtml(mine.id)}">${t('내 계획 보기')}</a>`
-                    : `<a class="btn btn-small btn-primary" href="#/new/book/${escapeHtml(b.id)}">${t('내 계획 세우기')}</a>`;
-                })()}
+                ${mine
+                  ? `<a class="btn btn-small" href="#/goal/${escapeHtml(mine.id)}">${t('내 계획 보기')}</a>`
+                  : `<a class="btn btn-small btn-primary" href="#/new/book/${escapeHtml(b.id)}">${t('내 계획 세우기')}</a>`}
                 <button type="button" class="btn btn-small" data-action="book-edit" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>${t('수정')}</button>
                 <button type="button" class="btn btn-small btn-danger" data-action="book-delete" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>${t('삭제')}</button>
               </td>
             </tr>`;
         }).join('')}
       </tbody>
-    </table>` : `<div class="empty">${t('아직 필독서가 없습니다.')}</div>`;
+    </table>`;
+}
 
-  return `
-    <div class="admin-toolbar">
-      <p class="muted">${t('여기서 정한 책 정보(제목·챕터·페이지)가 우리 팀 모두에게 공유됩니다. 기간은 각자 정합니다.')}</p>
-      <button type="button" class="btn btn-primary" data-action="book-new" ${editing ? 'disabled' : ''}>${t('+ 필독서 추가')}</button>
-    </div>
-    ${editor}
-    ${list}`;
+/** 검토 대기: 회원이 만든 책 목표에서 제출된 책 */
+function renderReviewQueue(pending, editing) {
+  if (!pending.length) return `<div class="empty">${t('검토할 책이 없습니다.')}</div>`;
+  return `<div class="review-list">${pending.map((b) => {
+    const similar = requiredBooks.filter((x) => isSimilarBookTitle(x.title, b.title));
+    const merging = adminState.mergingId === b.id;
+    const choices = [...similar, ...requiredBooks.filter((x) => !similar.includes(x))];
+    return `
+      <div class="panel review-item">
+        <div class="review-main">
+          <div>
+            <strong>${escapeHtml(b.title)}</strong>${b.author ? ` <span class="muted">· ${escapeHtml(b.author)}</span>` : ''}
+            <div class="muted small">${t('{name} · {date} 제출', { name: escapeHtml(submitterName(b)), date: timestampToDate(b.createdAt) })}
+              · ${t('{pages}페이지 · {n}개 챕터', { pages: bookPages(b), n: b.chapters.length })}</div>
+            ${similar.length ? `<div class="similar-hint">${t('비슷한 책이 이미 있음: {titles}', { titles: similar.map((x) => `'${escapeHtml(x.title)}'`).join(', ') })}</div>` : ''}
+          </div>
+          <div class="row-actions">
+            <button type="button" class="btn btn-small" data-action="book-edit" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>${t('검토')}</button>
+            <button type="button" class="btn btn-small btn-primary" data-action="review-approve" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>${t('바로 승인')}</button>
+            <button type="button" class="btn btn-small" data-action="review-merge-open" data-id="${escapeHtml(b.id)}" ${editing || !requiredBooks.length ? 'disabled' : ''}>${t('기존 책과 연결')}</button>
+            <button type="button" class="btn btn-small btn-danger" data-action="review-reject" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>${t('반려')}</button>
+          </div>
+        </div>
+        ${merging ? `
+          <div class="merge-row">
+            <select class="input" id="merge-target" aria-label="${t('연결할 도서관 책')}">
+              ${choices.map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.title)}${x.author ? ` · ${escapeHtml(x.author)}` : ''}</option>`).join('')}
+            </select>
+            <button type="button" class="btn btn-small btn-primary" data-action="review-merge" data-id="${escapeHtml(b.id)}">${t('연결')}</button>
+            <button type="button" class="btn btn-small" data-action="review-merge-cancel">${t('취소')}</button>
+            <span class="field-hint">${t('제출한 사람의 계획이 고른 책과 연결되고, 다른 내용은 적용 여부를 묻습니다.')}</span>
+          </div>` : ''}
+      </div>`;
+  }).join('')}</div>`;
+}
+
+/** 검토 상태 변경 후 목록 갱신 */
+function replaceLibraryRow(saved) {
+  const idx = libraryRows.findIndex((b) => b.id === saved.id);
+  const rows = libraryRows.slice();
+  if (idx >= 0) rows[idx] = saved;
+  else rows.push(saved);
+  setLibraryRows(rows);
 }
 
 /** 편집 중인 표지 미리보기 (새로 고른 파일 > 기존 표지) */
@@ -4020,7 +4650,10 @@ async function submitBookForm(form) {
     title: document.getElementById('f-title').value,
     author: document.getElementById('f-author').value,
     ...readChapterEditor(),
+    teamRequired: form.querySelector('#f-team-required').checked,
+    isPublic: form.querySelector('#f-public').checked,
   };
+  const assignees = [...form.querySelectorAll('input[name="assign"]:checked')].map((el) => el.value);
   const errors = [];
   if (!input.title.trim()) errors.push(t('책 제목을 입력하세요.'));
   errors.push(...validateBookStructure(input));
@@ -4031,26 +4664,59 @@ async function submitBookForm(form) {
     return;
   }
   const id = adminState.editingBookId === 'new' ? null : adminState.editingBookId;
-  const before = id ? requiredBooks.find((b) => b.id === id) : null;
+  const before = id ? libraryRows.find((b) => b.id === id) : null;
   const oldCover = before ? before.coverUrl : null;
   const draft = adminState.cover;
-  form.querySelector('button[type="submit"]').disabled = true;
+  form.querySelectorAll('.form-actions button').forEach((b) => { b.disabled = true; });
   try {
     let coverUrl = oldCover;
     if (draft && draft.file) coverUrl = await adminUploadCover(draft.file);
     else if (draft && draft.removed) coverUrl = null;
-    const saved = await adminSaveRequiredBook({ ...input, id, coverUrl });
+    const status = before && before.status !== 'approved' ? 'approved' : undefined; // 검토 중이면 승인
+    const saved = await adminSaveRequiredBook({ ...input, id, coverUrl, status });
     if (oldCover && oldCover !== coverUrl) adminRemoveCoverFile(oldCover);
-    const idx = requiredBooks.findIndex((b) => b.id === saved.id);
-    if (idx >= 0) requiredBooks[idx] = saved;
-    else requiredBooks.push(saved);
+    replaceLibraryRow(saved);
+    await adminSyncAssignments(saved.id, assignees);
+    myAssignedBookIds = new Set(adminState.assignments.filter((a) => a.user_id === currentUser.id).map((a) => a.book_id));
     adminState.editingBookId = null;
     resetCoverDraft();
     render();
   } catch (err) {
     box.innerHTML = `<strong>${t('저장하지 못했습니다')}</strong><ul><li>${escapeHtml(err.message || String(err))}</li></ul>`;
     box.hidden = false;
-    form.querySelector('button[type="submit"]').disabled = false;
+    form.querySelectorAll('.form-actions button').forEach((b) => { b.disabled = false; });
+  }
+}
+
+/** 검토: 바로 승인 · 반려 · 기존 책과 연결 */
+async function adminReviewAction(action, id, btn) {
+  const book = libraryRows.find((b) => b.id === id);
+  if (!book) return;
+  let change;
+  if (action === 'review-approve') {
+    change = { status: 'approved' };
+  } else if (action === 'review-reject') {
+    const note = prompt(t("'{title}'을(를) 반려합니다. 제출한 사람에게 보여줄 메모 (선택)", { title: book.title }), '');
+    if (note === null) return;
+    change = { status: 'rejected', reviewNote: note.trim() || null };
+  } else if (action === 'review-merge') {
+    const target = document.getElementById('merge-target').value;
+    if (!target) return;
+    change = { status: 'merged', mergedInto: target };
+  } else return;
+  if (btn) btn.disabled = true;
+  try {
+    const saved = await adminSetBookStatus(id, change);
+    replaceLibraryRow(saved);
+    adminState.mergingId = null;
+    if (adminState.editingBookId === id) {
+      adminState.editingBookId = null;
+      resetCoverDraft();
+    }
+    render();
+  } catch (err) {
+    alert(t('변경하지 못했습니다: {message}', { message: err.message }));
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -4099,6 +4765,18 @@ function bindAdminEvents(container, tab) {
       adminState.loaded = false;
       adminState.editingBookId = null;
       render();
+    } else if (action === 'library-filter') {
+      adminState.libraryFilter = btn.dataset.filter;
+      adminState.mergingId = null;
+      render();
+    } else if (action === 'review-merge-open') {
+      adminState.mergingId = btn.dataset.id;
+      render();
+    } else if (action === 'review-merge-cancel') {
+      adminState.mergingId = null;
+      render();
+    } else if (action === 'review-approve' || action === 'review-reject' || action === 'review-merge') {
+      await adminReviewAction(action, btn.dataset.id, btn);
     } else if (action === 'book-new') {
       resetCoverDraft();
       adminState.editingBookId = 'new';
@@ -4116,13 +4794,14 @@ function bindAdminEvents(container, tab) {
       adminState.cover = { removed: true };
       container.querySelector('#cover-preview').innerHTML = renderCoverPreview(null);
     } else if (action === 'book-delete') {
-      const book = requiredBooks.find((b) => b.id === btn.dataset.id);
-      if (!confirm(t("'{title}' 필독서를 삭제할까요?\n팀원들이 이미 세운 계획은 지워지지 않고 일반 목표로 남습니다.", { title: book.title }))) return;
+      const book = libraryRows.find((b) => b.id === btn.dataset.id);
+      if (!confirm(t("'{title}' 책을 도서관에서 삭제할까요?\n이미 세운 계획은 지워지지 않고 일반 목표로 남습니다.", { title: book.title }))) return;
       btn.disabled = true;
       try {
         await adminDeleteRequiredBook(book.id);
         adminRemoveCoverFile(book.coverUrl);
-        requiredBooks = requiredBooks.filter((b) => b.id !== book.id);
+        setLibraryRows(libraryRows.filter((b) => b.id !== book.id));
+        adminState.assignments = adminState.assignments.filter((a) => a.book_id !== book.id);
         render();
       } catch (err) {
         alert(t('삭제하지 못했습니다: {message}', { message: err.message }));
@@ -4164,7 +4843,20 @@ function bindAdminEvents(container, tab) {
   if (tab === 'books') {
     const form = container.querySelector('#book-form');
     if (form) {
-      form.addEventListener('input', refreshChapterEditor);
+      form.addEventListener('input', (e) => {
+        if (e.target.id === 'assign-search') {
+          const q = e.target.value.trim().toLowerCase();
+          form.querySelectorAll('.assign-item').forEach((el) => { el.hidden = !!q && !el.dataset.search.includes(q); });
+          return;
+        }
+        refreshChapterEditor();
+      });
+      form.addEventListener('change', (e) => {
+        if (e.target.name === 'assign') {
+          form.querySelector('#assign-count').textContent = t('{n}명 선택', { n: form.querySelectorAll('input[name="assign"]:checked').length });
+        }
+      });
+      form.querySelector('#assign-search').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
       bindChapterEditor(form, refreshChapterEditor);
       form.addEventListener('submit', (e) => {
         e.preventDefault();
@@ -4319,7 +5011,8 @@ async function drawPlanImage(goal, options) {
   /* ===== 왼쪽 ===== */
   const LW = 640;
   let y = P;
-  const isRequired = goal.requiredBookId && requiredBooks.some((b) => b.id === goal.requiredBookId);
+  const libraryTag = bookTagKind(libraryBookForGoal(goal));
+  const isRequired = !!libraryTag;
 
   // 표지 + 제목
   let tx = P;
@@ -4337,7 +5030,7 @@ async function drawPlanImage(goal, options) {
   let ty = y;
   if (isRequired) {
     ctx.font = font(22, 700);
-    const tagText = t('사역자 필독서');
+    const tagText = libraryTag === 'assigned' ? t('배정된 책') : t('사역자 필독서');
     const tw = ctx.measureText(tagText).width + 26;
     roundRect(ctx, tx, ty, tw, 38, 8, C.requiredSoft);
     ctx.fillStyle = C.required;
@@ -5052,6 +5745,82 @@ const EN = {
   '저장했습니다.': 'Saved.',
   '복사했습니다. 카톡 등에 붙여넣기 하세요.': 'Copied. Paste it into a chat or message.',
   '이 브라우저에서는 복사할 수 없습니다. PNG 저장을 이용하세요.': "This browser can't copy images. Use Save PNG instead.",
+
+  // 도서관
+  '도서관': 'Library',
+  '배정': 'Assigned',
+  '배정된 책': 'Assigned book',
+  '필독서 · 배정된 책': 'Required & assigned books',
+  '도서관 책으로 계획 세우기': 'Plan a library book',
+  '도서관에 있는 책입니다. 책 제목과 챕터는 관리자가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.':
+    'This book is from the library. The admin sets the title and chapters; here you can only choose the start date, due date and rest days.',
+  '도서관에서 고르기': 'Pick from library',
+  '도서관에 있는 책을 고르면 제목과 챕터를 입력하지 않아도 됩니다.': "Pick a book from the library and you won't need to enter the title and chapters.",
+  '아직 고를 수 있는 도서관 책이 없습니다.': 'There are no library books you can pick yet.',
+  '검색 결과가 없습니다.': 'No results.',
+  '계획 있음': 'Planned',
+  '제목이나 저자로 검색': 'Search by title or author',
+  '도서관 검색': 'Search the library',
+  '목차 붙여넣기': 'Paste table of contents',
+  '목차 사진으로 채우기': 'Fill from TOC photo',
+  '목차를 복사해 붙여넣거나 사진을 찍어 올리면 챕터를 자동으로 채웁니다.': 'Paste the table of contents or upload a photo of it to fill in the chapters automatically.',
+  '예:\n1장 도입 ········ 11\n2장 기도의 삶 ····· 35\n3장 말씀 묵상 (58)': 'e.g.\n1. Introduction ········ 11\n2. A Life of Prayer ····· 35\n3. Meditating on the Word (58)',
+  '챕터 채우기': 'Fill chapters',
+  '지금 입력한 챕터를 목차 내용으로 바꿀까요?': 'Replace the chapters you entered with the table of contents?',
+  '이미지를 읽지 못했습니다. JPG나 PNG 사진으로 다시 시도하세요.': "Couldn't read the image. Try again with a JPG or PNG photo.",
+  '{n}개 챕터 인식 (페이지 {p}개)': (p) => `${plural(p.n, 'chapter')} found (${plural(p.p, 'page number')})`,
+  '목차 읽는 중…': 'Reading TOC…',
+  '사진에서 목차를 찾지 못했습니다. 목차가 잘 보이게 다시 찍어 주세요.': "Couldn't find a table of contents in the photo. Please retake it so the contents are clearly visible.",
+  '목차를 읽지 못했습니다': "Couldn't read the table of contents",
+  '도서관 검토 중 관리자가 책 정보를 수정했습니다. 내 계획에 적용할까요?': 'The admin edited the book details while reviewing it for the library. Apply the changes to your plan?',
+  '관리자가 도서관의 책 정보(제목·챕터·페이지)를 수정했습니다. 내 계획에 적용할까요?': 'The admin edited this library book (title, chapters or pages). Apply the changes to your plan?',
+  '적용 미리보기': 'Preview changes',
+  '도서관 검토 대기 중': 'Waiting for library review',
+  '도서관 등록 반려됨': 'Not added to the library',
+  '도서관에 등록됨': 'Added to the library',
+  '아직 필독서나 배정된 책이 없습니다. <a href="#/admin/books">도서관</a>에서 정하세요.': 'No required or assigned books yet. Set them up in the <a href="#/admin/books">Library</a>.',
+  '아직 이 책을 받을 사람이 없습니다. (우리 팀 지정은 <a href="#/admin/members">회원 관리</a>에서)': 'Nobody receives this book yet. (Set team members in <a href="#/admin/members">Members</a>.)',
+  '공개': 'Public',
+  '배정 {n}명': (p) => `Assigned to ${plural(p.n, 'person', 'people')}`,
+  '제출된 책 검토': 'Review submitted book',
+  '도서관 책 수정': 'Edit library book',
+  '도서관에 책 추가': 'Add a book to the library',
+  '{name}님이 {date}에 만든 계획에서 제출된 책입니다. 필요하면 고친 뒤 승인하세요. 고친 내용은 제출한 사람에게 적용 여부를 묻습니다.':
+    "Submitted from a plan {name} made on {date}. Fix anything needed, then approve. {name} will be asked whether to apply your edits.",
+  '저장하면 이미 계획을 세운 사람에게 "내용 변경됨"이 표시되고, 각자 미리보기를 확인한 뒤 자기 계획에 적용합니다.':
+    'When you save, people who already made a plan will see "Changed", and each can preview and apply it to their own plan.',
+  '누구에게 보일까요?': 'Who should see it?',
+  '(아무것도 고르지 않으면 도서관에 보관만 합니다)': '(If nothing is selected, the book is just kept in the library)',
+  '팀 필독서': 'Team required reading',
+  '우리 팀 모두의 대시보드에 필독서로 보입니다': "Shown as required reading on every team member's dashboard",
+  '누구나 새 목표에서 "도서관에서 고르기"로 고를 수 있습니다': 'Anyone can pick it with "Pick from library" when adding a goal',
+  '특정 사람에게 배정': 'Assign to specific people',
+  '{n}명 선택': (p) => `${plural(p.n, 'person', 'people')} selected`,
+  '이름이나 이메일로 찾기': 'Find by name or email',
+  '회원 찾기': 'Find members',
+  '반려': 'Reject',
+  '승인하고 저장': 'Approve & save',
+  '도서관의 책 정보(제목·챕터·페이지)는 고른 사람 모두에게 공유됩니다. 기간은 각자 정합니다. 회원이 직접 만든 책 목표는 검토 대기로 들어옵니다.':
+    "A library book's details (title, chapters, pages) are shared with everyone who picks it; each person sets their own dates. Book goals members create themselves arrive here for review.",
+  '+ 책 추가': '+ Add book',
+  '알 수 없음': 'Unknown',
+  '해당하는 책이 없습니다.': 'No matching books.',
+  '계획 세운 사람': 'People with a plan',
+  '보관만': 'Stored only',
+  '{n}명': (p) => plural(p.n, 'person', 'people'),
+  '검토할 책이 없습니다.': 'Nothing to review.',
+  '{name} · {date} 제출': 'Submitted by {name} · {date}',
+  '비슷한 책이 이미 있음: {titles}': 'A similar book already exists: {titles}',
+  '검토': 'Review',
+  '바로 승인': 'Approve',
+  '기존 책과 연결': 'Link to existing book',
+  '연결할 도서관 책': 'Library book to link to',
+  '연결': 'Link',
+  '제출한 사람의 계획이 고른 책과 연결되고, 다른 내용은 적용 여부를 묻습니다.': "The submitter's plan will be linked to the chosen book, and they'll be asked whether to apply any differences.",
+  "'{title}'을(를) 반려합니다. 제출한 사람에게 보여줄 메모 (선택)": "Rejecting '{title}'. Note for the submitter (optional)",
+  "'{title}' 책을 도서관에서 삭제할까요?\n이미 세운 계획은 지워지지 않고 일반 목표로 남습니다.": "Delete '{title}' from the library?\nPlans people already made won't be deleted; they'll stay as regular goals.",
+  '검토 대기': 'Pending review',
+  '전체||filter': 'All',
 };
 
 /* =========================================================================
@@ -5093,7 +5862,8 @@ async function boot() {
       appData = null;
       syncedSnapshot = new Map();
       account = { isAdmin: false, inTeam: false };
-      requiredBooks = [];
+      setLibraryRows([]);
+      myAssignedBookIds = new Set();
       adminState.loaded = false;
       renderTopbar();
       renderLogin(root);
