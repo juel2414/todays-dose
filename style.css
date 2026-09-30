@@ -1203,3 +1203,13 @@ body.modal-open { overflow: hidden; }
 .progress-toggle .group-share { box-shadow: none; }
 .plans-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .plans-toolbar .admin-intro { margin: 0; }
+
+/* 책 검색 (국립중앙도서관) */
+.book-search { margin-bottom: 18px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--neutral-soft); }
+.book-search-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.book-search-row .input { flex: 0 1 360px; background: var(--surface); }
+.book-search-results { margin-top: 12px; display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow-y: auto; background: var(--surface); border-radius: var(--radius); padding: 4px 10px; }
+.book-result { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.book-result:last-child { border-bottom: 0; }
+.book-result-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cover-none { display: inline-block; background: var(--neutral-soft); border-radius: 4px; }

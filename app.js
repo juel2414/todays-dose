@@ -2793,6 +2793,16 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
         <div id="library-picker" class="library-picker" hidden></div>
       </div>` : ''}
 
+      ${!isEdit && !locked ? `
+      <div data-section="book-search" class="book-search">
+        <div class="book-search-row">
+          <input id="f-book-q" type="search" class="input" placeholder="${t('책 제목이나 ISBN으로 찾기')}" aria-label="${t('책 검색')}">
+          <button type="button" class="btn" data-action="book-search">${t('책 검색')}</button>
+          <span class="field-hint">${t('국립중앙도서관 정보로 제목·저자·마지막 페이지를 채우고, 목차가 있으면 챕터도 채워요.')}</span>
+        </div>
+        <div id="book-search-results" class="book-search-results" hidden></div>
+      </div>` : ''}
+
       <div class="field">
         <label class="field-label" for="f-title" id="f-title-label"></label>
         <input id="f-title" type="text" class="input input-wide" value="${escapeHtml(v.title)}" ${locked ? 'readonly' : ''}>
@@ -2961,6 +2971,7 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
   });
   form.addEventListener('input', updateFormView);
   bindChapterEditor(form, updateFormView);
+  bindBookSearch(form, updateFormView);
   bindLibraryPicker(form);
   form.addEventListener('click', (e) => {
     if (e.target.id === 'add-rest-date') {
@@ -3243,6 +3254,118 @@ function mergeTocResults(results) {
     if (r.lastPage && (!lastPage || r.lastPage > lastPage)) lastPage = r.lastPage;
   });
   return { chapters, lastPage };
+}
+
+/* ----- 책 검색 (국립중앙도서관 ISBN 서지정보, 서버 함수 study-planner-books) ----- */
+
+/** 서버 함수 호출 → data (오류면 서버가 준 메시지로 throw) */
+async function invokeFunction(name, body) {
+  const { data, error } = await getSupabase().functions.invoke(name, { body });
+  if (error) {
+    let message = error.message || String(error);
+    try {
+      const b = await error.context.json();
+      if (b && b.error) message = b.error;
+    } catch {
+      // 본문이 JSON이 아니면 기본 메시지
+    }
+    throw new Error(message);
+  }
+  return data;
+}
+
+let bookSearchResults = [];
+
+function renderBookSearchResults(books) {
+  if (!books.length) return `<p class="muted small">${t('찾는 책이 없습니다. 제목을 조금 짧게 하거나 ISBN으로 찾아보세요.')}</p>`;
+  return books.map((b, i) => `
+    <div class="book-result">
+      ${b.coverUrl ? `<img class="cover cover-sm" src="${escapeHtml(b.coverUrl)}" alt="" loading="lazy">` : '<span class="cover cover-sm cover-none"></span>'}
+      <div class="book-result-main">
+        <strong>${escapeHtml(b.title)}</strong>
+        <span class="muted small">${[b.author, b.publisher, b.publishDate ? b.publishDate.slice(0, 4) : '', b.pages ? t('{n}쪽', { n: b.pages }) : '']
+          .filter(Boolean).map(escapeHtml).join(' · ')}</span>
+      </div>
+      ${b.toc ? `<span class="type-tag type-lecture">${t('목차 있음')}</span>` : ''}
+      <button type="button" class="btn btn-small btn-primary" data-action="book-pick-result" data-index="${i}">${t('고르기')}</button>
+    </div>`).join('');
+}
+
+function bindBookSearch(form, onChange) {
+  const input = form.querySelector('#f-book-q');
+  const box = form.querySelector('#book-search-results');
+  if (!input || !box) return;
+  const run = async () => {
+    const query = input.value.trim();
+    if (query.length < 2) { input.focus(); return; }
+    const btn = form.querySelector('[data-action="book-search"]');
+    btn.disabled = true;
+    box.hidden = false;
+    box.innerHTML = `<p class="muted small">${t('찾는 중…')}</p>`;
+    try {
+      const data = await invokeFunction('study-planner-books', { query });
+      bookSearchResults = Array.isArray(data && data.books) ? data.books : [];
+      box.innerHTML = renderBookSearchResults(bookSearchResults);
+    } catch (err) {
+      box.innerHTML = `<p class="errors small">${escapeHtml(t('책을 찾지 못했습니다: {message}', { message: err.message || String(err) }))}</p>`;
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault(); // 폼 제출 대신 검색
+    run();
+  });
+  form.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    if (btn.dataset.action === 'book-search') run();
+    if (btn.dataset.action !== 'book-pick-result') return;
+    const book = bookSearchResults[Number(btn.dataset.index)];
+    if (!book) return;
+    await pickSearchedBook(form, book, btn, onChange);
+    box.hidden = true;
+  });
+}
+
+/** 검색한 책 고르기: 제목·저자·마지막 페이지 채우고, 목차가 있으면 AI로 챕터를 나눠 채운다 */
+async function pickSearchedBook(form, book, btn, onChange) {
+  form.querySelector('#f-title').value = book.title;
+  form.querySelector('#f-author').value = book.author || '';
+  const lastEl = form.querySelector('#f-last-page');
+  if (book.pages && lastEl) lastEl.value = book.pages;
+  const resultEl = form.querySelector('#toc-result');
+  const parts = [t("'{title}' 정보를 채웠습니다.", { title: book.title })];
+  if (book.pages) parts.push(t('마지막 페이지는 책 전체 쪽수({n}쪽)예요. 본문이 끝나는 페이지와 다르면 고쳐 주세요.', { n: book.pages }));
+  if (book.toc && confirmReplaceChapters()) {
+    btn.disabled = true;
+    btn.textContent = t('목차 정리 중…');
+    try {
+      const data = await invokeFunction('study-planner-books', { action: 'toc', toc: book.toc });
+      // 다른 판본(전자책 등)의 목차면 쪽 번호가 다를 수 있어 버린다
+      const chapters = (data && Array.isArray(data.chapters) ? data.chapters : [])
+        .filter((c) => c && typeof c.name === 'string' && c.name.trim())
+        .map((c) => ({ name: c.name.trim(), startPage: !book.tocFromOtherEdition && Number.isInteger(c.startPage) && c.startPage > 0 ? c.startPage : null }));
+      if (chapters.length) {
+        replaceChapterRows(chapters);
+        const missing = [...form.querySelectorAll('#chapter-rows .ch-start')].filter((el) => el.value === '');
+        missing.forEach((el) => el.classList.add('is-missing'));
+        parts.push(t('목차에서 챕터 {n}개를 채웠습니다.', { n: chapters.length }));
+        if (missing.length) parts.push(t('시작 페이지는 목차 정보에 없어서 노란 칸에 직접 넣어 주세요. (목차 사진을 올리면 AI가 페이지까지 읽어요)'));
+      }
+    } catch (err) {
+      console.warn('[book] 목차 정리 실패:', err);
+      parts.push(t('목차는 불러오지 못했어요. 목차 사진을 올리거나 직접 입력해 주세요.'));
+    }
+  } else if (!book.toc) {
+    parts.push(t('이 책은 목차 정보가 없어요. 목차 사진을 올리거나 직접 입력해 주세요.'));
+  }
+  if (resultEl) {
+    resultEl.textContent = parts.join(' ');
+    resultEl.hidden = false;
+  }
+  onChange();
 }
 
 /** 목차 사진 → { chapters: [{ name, startPage|null }], lastPage|null } (서버에서 읽는다) */
@@ -3614,6 +3737,8 @@ function updateFormView() {
   const isBook = input.type === 'book';
   const isBible = input.type === 'bible';
   document.querySelector('[data-section="book"]').hidden = !isBook;
+  const searchSection = document.querySelector('[data-section="book-search"]');
+  if (searchSection) searchSection.hidden = !isBook;
   const pickSection = document.querySelector('[data-section="book-pick"]');
   if (pickSection) pickSection.hidden = !isBook;
   document.querySelector('[data-section="lecture"]').hidden = input.type !== 'lecture';
@@ -7692,6 +7817,23 @@ const EN = {
   '밀림 {n}개': (p) => `${p.n} behind`,
   '{type} {n}개': (p) => `${p.n} ${p.type.toLowerCase()}${p.n === 1 ? '' : 's'}`,
   '진행 중 {n}개': (p) => `${p.n} in progress`,
+  // 책 검색
+  '책 제목이나 ISBN으로 찾기': 'Search by title or ISBN',
+  '책 검색': 'Find book',
+  '국립중앙도서관 정보로 제목·저자·마지막 페이지를 채우고, 목차가 있으면 챕터도 채워요.': 'Fills in the title, author and last page from the National Library of Korea, plus chapters when a table of contents is available.',
+  '찾는 책이 없습니다. 제목을 조금 짧게 하거나 ISBN으로 찾아보세요.': 'No books found. Try a shorter title or the ISBN.',
+  '{n}쪽': (p) => `${p.n} pp.`,
+  '목차 있음': 'Has contents',
+  '고르기': 'Choose',
+  '찾는 중…': 'Searching…',
+  '책을 찾지 못했습니다: {message}': (p) => `Could not search books: ${p.message}`,
+  "'{title}' 정보를 채웠습니다.": (p) => `Filled in '${p.title}'.`,
+  '마지막 페이지는 책 전체 쪽수({n}쪽)예요. 본문이 끝나는 페이지와 다르면 고쳐 주세요.': (p) => `The last page is the book's total page count (${p.n}); adjust it if the main text ends elsewhere.`,
+  '목차 정리 중…': 'Reading contents…',
+  '목차에서 챕터 {n}개를 채웠습니다.': (p) => `Added ${p.n} chapters from the contents.`,
+  '시작 페이지는 목차 정보에 없어서 노란 칸에 직접 넣어 주세요. (목차 사진을 올리면 AI가 페이지까지 읽어요)': 'Start pages are not in the catalog data, so fill in the yellow boxes. (Upload a photo of the contents and AI reads the pages too.)',
+  '목차는 불러오지 못했어요. 목차 사진을 올리거나 직접 입력해 주세요.': 'Could not load the contents. Upload a photo of the contents or type them in.',
+  '이 책은 목차 정보가 없어요. 목차 사진을 올리거나 직접 입력해 주세요.': 'No contents for this book. Upload a photo of the contents or type them in.',
 };
 
 /* =========================================================================
