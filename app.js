@@ -514,9 +514,10 @@ const BASES_BY_TYPE = {
   book: ['page', 'chapter'],
   lecture: ['lecture'],
   bible: ['bible'],
+  custom: ['custom'],
 };
 
-const TYPE_LABELS = { book: '책', lecture: '강의', bible: '성경 통독' };
+const TYPE_LABELS = { book: '책', lecture: '강의', bible: '성경 통독', custom: '기타' };
 
 /** 종류 이름, 현재 언어로 */
 function typeLabel(type) {
@@ -536,6 +537,7 @@ function getTotalUnits(goal, basis) {
   if (basis === 'page') return bookTotalPages(goal.book);
   if (basis === 'chapter') return goal.book.chapters.length;
   if (basis === 'bible') return bibleTotalChapters(goal.bible);
+  if (basis === 'custom') return goal.custom.total;
   return goal.lecture.titles.length;
 }
 
@@ -560,6 +562,7 @@ function getProgressBounds(goal) {
     return { min: bookFirstPage(goal.book) - 1, max: goal.book.lastPage };
   }
   if (goal.type === 'bible') return { min: 0, max: bibleTotalChapters(goal.bible) };
+  if (goal.type === 'custom') return { min: 0, max: goal.custom.total };
   return { min: 0, max: goal.lecture.titles.length };
 }
 
@@ -629,6 +632,37 @@ function createLectureGoal({ title, startDate, dueDate, restWeekdays = [], restD
     createdAt: now,
     updatedAt: now,
     lecture: { titles: [...titles] },
+    progress: { current: 0, history: [] },
+    plans: null,
+  };
+  goal.plans = buildInitialPlans(goal);
+  return goal;
+}
+
+/** 기타 목록 정리: 항목 이름이 있으면 그 개수가 전체, 없으면 입력한 개수 */
+function normalizeCustom({ customUnit, customTotal, customItems = [] }) {
+  const items = customItems.map((x) => String(x).trim()).filter(Boolean);
+  return {
+    unit: String(customUnit || '').trim(),
+    items,
+    total: items.length ? items.length : Number(customTotal),
+  };
+}
+
+function createCustomGoal({ title, startDate, dueDate, restWeekdays = [], restDates = [], extraDates = [], ...rest }) {
+  const now = new Date().toISOString();
+  const goal = {
+    id: generateId(),
+    type: 'custom',
+    title: title.trim(),
+    startDate,
+    dueDate,
+    restWeekdays: normalizeWeekdays(restWeekdays),
+    restDates: normalizeRestDates(restDates),
+    extraDates: normalizeExtraDates(extraDates),
+    createdAt: now,
+    updatedAt: now,
+    custom: normalizeCustom(rest),
     progress: { current: 0, history: [] },
     plans: null,
   };
@@ -723,6 +757,7 @@ function createBibleGoal({ title, startDate, dueDate, restWeekdays = [], restDat
 function createGoalFromInput(input, requiredBookId = null) {
   if (input.type === 'book') return createBookGoal({ ...input, requiredBookId });
   if (input.type === 'bible') return createBibleGoal(input);
+  if (input.type === 'custom') return createCustomGoal(input);
   return createLectureGoal(input);
 }
 
@@ -803,7 +838,17 @@ function validateBibleInput(input) {
 function validateGoalInput(input) {
   if (input.type === 'book') return validateBookInput(input);
   if (input.type === 'bible') return validateBibleInput(input);
+  if (input.type === 'custom') return validateCustomInput(input);
   return validateLectureInput(input);
+}
+
+function validateCustomInput(input) {
+  const errors = validateCommonInput(input);
+  const c = normalizeCustom(input);
+  if (!c.unit) errors.push(t('단위 이름을 입력하세요. (예: 문제, 과제, 단원)'));
+  if (!Number.isInteger(c.total) || c.total < 1) errors.push(t('전체 개수를 1 이상의 정수로 입력하거나 항목 목록을 적어 주세요.'));
+  else if (c.total > 10000) errors.push(t('전체 개수는 10000개까지 입력할 수 있습니다.'));
+  return errors;
 }
 
 function validateLectureInput(input) {
@@ -867,6 +912,13 @@ function validateGoalEdit(goal, input, today = todayStr()) {
   return errors;
 }
 
+/** 기타 범위: 이름 목록이 있으면 "첫 항목 ~ 끝 항목", 없으면 "12~15번" / "#12–15" */
+function describeCustomRange(goal, from, to) {
+  if (to - from === 1) return customItemLabel(goal, to);
+  if (goal.custom.items.length) return `${customItemLabel(goal, from + 1)} ~ ${customItemLabel(goal, to)}`;
+  return t('{from}~{to}번', { from: from + 1, to });
+}
+
 /** 책 구성(챕터·마지막 페이지)을 같은 형식의 문자열로 (비교용) */
 function bookSignature(chapters, lastPage) {
   return JSON.stringify({
@@ -887,6 +939,10 @@ function isPlanAffectingEdit(goal, input) {
   if (isExtraDatesChanged(goal, input)) return true;
   if (goal.type === 'book') return isBookStructureChanged(goal, input);
   if (goal.type === 'bible') return isBibleRangeChanged(goal, input);
+  if (goal.type === 'custom') {
+    const c = normalizeCustom(input);
+    return c.total !== goal.custom.total || JSON.stringify(c.items) !== JSON.stringify(goal.custom.items);
+  }
   return JSON.stringify(goal.lecture.titles) !== JSON.stringify(input.titles);
 }
 
@@ -928,6 +984,8 @@ function applyGoalEdit(goal, input, today = todayStr()) {
     if (input.author && input.author.trim()) goal.book.author = input.author.trim();
   } else if (goal.type === 'bible') {
     goal.bible = { books: bibleBooksInRange(Number(input.bibleStart), Number(input.bibleEnd)) };
+  } else if (goal.type === 'custom') {
+    goal.custom = normalizeCustom(input);
   } else {
     goal.lecture = { titles: [...input.titles] };
   }
@@ -968,6 +1026,7 @@ function replanGoal(goal, today = todayStr()) {
 
 /** 재분배 가능 여부 (불가능하면 이유 문자열) */
 function getReplanBlocker(goal, today = todayStr()) {
+  useUnitOf(goal);
   const s = getGoalSummary(goal, undefined, today);
   if (s.isComplete) return t('이미 완료한 목표입니다.');
   if (s.isOverdue) return t('마감일이 지났습니다. 마감일을 변경해 주세요.');
@@ -992,6 +1051,9 @@ function goalToInput(goal) {
     titles: goal.type === 'lecture' ? [...goal.lecture.titles] : [],
     bibleStart: goal.type === 'bible' ? bibleIndexOf(goal.bible.books[0].name) : 0,
     bibleEnd: goal.type === 'bible' ? bibleIndexOf(goal.bible.books[goal.bible.books.length - 1].name) : 65,
+    customUnit: goal.type === 'custom' ? goal.custom.unit : '',
+    customTotal: goal.type === 'custom' ? goal.custom.total : NaN,
+    customItems: goal.type === 'custom' ? [...goal.custom.items] : [],
   };
 }
 
@@ -1015,18 +1077,34 @@ function getPrimaryBasis(goal) {
   return goal.type === 'book' ? 'page' : goal.type;
 }
 
-const UNIT_LABELS = { page: '페이지', chapter: '챕터', lecture: '강', bible: '장' };
-const UNIT_LABELS_EN = { page: ['page', 'pages'], chapter: ['chapter', 'chapters'], lecture: ['lecture', 'lectures'], bible: ['chapter', 'chapters'] };
+const UNIT_LABELS = { page: '페이지', chapter: '챕터', lecture: '강', bible: '장', custom: '개' };
+const UNIT_LABELS_EN = { page: ['page', 'pages'], chapter: ['chapter', 'chapters'], lecture: ['lecture', 'lectures'], bible: ['chapter', 'chapters'], custom: ['item', 'items'] };
+
+/**
+ * 기타 목표의 단위 이름 (사용자가 정한 "문제", "과제" 등).
+ * 화면 그리기는 목표 하나씩 동기적으로 진행되므로, 그 목표를 그리기 직전에 useUnitOf(goal)로 지정한다.
+ */
+let customUnitName = '';
+function useUnitOf(goal) {
+  customUnitName = goal && goal.type === 'custom' && goal.custom ? goal.custom.unit : '';
+}
 
 /** 단위 이름. 영어는 n에 맞춰 단수/복수 (n을 안 주면 복수) */
 function getUnitLabel(basis, n) {
+  if (basis === 'custom' && customUnitName) return customUnitName;
   if (currentLang === 'en') return UNIT_LABELS_EN[basis][n === 1 ? 0 : 1];
   return UNIT_LABELS[basis];
 }
 
-/** 분량 표시: "35페이지" / "35 pages" */
+/** 분량 표시: "35페이지" / "35 pages" / 기타: "3문제" */
 function formatAmount(n, basis) {
   return currentLang === 'en' ? `${n} ${getUnitLabel(basis, n)}` : `${n}${getUnitLabel(basis)}`;
+}
+
+/** 기타 항목 이름: 목록이 있으면 그 이름, 없으면 "12번" / "#12" */
+function customItemLabel(goal, n) {
+  const name = goal.custom.items[n - 1];
+  return name || t('{n}번', { n });
 }
 
 /** 분량 범위: "3~4페이지" / "3–4 pages" (같으면 하나만) */
@@ -1051,6 +1129,7 @@ function formatDays(n) {
 }
 
 function getGoalSummary(goal, basis = getPrimaryBasis(goal), today = todayStr()) {
+  useUnitOf(goal);
   const plan = getActivePlan(goal, basis);
   const total = getTotalUnits(goal, basis);
   const done = getDoneUnits(goal, basis);
@@ -1097,6 +1176,7 @@ function getGoalSummary(goal, basis = getPrimaryBasis(goal), today = todayStr())
 
 /** 단위 범위 (from 초과 ~ to 이하)를 사람이 읽는 문구로 */
 function describeUnitsRange(goal, basis, from, to) {
+  useUnitOf(goal);
   if (basis === 'page') {
     const a = unitsToPage(goal.book, from + 1);
     const b = unitsToPage(goal.book, to);
@@ -1106,6 +1186,7 @@ function describeUnitsRange(goal, basis, from, to) {
     return getChapterRanges(goal.book).slice(from, to).map((c) => c.name).join(', ');
   }
   if (basis === 'bible') return describeBibleRange(goal.bible, from, to);
+  if (basis === 'custom') return describeCustomRange(goal, from, to);
   if (to - from === 1) return `${lectureLabel(to)} · ${goal.lecture.titles[to - 1]}`;
   return t('{from}~{to}강', { from: from + 1, to });
 }
@@ -1147,6 +1228,7 @@ function formatShortDate(str) {
  *  - isPreReplan: 재분배 이전 날짜인지
  */
 function buildTimeline(goal, basis) {
+  useUnitOf(goal);
   const { original, current } = goal.plans[basis];
   const active = current || original;
   const byDate = (plan) => new Map(buildSchedule(plan).map((r) => [r.date, r]));
@@ -1729,6 +1811,12 @@ function checkGoalShape(goal, index) {
       || !books.every((b) => b && bibleIndexOf(b.name) >= 0 && Number.isInteger(b.chapters) && b.chapters > 0)) {
       return fail('통독 범위가 올바르지 않습니다.');
     }
+  } else if (goal.type === 'custom') {
+    const c = goal.custom;
+    if (!c || typeof c.unit !== 'string' || !Array.isArray(c.items) || !c.items.every((x) => typeof x === 'string')
+      || !Number.isInteger(c.total) || c.total < 1 || (c.items.length && c.items.length !== c.total)) {
+      return fail('기타 목표 정보가 올바르지 않습니다.');
+    }
   } else if (!goal.lecture || !Array.isArray(goal.lecture.titles) || goal.lecture.titles.length === 0
     || !goal.lecture.titles.every((t) => typeof t === 'string')) {
     return fail('강의 목록이 올바르지 않습니다.');
@@ -2032,6 +2120,19 @@ function runPlanSelfTests() {
     '검증: 마감일 < 시작일 차단',
     validateCommonInput({ title: 'x', startDate: '2026-10-05', dueDate: '2026-10-01' }).length > 0,
   );
+
+  // 기타 종류
+  const cg = createCustomGoal({ title: '수학 숙제', startDate: '2026-10-01', dueDate: '2026-10-05', customUnit: '문제', customTotal: 50 });
+  useUnitOf(cg);
+  check('기타: 개수로 만들기', getTotalUnits(cg, 'custom') === 50 && getActivePlan(cg, 'custom').to === 50 && formatAmount(10, 'custom') === '10문제');
+  check('기타: 범위 표시(목록 없음)', describeCustomRange(cg, 10, 20) === '11~20번' && describeCustomRange(cg, 4, 5) === '5번');
+  const cl = createCustomGoal({ title: '단어', startDate: '2026-10-01', dueDate: '2026-10-02', customUnit: '단원', customTotal: 99, customItems: ['1단원', ' ', '2단원', '3단원'] });
+  check('기타: 목록이 있으면 줄 수가 전체', cl.custom.total === 3 && describeCustomRange(cl, 0, 2) === '1단원 ~ 2단원');
+  check('기타: 검증(단위·개수 없음)', validateCustomInput({ title: 'x', startDate: '2026-10-01', dueDate: '2026-10-02', customUnit: '', customTotal: NaN }).length === 2);
+  check('기타: 형식 검사 통과', checkGoalShape(cg, 0) === null && checkGoalShape(cl, 0) === null);
+  applyGoalEdit(cg, { ...goalToInput(cg), customTotal: 60 }, '2026-09-30');
+  check('기타: 수정하면 계획 다시 만듦', getTotalUnits(cg, 'custom') === 60 && getActivePlan(cg, 'custom').to === 60);
+  useUnitOf(null);
 
   console.group('■ 검사 결과');
   console.table(results);
@@ -2428,6 +2529,7 @@ function renderCoverThumb(url, size = 'md') {
 
 /** 목표 카드. 도서관 책과 연결돼 있으면 표지 · 필독서/배정 표시 · 변경 알림 */
 function renderGoalCard(goal, s) {
+  useUnitOf(goal);
   const requiredBook = libraryBookForGoal(goal);
   const tagKind = bookTagKind(requiredBook);
   const changed = requiredBook && isRequiredBookChanged(goal, requiredBook);
@@ -2473,6 +2575,7 @@ function renderStatusBadge(s) {
 }
 
 function renderTodayAmount(goal, s) {
+  useUnitOf(goal);
   if (s.isComplete) return `<span class="today-main">${t('모두 완료했습니다')}</span>`;
   if (s.isOverdue) return `<span class="today-main">${t('마감일이 지났습니다')}</span>`;
   if (s.notStarted) return `<span class="today-main">${t('{date} 시작', { date: formatShortDate(goal.startDate) })}</span>`;
@@ -2529,6 +2632,7 @@ function renderGoalForm(root, goal, bookId = null) {
   const v = draft || (goal ? goalToInput(goal) : {
     title: '', startDate: todayStr(), dueDate: '', restWeekdays: [], restDates: [], extraDates: [],
     chapters: [{ name: '', startPage: '' }], lastPage: '', titles: [], bibleStart: 0, bibleEnd: 65,
+    customUnit: '', customTotal: NaN, customItems: [],
   });
   if (bookId) {
     Object.assign(v, { title: requiredBook.title, author: requiredBook.author || '', chapters: requiredBook.chapters, lastPage: requiredBook.lastPage });
@@ -2552,6 +2656,7 @@ function renderGoalForm(root, goal, bookId = null) {
           <label><input type="radio" name="type" value="book" ${type === 'book' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> ${typeLabel('book')}</label>
           <label><input type="radio" name="type" value="lecture" ${type === 'lecture' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> ${typeLabel('lecture')}</label>
           <label><input type="radio" name="type" value="bible" ${type === 'bible' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> ${typeLabel('bible')}</label>
+          <label><input type="radio" name="type" value="custom" ${type === 'custom' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> ${typeLabel('custom')}</label>
         </div>
       </div>
 
@@ -2661,6 +2766,28 @@ function renderGoalForm(root, goal, bookId = null) {
         </div>
       </div>
 
+      <div data-section="custom">
+        <p class="field-hint custom-intro">${t('숙제, 문제집, 단어 암기처럼 개수로 셀 수 있는 것이면 무엇이든 계획할 수 있어요.')}</p>
+        <div class="field-row">
+          <div class="field">
+            <label class="field-label" for="f-custom-unit">${t('단위 이름')}</label>
+            <input id="f-custom-unit" class="input" type="text" maxlength="10" value="${escapeHtml(v.customUnit || '')}" placeholder="${t('예: 문제, 과제, 단원, 단어')}">
+            <div class="custom-unit-presets">
+              ${['문제', '과제', '단원', '단어', '개'].map((u) => `<button type="button" class="btn btn-small" data-custom-unit="${escapeHtml(t(u))}">${escapeHtml(t(u))}</button>`).join('')}
+            </div>
+          </div>
+          <div class="field">
+            <label class="field-label" for="f-custom-total">${t('전체 개수')}</label>
+            <input id="f-custom-total" class="input" type="number" min="1" step="1" value="${Number.isInteger(v.customTotal) ? v.customTotal : ''}">
+            <span id="f-custom-total-hint" class="field-hint"></span>
+          </div>
+        </div>
+        <div class="field">
+          <label class="field-label" for="f-custom-items">${t('항목 목록')} <span class="muted">${t('(선택 · 한 줄에 하나)')}</span></label>
+          <textarea id="f-custom-items" class="input textarea" rows="8" placeholder="${t('적으면 계획표에 항목 이름이 나오고, 줄 수가 전체 개수가 됩니다.')}">${escapeHtml((v.customItems || []).join('\n'))}</textarea>
+        </div>
+      </div>
+
       <div data-section="bible">
         <div class="field">
           <span class="field-label">${t('통독 범위')}</span>
@@ -2731,6 +2858,12 @@ function renderGoalForm(root, goal, bookId = null) {
     }
     if (e.target.closest('.rest-chip-del')) {
       e.target.closest('.rest-chip').remove();
+      updateFormView();
+      return;
+    }
+    const unitPreset = e.target.closest('[data-custom-unit]')?.dataset.customUnit;
+    if (unitPreset) {
+      form.querySelector('#f-custom-unit').value = unitPreset;
       updateFormView();
       return;
     }
@@ -3341,6 +3474,9 @@ function collectFormInput() {
     bibleStart: Number(val('f-bible-start')),
     bibleEnd: Number(val('f-bible-end')),
     titles: parseLectureLines(val('f-lectures')),
+    customUnit: val('f-custom-unit'),
+    customTotal: val('f-custom-total') === '' ? NaN : Number(val('f-custom-total')),
+    customItems: parseLectureLines(val('f-custom-items')),
     restWeekdays: [...document.querySelectorAll('input[name="rest-weekday"]:checked')].map((el) => Number(el.value)),
     restDates: readRestDateChips(),
     extraDates: readExtraDateChips(),
@@ -3357,7 +3493,18 @@ function updateFormView() {
   if (pickSection) pickSection.hidden = !isBook;
   document.querySelector('[data-section="lecture"]').hidden = input.type !== 'lecture';
   document.querySelector('[data-section="bible"]').hidden = !isBible;
-  document.getElementById('f-title-label').textContent = t({ book: '책 제목', lecture: '강의 이름', bible: '통독 이름' }[input.type]);
+  const isCustom = input.type === 'custom';
+  document.querySelector('[data-section="custom"]').hidden = !isCustom;
+  document.getElementById('f-title-label').textContent = t({ book: '책 제목', lecture: '강의 이름', bible: '통독 이름', custom: '목표 이름' }[input.type]);
+  // 기타: 항목 목록을 적으면 그 줄 수가 전체 개수
+  const custom = normalizeCustom(input);
+  customUnitName = custom.unit;
+  const totalEl = document.getElementById('f-custom-total');
+  totalEl.disabled = custom.items.length > 0;
+  if (custom.items.length) totalEl.value = custom.items.length;
+  document.getElementById('f-custom-total-hint').textContent = custom.items.length ? t('항목 목록 줄 수로 정해졌어요') : '';
+  const customTotal = Number.isInteger(custom.total) && custom.total > 0 ? custom.total : 0;
+  const unitBasis = isBook ? 'page' : isBible ? 'bible' : isCustom ? 'custom' : 'lecture';
   const bibleChapters = input.bibleStart <= input.bibleEnd
     ? bibleBooksInRange(input.bibleStart, input.bibleEnd).reduce((sum, b) => sum + b.chapters, 0) : 0;
   document.getElementById('f-bible-summary').textContent = input.bibleStart <= input.bibleEnd
@@ -3371,13 +3518,13 @@ function updateFormView() {
   document.getElementById('quick-due').hidden = paceMode;
   const dueEl = document.getElementById('f-due');
   dueEl.readOnly = paceMode;
-  if (paceRow) document.getElementById('f-pace-unit').textContent = getUnitLabel(isBook ? 'page' : isBible ? 'bible' : 'lecture', 2);
+  if (paceRow) document.getElementById('f-pace-unit').textContent = getUnitLabel(unitBasis, 2);
   if (paceMode) {
     const firstPage = input.chapters[0] && input.chapters[0].startPage;
     const readFrom = Number.isInteger(input.readPage) ? input.readPage : (Number.isInteger(firstPage) ? firstPage - 1 : NaN);
     const remaining = isBook
       ? (Number.isInteger(input.lastPage) && Number.isInteger(readFrom) ? input.lastPage - readFrom : 0)
-      : isBible ? bibleChapters : input.titles.length;
+      : isBible ? bibleChapters : isCustom ? customTotal : input.titles.length;
     const perDay = Number(document.getElementById('f-pace').value);
     const due = dueDateForPace(input.startDate, remaining, perDay, input.restWeekdays, input.restDates, input.extraDates);
     const resultEl = document.getElementById('f-pace-result');
@@ -3412,10 +3559,10 @@ function updateFormView() {
     const first = input.chapters[0] && input.chapters[0].startPage;
     const total = isBook
       ? (Number.isInteger(first) && Number.isInteger(input.lastPage) ? input.lastPage - first + 1 : 0)
-      : isBible ? bibleChapters : input.titles.length;
+      : isBible ? bibleChapters : isCustom ? customTotal : input.titles.length;
     if (study > 0 && total > 0) {
       const avg = total / study;
-      const basis = isBook ? 'page' : isBible ? 'bible' : 'lecture';
+      const basis = unitBasis;
       const amount = formatAmount(avg >= 10 ? Math.round(avg) : Math.round(avg * 10) / 10, basis);
       daily = t('공부하는 날 하루 약 <b>{amount}</b>', { amount });
     }
@@ -3574,6 +3721,7 @@ function renderPlanPanel(goal, basis) {
 
 /** 위치 표시: 책(페이지 기준)은 페이지 번호 "p.42", 그 외는 개수 "3강" */
 function formatPosition(goal, basis, units) {
+  useUnitOf(goal);
   if (basis === 'page') return units > 0 ? `p.${unitsToPage(goal.book, units)}` : '-';
   if (basis === 'bible') return formatBiblePosition(goal.bible, units);
   return formatAmount(units, basis);
@@ -3585,6 +3733,7 @@ function totalLabel(basis) {
 
 /** 현황 안내 문구와 색 */
 function getCompareMessage(goal, s) {
+  useUnitOf(goal);
   const u = (n) => formatAmount(n, s.basis);
   if (s.isComplete) return { tone: 'done', html: t('모두 완료했습니다. 수고하셨어요!') };
   if (s.isOverdue) {
@@ -3634,6 +3783,7 @@ function renderSubmissionStatus(goal) {
 }
 
 function renderSummaryPanel(goal, s) {
+  useUnitOf(goal);
   const { min, max } = getProgressBounds(goal);
   const isBook = goal.type === 'book';
   const cur = goal.progress.current;
@@ -3652,10 +3802,10 @@ function renderSummaryPanel(goal, s) {
       <div class="summary-actions">
         <form class="progress-form ${isBook ? 'is-two-rows' : ''}" data-action="progress" novalidate>
           ${goal.type === 'bible' ? renderBibleProgressInputs(goal) : `
-          <label for="progress-input" class="field-label">${isBook ? t('마지막으로 읽은 페이지') : t('완료한 강의 수')}</label>
+          <label for="progress-input" class="field-label">${isBook ? t('마지막으로 읽은 페이지') : goal.type === 'custom' ? t('완료한 {unit} 수', { unit: getUnitLabel('custom') }) : t('완료한 강의 수')}</label>
           <div class="progress-control">
             <input id="progress-input" type="number" class="input input-num" min="${min}" max="${max}" value="${cur}">
-            <span class="muted">${isBook ? `(p.${min}~${max})` : t('(0~{max}강)', { max })}</span>
+            <span class="muted">${isBook ? `(p.${min}~${max})` : goal.type === 'custom' ? `(0~${max})` : t('(0~{max}강)', { max })}</span>
           </div>
           ${isBook ? renderChapterProgressSelect(goal) : ''}`}
           <button type="submit" class="btn btn-primary progress-submit">${t('진도 기록')}</button>
@@ -3673,6 +3823,7 @@ function renderSummaryPanel(goal, s) {
 
 /** 책: "또는 완료한 챕터" 선택 — 고르면 그 챕터의 끝 페이지가 페이지 칸에 채워진다 */
 function renderChapterProgressSelect(goal) {
+  useUnitOf(goal);
   const doneCount = completedChapterCount(goal.book, goal.progress.current);
   return `
     <label for="progress-chapter-select" class="field-label"><span class="muted progress-or">${t('또는')}</span> ${t('완료한 챕터')}</label>
@@ -3685,6 +3836,7 @@ function renderChapterProgressSelect(goal) {
 
 /** 성경 통독 진도 입력: 마지막으로 읽은 권 + 장 */
 function renderBibleProgressInputs(goal) {
+  useUnitOf(goal);
   const cur = goal.progress.current;
   const pos = cur > 0 ? biblePosition(goal.bible, cur) : null;
   return `
@@ -3711,6 +3863,7 @@ function readBibleProgressInput(goal, form) {
 
 /** 현재 위치 문구: "p.42까지 읽음 · 완료 챕터 5/23" */
 function describePosition(goal) {
+  useUnitOf(goal);
   const cur = goal.progress.current;
   if (goal.type === 'book') {
     return `${cur < bookFirstPage(goal.book) ? t('아직 읽지 않음') : t('p.{page}까지 읽음', { page: cur })} · ${
@@ -3720,11 +3873,16 @@ function describePosition(goal) {
     return cur === 0 ? t('아직 읽지 않음')
       : `${t('{pos}까지 읽음', { pos: formatBiblePosition(goal.bible, cur) })} · ${formatFraction(cur, bibleTotalChapters(goal.bible), 'bible')}`;
   }
+  if (goal.type === 'custom') {
+    return cur === 0 ? t('아직 시작 전') : `${formatFraction(cur, goal.custom.total, 'custom')} ${t('완료')}${
+      goal.custom.items[cur - 1] ? ` · ${goal.custom.items[cur - 1]}` : ''}`;
+  }
   return cur === 0 ? t('아직 듣지 않음') : t('{n}강까지 완료', { n: cur });
 }
 
 /** 계획 대비 현황: 숫자 상자 4개 + 진행 막대 + 안내 문구 (내 화면·관리자 화면 공용) */
 function renderCompareBlock(goal, s) {
+  useUnitOf(goal);
   const targetPercent = s.total > 0 ? Math.min(100, (s.target / s.total) * 100) : 0;
   const donePercent = s.total > 0 ? Math.min(100, (s.done / s.total) * 100) : 0;
   const msg = getCompareMessage(goal, s);
@@ -3797,6 +3955,7 @@ function describeEditChanges(goal, input) {
 
 /** 미리보기 본문과 적용 가능 여부 (마감일 입력칸은 다시 그리지 않도록 분리) */
 function renderPreviewContent(goal, basis) {
+  useUnitOf(goal);
   const preview = detailState.preview;
   const today = todayStr();
   const result = buildPreviewGoal(goal, preview, today);
@@ -3898,7 +4057,7 @@ function renderPreviewBody(goal, clone, basis, preview, today) {
         <tr>
           <th class="col-date">${t('날짜')}</th>
           <th class="col-weekday">${t('요일')}</th>
-          <th>${goal.type === 'lecture' ? t('들을 강의') : t('읽을 내용')}</th>
+          <th>${goal.type === 'lecture' ? t('들을 강의') : goal.type === 'custom' ? t('할 내용') : t('읽을 내용')}</th>
           <th class="col-amount">${t('분량')}</th>
           <th class="col-cum">${t('새 누적 목표')}</th>
           <th class="col-cum">${t('지금 계획 누적')}</th>
@@ -3911,6 +4070,7 @@ function renderPreviewBody(goal, clone, basis, preview, today) {
 
 /** 계획표의 "오늘 분량" 칸 내용 */
 function describeRowContent(goal, basis, row) {
+  useUnitOf(goal);
   if (row.isRestDay) return `<span class="rest">${escapeHtml(restText(goal, row.date))}</span>`;
   if (row.amount === 0) return `<span class="rest">${t('휴식(분량 없음)')}</span>`;
   const from = row.prevCumulative;
@@ -3928,6 +4088,10 @@ function describeRowContent(goal, basis, row) {
       .map((c) => `<div>${escapeHtml(c.name)} <span class="muted">(p.${Number(c.startPage)}~${Number(c.endPage)})</span></div>`)
       .join('');
   }
+  if (basis === 'custom') {
+    if (!goal.custom.items.length) return `<strong>${escapeHtml(describeCustomRange(goal, from, to))}</strong>`;
+    return goal.custom.items.slice(from, to).map((name) => `<div>${escapeHtml(name)}</div>`).join('');
+  }
   return goal.lecture.titles.slice(from, to)
     .map((title, i) => `<div><strong>${lectureLabel(from + i + 1)}</strong> ${escapeHtml(title)}</div>`)
     .join('');
@@ -3935,9 +4099,11 @@ function describeRowContent(goal, basis, row) {
 
 /** 누적 값 표시 (페이지는 도달해야 할 페이지 번호로) */
 function formatCumulative(goal, basis, units) {
+  useUnitOf(goal);
   if (basis === 'page') return units === 0 ? '-' : `p.${unitsToPage(goal.book, units)}`;
   if (basis === 'chapter') return formatAmount(units, 'chapter');
   if (basis === 'bible') return formatBiblePosition(goal.bible, units);
+  if (basis === 'custom') return formatAmount(units, 'custom');
   return formatAmount(units, 'lecture');
 }
 
@@ -3973,6 +4139,7 @@ function renderAmountCell(basis, row) {
  *  → { plan, errors }
  */
 function computeAdjustedPlan(goal, basis, edits, today = todayStr()) {
+  useUnitOf(goal);
   const active = getActivePlan(goal, basis);
   const rows = buildSchedule(active);
   const fixed = { ...(active.fixed || {}) };
@@ -4050,7 +4217,7 @@ function renderAdjustPanel(goal, basis) {
         <thead>
           <tr>
             <th class="col-date">${t('날짜')}</th><th class="col-weekday">${t('요일')}</th>
-            <th>${goal.type === 'lecture' ? t('들을 강의') : t('읽을 내용')}</th>
+            <th>${goal.type === 'lecture' ? t('들을 강의') : goal.type === 'custom' ? t('할 내용') : t('읽을 내용')}</th>
             <th class="col-adjust">${t('분량')}</th><th class="col-cum">${t('누적 목표')}</th>
           </tr>
         </thead>
@@ -4094,7 +4261,7 @@ function renderPlanTable(goal, basis, readOnly = false) {
         <tr>
           <th class="col-date">${t('날짜')}</th>
           <th class="col-weekday">${t('요일')}</th>
-          <th>${goal.type === 'lecture' ? t('들을 강의') : t('읽을 내용')}</th>
+          <th>${goal.type === 'lecture' ? t('들을 강의') : goal.type === 'custom' ? t('할 내용') : t('읽을 내용')}</th>
           <th class="col-amount">${t('분량')}</th>
           <th class="col-cum">${t('누적 목표')}</th>
           <th class="col-check">${t('완료')}</th>
@@ -4107,6 +4274,7 @@ function renderPlanTable(goal, basis, readOnly = false) {
 
 /** 달력 칸에 들어갈 짧은 내용 */
 function describeCellContent(goal, basis, row) {
+  useUnitOf(goal);
   if (row.isRestDay) return `<span class="rest">${escapeHtml(restText(goal, row.date))}</span>`;
   if (row.amount === 0) return `<span class="rest">${t('휴식')}</span>`;
   const from = row.prevCumulative;
@@ -4117,12 +4285,18 @@ function describeCellContent(goal, basis, row) {
     return `<strong>${a === b ? `p.${a}` : `p.${a}~${b}`}</strong>
       <span class="cell-sub">${escapeHtml(describeChaptersForPages(goal.book, a, b))}</span>`;
   }
+  if (basis === 'custom' && !goal.custom.items.length) {
+    return `<strong>${escapeHtml(describeCustomRange(goal, from, to))}</strong>
+      <span class="cell-sub">${formatAmount(row.amount, 'custom')}${row.weight > 1 ? ` · ${t('여유 ×{w}', { w: row.weight })}` : ''}${row.isFixed ? ` · ${t('직접')}` : ''}</span>`;
+  }
   if (basis === 'bible') {
     return `<strong>${escapeHtml(describeBibleRange(goal.bible, from, to))}</strong>
       <span class="cell-sub">${formatAmount(row.amount, 'bible')}${row.weight > 1 ? ` · ${t('여유 ×{w}', { w: row.weight })}` : ''}${row.isFixed ? ` · ${t('직접')}` : ''}</span>`;
   }
   const items = basis === 'chapter'
     ? getChapterRanges(goal.book).slice(from, to).map((c) => escapeHtml(c.name))
+    : basis === 'custom'
+    ? goal.custom.items.slice(from, to).map((name) => escapeHtml(name))
     : goal.lecture.titles.slice(from, to).map((title, i) => `<strong>${lectureLabel(from + i + 1)}</strong> ${escapeHtml(title)}`);
   const shown = items.slice(0, 3).map((x) => `<span class="cell-line">${x}</span>`).join('');
   return items.length > 3 ? `${shown}<span class="cell-sub">${t('외 {n}개', { n: items.length - 3 })}</span>` : shown;
@@ -5190,6 +5364,7 @@ const EXPORT_COLORS = {
 
 /** 이미지용 행 내용 (HTML 없이 글자만) */
 function rowTextForExport(goal, basis, row) {
+  useUnitOf(goal);
   if (row.isRestDay) return { main: restText(goal, row.date), subs: [], rest: true };
   if (row.amount === 0) return { main: t('휴식 (분량 없음)'), subs: [], rest: true };
   const from = row.prevCumulative;
@@ -5207,6 +5382,12 @@ function rowTextForExport(goal, basis, row) {
     const chs = getChapterRanges(goal.book).slice(from, to);
     return { main: t('{n}개 챕터', { n: chs.length }), subs: chs.map((c) => `${c.name} (p.${c.startPage}~${c.endPage})`) };
   }
+  if (basis === 'custom') {
+    return {
+      main: `${describeCustomRange(goal, from, to)}  (${formatAmount(row.amount, 'custom')})`,
+      subs: to - from > 1 ? goal.custom.items.slice(from, to) : [],
+    };
+  }
   const titles = goal.lecture.titles.slice(from, to);
   const range = to - from > 1 ? t('{from}~{to}강', { from: from + 1, to }) : lectureLabel(from + 1);
   return {
@@ -5217,6 +5398,7 @@ function rowTextForExport(goal, basis, row) {
 
 /** 좁은 칸용 짧은 분량: "11쪽" / "11p", 영어는 "3 ch" · "2 lec" */
 function compactAmount(n, basis) {
+  if (basis === 'custom') return formatAmount(n, basis);
   if (currentLang === 'en') return basis === 'page' ? `${n}p` : `${n} ${basis === 'lecture' ? 'lec' : 'ch'}`;
   return basis === 'page' ? `${n}쪽` : formatAmount(n, basis);
 }
@@ -5289,6 +5471,7 @@ function loadImage(url) {
  * options: { basis, range: 'all' | 'upcoming' }
  */
 async function drawPlanImage(goal, options) {
+  useUnitOf(goal);
   const today = todayStr();
   const { basis } = options;
   const s = getGoalSummary(goal, undefined, today);
@@ -5461,11 +5644,12 @@ async function drawPlanImage(goal, options) {
   roundRect(ctx, RX, RY, RW, RH, 24, C.surface);
   ctx.font = font(30, 800);
   ctx.fillStyle = C.text;
-  ctx.fillText(goal.type === 'lecture' ? t('매일 들을 분량') : t('매일 읽을 분량'), RX + 36, RY + 56);
+  ctx.fillText(goal.type === 'lecture' ? t('매일 들을 분량') : goal.type === 'custom' ? t('매일 할 분량') : t('매일 읽을 분량'), RX + 36, RY + 56);
   ctx.font = font(21);
   ctx.fillStyle = C.muted;
   ctx.textAlign = 'right';
-  const basisLabel = t({ page: '페이지 기준', chapter: '챕터 기준', lecture: '강의', bible: '장 단위' }[basis]);
+  const basisLabel = basis === 'custom' ? t('{unit} 단위', { unit: getUnitLabel('custom') })
+    : t({ page: '페이지 기준', chapter: '챕터 기준', lecture: '강의', bible: '장 단위' }[basis]);
   ctx.fillText(`${basisLabel} · ${options.range === 'upcoming' ? t('오늘부터') : t('전체 기간')}   ✓ ${t('완료')}`, RX + RW - 36, RY + 54);
   ctx.textAlign = 'left';
 
@@ -6168,6 +6352,33 @@ const EN = {
   "'{title}' 책을 도서관에서 삭제할까요?\n이미 세운 계획은 지워지지 않고 일반 목표로 남습니다.": "Delete '{title}' from the library?\nPlans people already made won't be deleted; they'll stay as regular goals.",
   '검토 대기': 'Pending review',
   '전체||filter': 'All',
+  // 기타 종류
+  '기타': 'Other',
+  '아직 시작 전': 'Not started yet',
+  '{unit} 단위': (p) => `By ${p.unit}`,
+  '{n}번': (p) => `#${p.n}`,
+  '{from}~{to}번': (p) => `#${p.from}–${p.to}`,
+  '할 내용': 'To do',
+  '매일 할 분량': 'Daily amount',
+  '목표 이름': 'Goal name',
+  '단위 이름': 'Unit name',
+  '전체 개수': 'Total count',
+  '항목 목록': 'Item list',
+  '(선택 · 한 줄에 하나)': '(optional · one per line)',
+  '예: 문제, 과제, 단원, 단어': 'e.g. problems, tasks, units, words',
+  '문제': 'problems',
+  '과제': 'tasks',
+  '단원': 'units',
+  '단어': 'words',
+  '개': 'items',
+  '숙제, 문제집, 단어 암기처럼 개수로 셀 수 있는 것이면 무엇이든 계획할 수 있어요.': 'Plan anything you can count — homework, workbook problems, vocabulary and more.',
+  '적으면 계획표에 항목 이름이 나오고, 줄 수가 전체 개수가 됩니다.': 'If you list items, their names appear in the plan and the number of lines becomes the total.',
+  '항목 목록 줄 수로 정해졌어요': 'Set from the number of listed items',
+  '완료한 {unit} 수': (p) => `Completed (${p.unit})`,
+  '단위 이름을 입력하세요. (예: 문제, 과제, 단원)': 'Enter a unit name (e.g. problems, tasks, units).',
+  '전체 개수를 1 이상의 정수로 입력하거나 항목 목록을 적어 주세요.': 'Enter a total count of 1 or more, or list the items.',
+  '전체 개수는 10000개까지 입력할 수 있습니다.': 'The total count can be at most 10,000.',
+  '기타 목표 정보가 올바르지 않습니다.': 'Custom goal data is invalid.',
 };
 
 /* =========================================================================

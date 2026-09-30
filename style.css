@@ -819,6 +819,7 @@ body.modal-open { overflow: hidden; }
 
 /* ===== 성경 통독 ===== */
 .type-bible { background: #eaf6ee; color: #1a7f4b; }
+.type-custom { background: #f3eefb; color: #6b46c1; }
 .bible-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .bible-range { display: flex; align-items: center; gap: 10px; }
 .bible-select { width: 170px; }
@@ -1116,3 +1117,7 @@ body.modal-open { overflow: hidden; }
 .pace-row .input-num { width: 100px; }
 .pace-result { margin-left: 4px; color: var(--primary); }
 .due-picker.pace-row { margin-top: -6px; }
+
+/* 기타 종류 */
+.custom-intro { margin: 0 0 14px; }
+.custom-unit-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
