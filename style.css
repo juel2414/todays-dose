@@ -1046,3 +1046,50 @@ body.modal-open { overflow: hidden; }
   font-size: 14px;
 }
 .chapter-table .ch-start.is-missing { background: #fff8d6; border-color: #e8c34a; }
+
+/* ===== AI 목차 인식 카드 ===== */
+.ai-toc {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 4px 0 8px;
+  padding: 14px 16px;
+  border: 1px solid #c9d8fb;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #eef3ff 0%, #f6f0ff 100%);
+}
+.ai-toc-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #2f6fed, #8a4fff);
+  color: #fff;
+}
+.ai-toc-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.ai-toc-text strong { display: inline-flex; align-items: center; gap: 6px; font-size: 15px; }
+.ai-toc-text span { font-size: 13px; color: var(--muted); }
+.ai-badge {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: linear-gradient(135deg, #2f6fed, #8a4fff);
+  color: #fff !important;
+  font-size: 11px !important;
+  font-weight: 700;
+}
+.btn-ai {
+  gap: 6px;
+  flex-shrink: 0;
+  border: none;
+  background: linear-gradient(135deg, #2f6fed, #7a4fe8);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(47, 111, 237, 0.25);
+}
+.btn-ai:hover:not(:disabled) { background: linear-gradient(135deg, #245bd0, #6a3fd8); }
+.btn-ai.is-loading { opacity: 0.75; cursor: progress; }
+.toc-tools { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.toc-paste-link { color: var(--primary); font-size: 13px; }
+.read-page-row { display: flex; align-items: center; gap: 12px; }

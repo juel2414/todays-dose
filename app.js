@@ -552,15 +552,17 @@ function getActivePlan(goal, basis) {
 function buildInitialPlans(goal) {
   const plans = {};
   for (const basis of getBases(goal)) {
+    // 이미 읽은 곳이 있으면 그 다음부터 나눈다 (없으면 0)
+    const total = getTotalUnits(goal, basis);
     plans[basis] = {
-      original: createGoalPlan(goal, goal.startDate, 0, getTotalUnits(goal, basis)),
+      original: createGoalPlan(goal, goal.startDate, Math.min(getDoneUnits(goal, basis), total), total),
       current: null,
     };
   }
   return plans;
 }
 
-function createBookGoal({ title, startDate, dueDate, restWeekdays = [], restDates = [], extraDates = [], chapters, lastPage, author = '', requiredBookId = null }) {
+function createBookGoal({ title, startDate, dueDate, restWeekdays = [], restDates = [], extraDates = [], chapters, lastPage, author = '', requiredBookId = null, readPage = null }) {
   const now = new Date().toISOString();
   const goal = {
     id: generateId(),
@@ -583,6 +585,12 @@ function createBookGoal({ title, startDate, dueDate, restWeekdays = [], restDate
   if (author && author.trim()) goal.book.author = author.trim();
   if (requiredBookId) goal.requiredBookId = requiredBookId; // 사역자 필독서로 만든 목표
   goal.progress.current = bookFirstPage(goal.book) - 1;
+  // (선택) 이미 읽은 곳: 마지막으로 읽은 페이지
+  const read = Number(readPage);
+  if (readPage !== null && readPage !== '' && Number.isInteger(read) && read >= bookFirstPage(goal.book) && read <= goal.book.lastPage) {
+    goal.progress.current = read;
+    goal.progress.history.push({ date: todayStr(), value: read });
+  }
   goal.plans = buildInitialPlans(goal);
   return goal;
 }
@@ -717,7 +725,19 @@ function validateCommonInput({ title, startDate, dueDate, restWeekdays = [], res
 }
 
 function validateBookInput(input) {
-  return [...validateCommonInput(input), ...validateBookStructure(input)];
+  const errors = [...validateCommonInput(input), ...validateBookStructure(input)];
+  // (선택) 마지막으로 읽은 페이지
+  if (input.readPage !== undefined && input.readPage !== null && input.readPage !== '' && !Number.isNaN(input.readPage)) {
+    const read = Number(input.readPage);
+    const first = input.chapters && input.chapters[0] ? Number(input.chapters[0].startPage) : NaN;
+    const last = Number(input.lastPage);
+    if (!Number.isInteger(read) || (Number.isInteger(first) && read < first) || (Number.isInteger(last) && read > last)) {
+      errors.push(t('마지막으로 읽은 페이지는 {a}~{b} 사이로 입력하세요. 처음부터 읽을 거면 비워 두세요.', {
+        a: Number.isInteger(first) ? first : 1, b: Number.isInteger(last) ? last : '…',
+      }));
+    }
+  }
+  return errors;
 }
 
 /** 책 구성(챕터·마지막 페이지) 검증 — 목표 입력과 필독서 관리에서 공용 */
@@ -1968,6 +1988,14 @@ function runPlanSelfTests() {
   ]);
   check('목차 사진: 여러 장 합치기(겹침 제거)', merged.chapters.map((c) => c.name).join(',') === '1장,2장,3장' && merged.lastPage === 120);
 
+  // 마지막으로 읽은 페이지(선택)
+  const readGoal = createBookGoal({ title: 'r', startDate: '2026-10-01', dueDate: '2026-10-10', lastPage: 110,
+    chapters: [{ name: '1장', startPage: 11 }, { name: '2장', startPage: 61 }], readPage: 60 });
+  check('이미 읽은 곳: 남은 분량만 분배', readGoal.progress.current === 60 && getActivePlan(readGoal, 'page').from === 50
+    && buildSchedule(getActivePlan(readGoal, 'page'))[0].amount === 5 && getActivePlan(readGoal, 'chapter').from === 1);
+  check('이미 읽은 곳: 범위 밖 차단', validateBookInput({ title: 'x', startDate: '2026-10-01', dueDate: '2026-10-02', lastPage: 110,
+    chapters: [{ name: '1장', startPage: 11 }], readPage: 200 }).length > 0);
+
   // 입력 검증
   check(
     '검증: 오름차순 아님 차단',
@@ -2571,6 +2599,14 @@ function renderGoalForm(root, goal, bookId = null) {
           <input id="f-author" type="text" class="input input-wide" value="${escapeHtml(v.author || '')}" ${locked ? 'readonly' : ''}>
         </div>
         ${renderChapterEditorHtml(v.lastPage)}
+        ${isEdit ? '' : `
+        <div class="field">
+          <label class="field-label" for="f-read-page">${t('마지막으로 읽은 페이지')} <span class="muted">${t('(선택 · 이미 읽기 시작한 책이면 입력)')}</span></label>
+          <div class="read-page-row">
+            <input id="f-read-page" type="number" min="1" class="input input-num" value="${v.readPage ? escapeHtml(v.readPage) : ''}" placeholder="${t('예: 42')}">
+            <span id="f-read-hint" class="field-hint">${t('비워 두면 처음부터 읽는 것으로 계획합니다.')}</span>
+          </div>
+        </div>`}
       </div>
 
       <div data-section="lecture">
@@ -2741,13 +2777,23 @@ function renderChapterEditorHtml(lastPage) {
   return `
     <div class="field">
       <span class="field-label">${t('챕터 목록')}</span>
-      <div class="toc-tools">
-        <button type="button" class="btn btn-small" data-action="toc-paste">${t('목차 붙여넣기')}</button>
-        <label class="btn btn-small" id="toc-photo-label">
-          <span class="toc-photo-text">${t('목차 사진으로 채우기')}</span>
+      <div class="ai-toc">
+        <div class="ai-toc-icon" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>
+        </div>
+        <div class="ai-toc-text">
+          <strong>${t('AI 목차 인식')}<span class="ai-badge">AI</span></strong>
+          <span>${t('책의 목차 페이지를 찍어 올리면 AI가 챕터 이름과 시작 페이지를 읽어 한 번에 채워요. 여러 쪽이면 사진을 여러 장 함께 고르세요.')}</span>
+        </div>
+        <label class="btn btn-ai" id="toc-photo-label">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+          <span class="toc-photo-text">${t('목차 사진 올리기')}</span>
           <input type="file" id="toc-photo" accept="image/*" multiple hidden>
         </label>
-        <span class="field-hint">${t('목차를 복사해 붙여넣거나 사진을 찍어 올리면 챕터를 자동으로 채웁니다. 목차가 여러 쪽이면 사진을 여러 장 함께 고르세요.')}</span>
+      </div>
+      <div class="toc-tools">
+        <span class="field-hint">${t('사진이 없으면')}</span>
+        <button type="button" class="link-btn toc-paste-link" data-action="toc-paste">${t('목차 글자 붙여넣기')}</button>
       </div>
       <p id="toc-result" class="toc-result" hidden></p>
       <div id="toc-paste-panel" class="toc-paste" hidden>
@@ -3204,6 +3250,7 @@ function collectFormInput() {
     dueDate: val('f-due'),
     ...readChapterEditor(),
     author: val('f-author'),
+    readPage: document.getElementById('f-read-page') && val('f-read-page') !== '' ? Number(val('f-read-page')) : null,
     bibleStart: Number(val('f-bible-start')),
     bibleEnd: Number(val('f-bible-end')),
     titles: parseLectureLines(val('f-lectures')),
@@ -3262,6 +3309,16 @@ function updateFormView() {
   document.getElementById('f-daily').innerHTML = daily;
 
   refreshChapterEditor();
+  // 마지막으로 읽은 페이지 안내: 남은 분량
+  const readHint = document.getElementById('f-read-hint');
+  if (readHint) {
+    const first = input.chapters[0] && input.chapters[0].startPage;
+    const read = input.readPage;
+    if (read === null) readHint.textContent = t('비워 두면 처음부터 읽는 것으로 계획합니다.');
+    else if (Number.isInteger(first) && Number.isInteger(input.lastPage) && read >= first && read <= input.lastPage) {
+      readHint.textContent = t('p.{p}까지 읽음 → 남은 {n}페이지를 나눕니다.', { p: read, n: input.lastPage - read });
+    } else readHint.textContent = t('첫 챕터 시작 페이지와 마지막 페이지 사이로 입력하세요.');
+  }
   document.getElementById('f-lecture-count').textContent = t('{n}개 강의', { n: input.titles.length });
 }
 
@@ -5417,6 +5474,17 @@ const EN = {
   '페이지를 읽지 못한 {n}개는 노란 칸에 직접 넣어 주세요.': (p) => `Enter the start page for the ${p.n} highlighted ${p.n === 1 ? 'row' : 'rows'} yourself.`,
   '사진 {n}장은 읽지 못했습니다.': (p) => `Couldn't read ${p.n} ${p.n === 1 ? 'photo' : 'photos'}.`,
   '저장하기 전에 목차와 비교해 확인하세요.': 'Check it against the book before saving.',
+  'AI 목차 인식': 'AI contents reader',
+  '책의 목차 페이지를 찍어 올리면 AI가 챕터 이름과 시작 페이지를 읽어 한 번에 채워요. 여러 쪽이면 사진을 여러 장 함께 고르세요.': 'Snap the table of contents and AI fills in every chapter name and start page at once. If it runs over several pages, select all the photos together.',
+  '목차 사진 올리기': 'Upload contents photo',
+  '사진이 없으면': 'No photo?',
+  '목차 글자 붙여넣기': 'Paste the contents as text',
+  '(선택 · 이미 읽기 시작한 책이면 입력)': '(optional · if you have already started)',
+  '예: 42': 'e.g. 42',
+  '비워 두면 처음부터 읽는 것으로 계획합니다.': 'Leave blank to plan from the beginning.',
+  'p.{p}까지 읽음 → 남은 {n}페이지를 나눕니다.': (p) => `Read through p.${p.p} → the remaining ${p.n} ${p.n === 1 ? 'page' : 'pages'} will be split.`,
+  '첫 챕터 시작 페이지와 마지막 페이지 사이로 입력하세요.': 'Enter a page between the first chapter and the last page.',
+  '마지막으로 읽은 페이지는 {a}~{b} 사이로 입력하세요. 처음부터 읽을 거면 비워 두세요.': 'Enter a last page read between {a} and {b}, or leave it blank to start from the beginning.',
   '오늘분량': "Today's Dose",
   '언어': 'Language',
   '저장 중…': 'Saving…',
