@@ -1107,3 +1107,4 @@ body.modal-open { overflow: hidden; }
 .cover-picker { transition: background 0.15s; border-radius: 10px; }
 .cover-picker.is-dragover { background: var(--primary-soft); outline: 2px dashed var(--primary); outline-offset: 4px; }
 .cover-picker.is-dragover .cover-preview { border-color: var(--primary); }
+.nowrap { white-space: nowrap; font-variant-numeric: tabular-nums; }

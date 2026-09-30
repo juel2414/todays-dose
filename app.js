@@ -4451,6 +4451,14 @@ async function loadAdminData() {
   if (parseRoute().view === 'admin') render();
 }
 
+/** 서버 시각 → 이 컴퓨터 시간대 기준 "2026-09-30 14:03:25" */
+function timestampToDateTime(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '-';
+  return `${formatDate(d)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
 function timestampToDate(iso) {
   return iso ? formatDate(new Date(iso)) : '-';
 }
@@ -4993,8 +5001,8 @@ function renderAdminMembers() {
           <tr class="${p.in_team ? 'is-team' : ''}">
             <td><strong>${escapeHtml(p.name || '-')}</strong>${p.user_id === currentUser.id ? ` <span class="muted">${t('(나)')}</span>` : ''}</td>
             <td>${escapeHtml(p.email)}</td>
-            <td class="muted">${timestampToDate(p.created_at)}</td>
-            <td class="muted">${timestampToDate(p.last_seen_at)}</td>
+            <td class="muted nowrap">${timestampToDateTime(p.created_at)}</td>
+            <td class="muted nowrap">${timestampToDateTime(p.last_seen_at)}</td>
             <td class="center">
               <label class="switch">
                 <input type="checkbox" data-action="team-toggle" data-id="${escapeHtml(p.user_id)}" ${p.in_team ? 'checked' : ''}
