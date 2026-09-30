@@ -223,7 +223,7 @@ function clamp(n, min, max) {
  * Goal = {
  *   id, type: 'book' | 'lecture', title, startDate, dueDate, createdAt, updatedAt,
  *   restWeekdays: number[],                  // 쉬는 요일 (0=일 ~ 6=토)
- *   book?:    { chapters: [{ name, startPage }], lastPage },
+ *   book?:    { chapters: [{ name, startPage }], lastPage, author? },
  *   lecture?: { titles: [string] },
  *   progress: {
  *     current: number,                       // 책: 마지막으로 읽은 페이지 / 강의: 완료한 강의 수
@@ -296,7 +296,7 @@ function buildInitialPlans(goal) {
   return plans;
 }
 
-function createBookGoal({ title, startDate, dueDate, restWeekdays = [], chapters, lastPage, requiredBookId = null }) {
+function createBookGoal({ title, startDate, dueDate, restWeekdays = [], chapters, lastPage, author = '', requiredBookId = null }) {
   const now = new Date().toISOString();
   const goal = {
     id: generateId(),
@@ -314,6 +314,7 @@ function createBookGoal({ title, startDate, dueDate, restWeekdays = [], chapters
     progress: { current: 0, history: [] },
     plans: null,
   };
+  if (author && author.trim()) goal.book.author = author.trim();
   if (requiredBookId) goal.requiredBookId = requiredBookId; // 사역자 필독서로 만든 목표
   goal.progress.current = bookFirstPage(goal.book) - 1;
   goal.plans = buildInitialPlans(goal);
@@ -500,6 +501,7 @@ function applyGoalEdit(goal, input, today = todayStr()) {
       chapters: input.chapters.map((c) => ({ name: c.name.trim(), startPage: Number(c.startPage) })),
       lastPage: Number(input.lastPage),
     };
+    if (input.author && input.author.trim()) goal.book.author = input.author.trim();
   } else {
     goal.lecture = { titles: [...input.titles] };
   }
@@ -553,8 +555,13 @@ function goalToInput(goal) {
     restWeekdays: [...getRestWeekdays(goal)],
     chapters: goal.type === 'book' ? goal.book.chapters.map((c) => ({ ...c })) : [],
     lastPage: goal.type === 'book' ? goal.book.lastPage : NaN,
+    author: goal.type === 'book' ? getBookAuthor(goal) : '',
     titles: goal.type === 'lecture' ? [...goal.lecture.titles] : [],
   };
+}
+
+function getBookAuthor(goal) {
+  return (goal.book && goal.book.author) || '';
 }
 
 /** 마감일 변경 검증 / 적용 (수정과 같은 규칙: 진행 중이면 재분배, 시작 전이면 원래 계획 새로 생성) */
@@ -715,6 +722,7 @@ function findGoalForBook(goals, bookId) {
 /** 관리자가 필독서 내용을 바꿔서 내 목표와 달라졌는지 */
 function isRequiredBookChanged(goal, book) {
   return goal.title !== book.title.trim()
+    || getBookAuthor(goal) !== (book.author || '').trim()
     || bookSignature(goal.book.chapters, goal.book.lastPage) !== bookSignature(book.chapters, book.lastPage);
 }
 
@@ -723,9 +731,16 @@ function inputFromRequiredBook(goal, book) {
   return {
     ...goalToInput(goal),
     title: book.title,
+    author: book.author || '',
     chapters: book.chapters.map((c) => ({ name: c.name, startPage: c.startPage })),
     lastPage: book.lastPage,
   };
+}
+
+/** 필독서로 만든 목표의 표지 이미지 주소 (없으면 null) */
+function getCoverUrl(goal) {
+  const book = goal.requiredBookId ? requiredBooks.find((b) => b.id === goal.requiredBookId) : null;
+  return book && book.coverUrl ? book.coverUrl : null;
 }
 
 /** 목표 삭제 */
@@ -857,13 +872,21 @@ async function loadAccount(user) {
 }
 
 function rowToRequiredBook(row) {
-  return { id: row.id, title: row.title, chapters: row.chapters, lastPage: row.last_page, updatedAt: row.updated_at };
+  return {
+    id: row.id,
+    title: row.title,
+    author: row.author || '',
+    coverUrl: row.cover_url || null,
+    chapters: row.chapters,
+    lastPage: row.last_page,
+    updatedAt: row.updated_at,
+  };
 }
 
 /** 사역자 필독서 목록 (팀원·관리자만 읽을 수 있음) */
 async function loadRequiredBooks() {
   const { data, error } = await getSupabase().from(REQUIRED_BOOKS_TABLE)
-    .select('id, title, chapters, last_page, updated_at').order('created_at');
+    .select('id, title, author, cover_url, chapters, last_page, updated_at').order('created_at');
   if (error) throw error;
   return data.map(rowToRequiredBook);
 }
@@ -886,6 +909,8 @@ async function adminSetTeam(userId, inTeam) {
 async function adminSaveRequiredBook(book) {
   const row = {
     title: book.title.trim(),
+    author: (book.author || '').trim() || null,
+    cover_url: book.coverUrl || null,
     chapters: book.chapters.map((c) => ({ name: c.name.trim(), startPage: Number(c.startPage) })),
     last_page: Number(book.lastPage),
     updated_at: new Date().toISOString(),
@@ -894,9 +919,30 @@ async function adminSaveRequiredBook(book) {
   const query = book.id
     ? sb.from(REQUIRED_BOOKS_TABLE).update(row).eq('id', book.id)
     : sb.from(REQUIRED_BOOKS_TABLE).insert(row);
-  const { data, error } = await query.select('id, title, chapters, last_page, updated_at').single();
+  const { data, error } = await query.select('id, title, author, cover_url, chapters, last_page, updated_at').single();
   if (error) throw error;
   return rowToRequiredBook(data);
+}
+
+const COVERS_BUCKET = 'study-planner-covers';
+
+/** 표지 이미지 업로드 → 공개 주소 */
+async function adminUploadCover(file) {
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+  const path = `${crypto.randomUUID()}.${ext}`;
+  const sb = getSupabase();
+  const { error } = await sb.storage.from(COVERS_BUCKET).upload(path, file, { contentType: file.type, upsert: false });
+  if (error) throw error;
+  return sb.storage.from(COVERS_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
+/** 더 이상 쓰지 않는 표지 파일 삭제 (실패해도 무시) */
+async function adminRemoveCoverFile(url) {
+  const marker = `/${COVERS_BUCKET}/`;
+  if (!url || !url.includes(marker)) return;
+  const path = url.slice(url.indexOf(marker) + marker.length);
+  const { error } = await getSupabase().storage.from(COVERS_BUCKET).remove([path]);
+  if (error) console.warn('[admin] 이전 표지 삭제 실패:', error);
 }
 
 async function adminDeleteRequiredBook(id) {
@@ -965,6 +1011,9 @@ function checkGoalShape(goal, index) {
   }
   if (!BASES_BY_TYPE[goal.type]) return `${label}: 종류(type)가 올바르지 않습니다.`;
   if (!isValidDateStr(goal.startDate) || !isValidDateStr(goal.dueDate)) return `${label}: 날짜가 올바르지 않습니다.`;
+  if (goal.book && goal.book.author !== undefined && typeof goal.book.author !== 'string') {
+    return `${label}: 저자 정보가 올바르지 않습니다.`;
+  }
   if (goal.requiredBookId !== undefined && (typeof goal.requiredBookId !== 'string'
     || !/^[\w-]{1,64}$/.test(goal.requiredBookId))) {
     return `${label}: 필독서 연결 정보가 올바르지 않습니다.`;
@@ -1175,6 +1224,7 @@ function runPlanSelfTests() {
   const rb2 = { ...rb, chapters: [...rb.chapters, { name: '3장', startPage: 70 }] };
   check('조사: 페이지를 / 강을', josa('페이지', '을', '를') === '를' && josa('3강', '을', '를') === '을');
   check('필독서: 관리자 변경 감지', isRequiredBookChanged(linked, rb2));
+  check('필독서: 저자 변경 감지', isRequiredBookChanged(linked, { ...rb, author: '박재연' }));
   applyGoalEdit(linked, inputFromRequiredBook(linked, rb2), '2026-09-30');
   check('필독서: 변경 반영(시작 전 → 계획 새로)', linked.book.chapters.length === 3 && linked.plans.chapter.original.to === 3
     && linked.requiredBookId === 'b1' && !isRequiredBookChanged(linked, rb2));
@@ -1407,7 +1457,7 @@ function escapeHtml(value) {
 function renderDashboard(root) {
   const today = todayStr();
   // 필독서로 만든 목표는 "사역자 필독서" 영역에 따로 보여준다
-  const showRequired = account.inTeam && requiredBooks.length > 0;
+  const showRequired = (account.inTeam || account.isAdmin) && requiredBooks.length > 0;
   const linkedIds = new Set(showRequired
     ? requiredBooks.map((b) => findGoalForBook(appData.goals, b.id)).filter(Boolean).map((g) => g.id) : []);
   const items = appData.goals.filter((g) => !linkedIds.has(g.id))
@@ -1506,8 +1556,14 @@ function renderRequiredSection(today) {
           <span class="type-tag type-required">필독서</span>
           <span class="badge badge-waiting">계획 없음</span>
         </div>
-        <h3 class="card-title">${escapeHtml(book.title)}</h3>
-        <p class="card-meta">${pages}페이지 · ${book.chapters.length}개 챕터</p>
+        <div class="card-book">
+          ${renderCoverThumb(book.coverUrl)}
+          <div>
+            <h3 class="card-title">${escapeHtml(book.title)}</h3>
+            ${book.author ? `<p class="card-author">${escapeHtml(book.author)}</p>` : ''}
+            <p class="card-meta">${pages}페이지 · ${book.chapters.length}개 챕터</p>
+          </div>
+        </div>
         <a class="btn btn-primary" href="#/new/book/${escapeHtml(book.id)}">계획 세우기</a>
       </div>`;
   }).join('');
@@ -1516,6 +1572,12 @@ function renderRequiredSection(today) {
       <h2 class="section-title">사역자 필독서 <span class="count">${requiredBooks.length}</span></h2>
       <div class="card-grid">${cards}</div>
     </section>`;
+}
+
+/** 표지 썸네일 (size: 'sm' | 'md' | 'lg') */
+function renderCoverThumb(url, size = 'md') {
+  if (!url) return '';
+  return `<img class="cover cover-${size}" src="${escapeHtml(url)}" alt="" loading="lazy">`;
 }
 
 /** 목표 카드. requiredBook이 있으면 필독서 표시와 변경 알림 */
@@ -1531,7 +1593,13 @@ function renderGoalCard(goal, s, requiredBook = null) {
         </span>
         ${renderStatusBadge(s)}
       </div>
-      <h3 class="card-title">${escapeHtml(goal.title)}</h3>
+      <div class="card-book">
+        ${renderCoverThumb(requiredBook ? requiredBook.coverUrl : null)}
+        <div>
+          <h3 class="card-title">${escapeHtml(goal.title)}</h3>
+          ${getBookAuthor(goal) ? `<p class="card-author">${escapeHtml(getBookAuthor(goal))}</p>` : ''}
+        </div>
+      </div>
       <div class="card-meta">
         <span>마감 ${escapeHtml(goal.dueDate)}</span>
         <span class="dday ${s.isActive && s.dday <= 3 ? 'is-urgent' : ''}">${formatDday(s.dday)}</span>
@@ -1607,7 +1675,9 @@ function renderGoalForm(root, goal, bookId = null) {
     title: '', startDate: todayStr(), dueDate: '', restWeekdays: [],
     chapters: [{ name: '', startPage: '' }], lastPage: '', titles: [],
   });
-  if (bookId) Object.assign(v, { title: requiredBook.title, chapters: requiredBook.chapters, lastPage: requiredBook.lastPage });
+  if (bookId) {
+    Object.assign(v, { title: requiredBook.title, author: requiredBook.author || '', chapters: requiredBook.chapters, lastPage: requiredBook.lastPage });
+  }
 
   root.innerHTML = `
     <header class="page-header">
@@ -1650,6 +1720,11 @@ function renderGoalForm(root, goal, bookId = null) {
           <span id="f-days" class="field-value">-</span>
         </div>
       </div>
+      <div class="quick-due">
+        <span class="field-hint">시작일부터</span>
+        ${[1, 2, 4, 6, 8].map((w) => `<button type="button" class="btn btn-small" data-weeks="${w}">${w}주</button>`).join('')}
+        <span id="f-daily" class="daily-estimate"></span>
+      </div>
 
       <div class="field">
         <span class="field-label">쉬는 요일 <span class="muted">(선택한 요일에는 분량을 배정하지 않습니다)</span></span>
@@ -1664,6 +1739,10 @@ function renderGoalForm(root, goal, bookId = null) {
       </div>
 
       <div data-section="book">
+        <div class="field">
+          <label class="field-label" for="f-author">저자 <span class="muted">(선택)</span></label>
+          <input id="f-author" type="text" class="input input-wide" value="${escapeHtml(v.author || '')}" ${locked ? 'readonly' : ''}>
+        </div>
         ${renderChapterEditorHtml(v.lastPage)}
       </div>
 
@@ -1690,6 +1769,14 @@ function renderGoalForm(root, goal, bookId = null) {
   form.addEventListener('change', (e) => { if (e.target.name === 'type') updateFormView(); });
   form.addEventListener('input', updateFormView);
   bindChapterEditor(form, updateFormView);
+  form.addEventListener('click', (e) => {
+    const weeks = e.target.closest('[data-weeks]')?.dataset.weeks;
+    if (!weeks) return;
+    const start = form.querySelector('#f-start').value;
+    if (!isValidDateStr(start)) return;
+    form.querySelector('#f-due').value = addDays(start, Number(weeks) * 7 - 1);
+    updateFormView();
+  });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     submitGoalForm(goal, requiredBook && !goal ? requiredBook.id : null);
@@ -1807,6 +1894,7 @@ function collectFormInput() {
     startDate: val('f-start'),
     dueDate: val('f-due'),
     ...readChapterEditor(),
+    author: val('f-author'),
     titles: parseLectureLines(val('f-lectures')),
     restWeekdays: [...document.querySelectorAll('input[name="rest-weekday"]:checked')].map((el) => Number(el.value)),
   };
@@ -1829,6 +1917,22 @@ function updateFormView() {
       : study === days ? `${days}일` : `${days}일 중 공부하는 날 ${study}일`;
   }
   document.getElementById('f-days').textContent = daysText;
+
+  // 하루 평균 분량 안내
+  let daily = '';
+  if (days > 0) {
+    const study = countStudyDays(input.startDate, input.dueDate, input.restWeekdays);
+    const first = input.chapters[0] && input.chapters[0].startPage;
+    const total = isBook
+      ? (Number.isInteger(first) && Number.isInteger(input.lastPage) ? input.lastPage - first + 1 : 0)
+      : input.titles.length;
+    if (study > 0 && total > 0) {
+      const avg = total / study;
+      const unit = isBook ? '페이지' : '강';
+      daily = `공부하는 날 하루 약 <b>${avg >= 10 ? Math.round(avg) : Math.round(avg * 10) / 10}${unit}</b>`;
+    }
+  }
+  document.getElementById('f-daily').innerHTML = daily;
 
   refreshChapterEditor();
   document.getElementById('f-lecture-count').textContent = `${input.titles.length}개 강의`;
@@ -1898,14 +2002,20 @@ function renderGoalDetail(root, goal) {
   root.innerHTML = `
     <div id="detail">
       <header class="page-header">
-        <div>
+        <div class="detail-title">
+          ${renderCoverThumb(getCoverUrl(goal), 'lg')}
+          <div>
           <a class="back-link" href="#/">← 대시보드</a>
           <h1>${escapeHtml(goal.title)}</h1>
+          ${getBookAuthor(goal) ? `<p class="detail-author">${escapeHtml(getBookAuthor(goal))} 지음</p>` : ''}
           <p class="muted">
-            <span class="type-tag type-${goal.type}">${goal.type === 'book' ? '책' : '강의'}</span>
+            ${goal.requiredBookId && requiredBooks.some((b) => b.id === goal.requiredBookId)
+              ? '<span class="type-tag type-required">필독서</span>'
+              : `<span class="type-tag type-${goal.type}">${goal.type === 'book' ? '책' : '강의'}</span>`}
             ${goal.startDate} ~ ${goal.dueDate} · ${formatDday(s.dday)}
             ${getRestWeekdays(goal).length ? ` · 쉬는 요일 ${WEEKDAY_ORDER.filter((d) => getRestWeekdays(goal).includes(d)).map((d) => WEEKDAYS_KO[d]).join('·')}` : ''}
           </p>
+          </div>
         </div>
         <div class="header-actions">
           <a class="btn" href="#/edit/${escapeHtml(goal.id)}">수정</a>
@@ -2083,6 +2193,7 @@ function describeEditChanges(goal, input) {
   if (getRestWeekdays(goal).join() !== normalizeWeekdays(input.restWeekdays).join()) changes.push('쉬는 요일');
   if (goal.type === 'book') {
     if (isBookStructureChanged(goal, input)) changes.push('챕터·페이지');
+    if (getBookAuthor(goal) !== (input.author || '').trim()) changes.push('저자');
   } else if (JSON.stringify(goal.lecture.titles) !== JSON.stringify(input.titles)) {
     changes.push(`강의 목록(${goal.lecture.titles.length}개 → ${input.titles.length}개)`);
   }
@@ -2492,6 +2603,7 @@ const adminState = {
   profiles: [],
   goals: [], // [{ userId, goal }] 모든 사용자의 필독서 목표
   editingBookId: null, // null | 'new' | 책 id
+  cover: null, // 편집 중인 표지 { file?, previewUrl, removed? }
 };
 
 const ADMIN_TABS = [
@@ -2589,7 +2701,13 @@ function renderAdminProgress() {
     return `
       <section class="panel admin-book">
         <div class="admin-book-head">
-          <h2 class="section-title">${escapeHtml(book.title)}</h2>
+          <div class="book-cell">
+            ${renderCoverThumb(book.coverUrl, 'sm')}
+            <div>
+              <h2 class="section-title">${escapeHtml(book.title)}</h2>
+              ${book.author ? `<span class="muted">${escapeHtml(book.author)}</span>` : ''}
+            </div>
+          </div>
           <span class="muted">계획 세운 사람 ${planned}/${team.length}명${behind ? ` · <b class="text-danger">밀림 ${behind}명</b>` : ''}</span>
         </div>
         <table class="admin-table">
@@ -2635,9 +2753,25 @@ function renderAdminBooks() {
       <h2 class="section-title">${book ? '필독서 수정' : '필독서 추가'}</h2>
       ${book ? `<p class="notice">저장하면 이미 계획을 세운 팀원에게 "내용 변경됨"이 표시되고,
         각자 미리보기를 확인한 뒤 자기 계획에 반영합니다.</p>` : ''}
-      <div class="field">
-        <label class="field-label" for="f-title">책 제목</label>
-        <input id="f-title" type="text" class="input input-wide" value="${escapeHtml(book ? book.title : '')}">
+      <div class="book-form-top">
+        <div class="cover-picker">
+          <div class="cover-preview" id="cover-preview">${renderCoverPreview(book)}</div>
+          <label class="btn btn-small">표지 이미지 선택
+            <input type="file" id="cover-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+          </label>
+          <button type="button" class="btn btn-small" data-action="cover-remove">표지 빼기</button>
+          <span class="field-hint">JPG·PNG·WEBP, 3MB 이하</span>
+        </div>
+        <div class="book-form-fields">
+          <div class="field">
+            <label class="field-label" for="f-title">책 제목</label>
+            <input id="f-title" type="text" class="input input-wide" value="${escapeHtml(book ? book.title : '')}">
+          </div>
+          <div class="field">
+            <label class="field-label" for="f-author">저자 <span class="muted">(선택)</span></label>
+            <input id="f-author" type="text" class="input input-wide" value="${escapeHtml(book ? book.author : '')}">
+          </div>
+        </div>
       </div>
       ${renderChapterEditorHtml(book ? book.lastPage : '')}
       <div id="form-errors" class="errors" hidden></div>
@@ -2655,11 +2789,22 @@ function renderAdminBooks() {
           const planned = team.filter((p) => adminState.goals.some((x) => x.userId === p.user_id && x.goal.requiredBookId === b.id)).length;
           return `
             <tr>
-              <td><strong>${escapeHtml(b.title)}</strong></td>
+              <td>
+                <div class="book-cell">
+                  ${renderCoverThumb(b.coverUrl, 'sm')}
+                  <div><strong>${escapeHtml(b.title)}</strong>${b.author ? `<div class="muted">${escapeHtml(b.author)}</div>` : ''}</div>
+                </div>
+              </td>
               <td class="num">${b.chapters.length}개</td>
               <td class="num">${b.lastPage - b.chapters[0].startPage + 1}페이지</td>
               <td class="num">${planned}/${team.length}명</td>
               <td class="row-actions">
+                ${(() => {
+                  const mine = findGoalForBook(appData.goals, b.id);
+                  return mine
+                    ? `<a class="btn btn-small" href="#/goal/${escapeHtml(mine.id)}">내 계획 보기</a>`
+                    : `<a class="btn btn-small btn-primary" href="#/new/book/${escapeHtml(b.id)}">내 계획 세우기</a>`;
+                })()}
                 <button type="button" class="btn btn-small" data-action="book-edit" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>수정</button>
                 <button type="button" class="btn btn-small btn-danger" data-action="book-delete" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>삭제</button>
               </td>
@@ -2677,8 +2822,24 @@ function renderAdminBooks() {
     ${list}`;
 }
 
+/** 편집 중인 표지 미리보기 (새로 고른 파일 > 기존 표지) */
+function renderCoverPreview(book) {
+  const c = adminState.cover;
+  const url = c ? (c.removed ? null : c.previewUrl) : (book && book.coverUrl);
+  return url ? `<img src="${escapeHtml(url)}" alt="표지 미리보기">` : '<span class="cover-empty">표지 없음</span>';
+}
+
+function resetCoverDraft() {
+  if (adminState.cover && adminState.cover.file) URL.revokeObjectURL(adminState.cover.previewUrl);
+  adminState.cover = null;
+}
+
 async function submitBookForm(form) {
-  const input = { title: document.getElementById('f-title').value, ...readChapterEditor() };
+  const input = {
+    title: document.getElementById('f-title').value,
+    author: document.getElementById('f-author').value,
+    ...readChapterEditor(),
+  };
   const errors = [];
   if (!input.title.trim()) errors.push('책 제목을 입력하세요.');
   errors.push(...validateBookStructure(input));
@@ -2689,13 +2850,21 @@ async function submitBookForm(form) {
     return;
   }
   const id = adminState.editingBookId === 'new' ? null : adminState.editingBookId;
+  const before = id ? requiredBooks.find((b) => b.id === id) : null;
+  const oldCover = before ? before.coverUrl : null;
+  const draft = adminState.cover;
   form.querySelector('button[type="submit"]').disabled = true;
   try {
-    const saved = await adminSaveRequiredBook({ ...input, id });
+    let coverUrl = oldCover;
+    if (draft && draft.file) coverUrl = await adminUploadCover(draft.file);
+    else if (draft && draft.removed) coverUrl = null;
+    const saved = await adminSaveRequiredBook({ ...input, id, coverUrl });
+    if (oldCover && oldCover !== coverUrl) adminRemoveCoverFile(oldCover);
     const idx = requiredBooks.findIndex((b) => b.id === saved.id);
     if (idx >= 0) requiredBooks[idx] = saved;
     else requiredBooks.push(saved);
     adminState.editingBookId = null;
+    resetCoverDraft();
     render();
   } catch (err) {
     box.innerHTML = `<strong>저장하지 못했습니다</strong><ul><li>${escapeHtml(err.message || String(err))}</li></ul>`;
@@ -2745,20 +2914,28 @@ function bindAdminEvents(container, tab) {
       adminState.editingBookId = null;
       render();
     } else if (action === 'book-new') {
+      resetCoverDraft();
       adminState.editingBookId = 'new';
       render();
     } else if (action === 'book-edit') {
+      resetCoverDraft();
       adminState.editingBookId = btn.dataset.id;
       render();
     } else if (action === 'book-cancel') {
+      resetCoverDraft();
       adminState.editingBookId = null;
       render();
+    } else if (action === 'cover-remove') {
+      resetCoverDraft();
+      adminState.cover = { removed: true };
+      container.querySelector('#cover-preview').innerHTML = renderCoverPreview(null);
     } else if (action === 'book-delete') {
       const book = requiredBooks.find((b) => b.id === btn.dataset.id);
       if (!confirm(`'${book.title}' 필독서를 삭제할까요?\n팀원들이 이미 세운 계획은 지워지지 않고 일반 목표로 남습니다.`)) return;
       btn.disabled = true;
       try {
         await adminDeleteRequiredBook(book.id);
+        adminRemoveCoverFile(book.coverUrl);
         requiredBooks = requiredBooks.filter((b) => b.id !== book.id);
         render();
       } catch (err) {
@@ -2769,6 +2946,19 @@ function bindAdminEvents(container, tab) {
   });
 
   container.addEventListener('change', async (e) => {
+    if (e.target.id === 'cover-file') {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (file.size > 3 * 1024 * 1024) {
+        alert('표지 이미지는 3MB 이하로 올려 주세요.');
+        e.target.value = '';
+        return;
+      }
+      resetCoverDraft();
+      adminState.cover = { file, previewUrl: URL.createObjectURL(file) };
+      container.querySelector('#cover-preview').innerHTML = renderCoverPreview(null);
+      return;
+    }
     if (e.target.dataset.action !== 'team-toggle') return;
     const el = e.target;
     const profile = adminState.profiles.find((p) => p.user_id === el.dataset.id);
