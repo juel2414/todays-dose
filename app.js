@@ -3277,8 +3277,11 @@ function renderBookSearchResults(books) {
           .filter(Boolean).map(escapeHtml).join(' · ')}</span>
       </div>
       ${b.toc ? `<span class="type-tag type-lecture">${t('목차 있음')}</span>` : ''}
+      ${b.link ? `<a class="small muted" href="${escapeHtml(b.link)}" target="_blank" rel="noopener">${t('YES24에서 보기')}</a>` : ''}
       <button type="button" class="btn btn-small btn-primary" data-action="book-pick-result" data-index="${i}">${t('고르기')}</button>
-    </div>`).join('');
+    </div>`).join('') + `<p class="muted small book-search-credit">${t('정보 제공: {sources}', {
+      sources: [books.some((b) => b.source === 'yes24') ? 'YES24' : '', books.some((b) => b.source === 'nlk' || b.nlkPages) ? t('국립중앙도서관') : '']
+        .filter(Boolean).join(' · ') })}</p>`;
 }
 
 function bindBookSearch(form, onChange) {
@@ -3325,6 +3328,13 @@ async function pickSearchedBook(form, book, btn, onChange) {
   form.querySelector('#f-author').value = book.author || '';
   const lastEl = form.querySelector('#f-last-page');
   if (book.pages && lastEl) lastEl.value = book.pages;
+  // 도서관 책 편집(관리자)이면 표지도 검색 결과로
+  const coverPreview = form.querySelector('#cover-preview');
+  if (coverPreview && book.coverUrl && !(adminState.cover && adminState.cover.file)) {
+    resetCoverDraft();
+    adminState.cover = { previewUrl: book.coverUrl, remoteUrl: book.coverUrl };
+    coverPreview.innerHTML = renderCoverPreview(null);
+  }
   const resultEl = form.querySelector('#toc-result');
   const parts = [t("'{title}' 정보를 채웠습니다.", { title: book.title })];
   if (book.pages) parts.push(t('마지막 페이지는 책 전체 쪽수({n}쪽)예요. 본문이 끝나는 페이지와 다르면 고쳐 주세요.', { n: book.pages }));
@@ -5262,7 +5272,7 @@ function renderAdminBooks() {
         <div class="book-search-row">
           <input id="f-book-q" type="search" class="input" placeholder="${t('책 제목이나 ISBN으로 찾기')}" aria-label="${t('책 검색')}">
           <button type="button" class="btn" data-action="book-search">${t('책 검색')}</button>
-          <span class="field-hint">${t('국립중앙도서관 정보로 제목·저자·마지막 페이지를 채우고, 목차가 있으면 챕터도 채워요.')}</span>
+          <span class="field-hint">${t('YES24·국립중앙도서관 정보로 제목·저자·마지막 페이지·표지를 채우고, 목차가 있으면 챕터도 채워요.')}</span>
         </div>
         <div id="book-search-results" class="book-search-results" hidden></div>
       </div>` : ''}
@@ -5467,6 +5477,7 @@ async function submitBookForm(form) {
     let coverUrl = oldCover;
     if (draft && draft.file) coverUrl = await adminUploadCover(draft.file);
     else if (draft && draft.removed) coverUrl = null;
+    else if (draft && draft.remoteUrl) coverUrl = draft.remoteUrl; // 책 검색에서 가져온 표지
     const status = before && before.status !== 'approved' ? 'approved' : undefined; // 검토 중이면 승인
     const saved = await adminSaveRequiredBook({ ...input, id, coverUrl, status });
     if (oldCover && oldCover !== coverUrl) adminRemoveCoverFile(oldCover);
@@ -7832,6 +7843,10 @@ const EN = {
   '시작 페이지는 목차 정보에 없어서 노란 칸에 직접 넣어 주세요. (목차 사진을 올리면 AI가 페이지까지 읽어요)': 'Start pages are not in the catalog data, so fill in the yellow boxes. (Upload a photo of the contents and AI reads the pages too.)',
   '목차는 불러오지 못했어요. 목차 사진을 올리거나 직접 입력해 주세요.': 'Could not load the contents. Upload a photo of the contents or type them in.',
   '이 책은 목차 정보가 없어요. 목차 사진을 올리거나 직접 입력해 주세요.': 'No contents for this book. Upload a photo of the contents or type them in.',
+  'YES24에서 보기': 'View on YES24',
+  '정보 제공: {sources}': (p) => `Data: ${p.sources}`,
+  '국립중앙도서관': 'National Library of Korea',
+  'YES24·국립중앙도서관 정보로 제목·저자·마지막 페이지·표지를 채우고, 목차가 있으면 챕터도 채워요.': 'Fills in the title, author, last page and cover from YES24 and the National Library of Korea, plus chapters when contents are available.',
 };
 
 /* =========================================================================
