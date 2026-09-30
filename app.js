@@ -2066,6 +2066,7 @@ function renderTopbar() {
       <div class="topbar-right">
         ${renderLangToggle()}
         ${status}
+        ${account.isAdmin ? `
         <div class="user-menu">
           <button type="button" class="user-menu-btn" data-action="user-menu" aria-haspopup="true" aria-expanded="${userMenuOpen}">
             ${escapeHtml(name || currentUser.email || '')} <span aria-hidden="true">▾</span>
@@ -2075,7 +2076,7 @@ function renderTopbar() {
             <button type="button" data-action="backup-import" title="${t('백업한 JSON 파일로 전체 데이터를 바꿉니다')}">${t('백업에서 복원')}</button>
             <input type="file" id="backup-file" accept=".json,application/json" hidden>
           </div>
-        </div>
+        </div>` : `<span class="user">${escapeHtml(name || currentUser.email || '')}</span>`}
         <button type="button" class="btn btn-small" data-action="sign-out">${t('로그아웃')}</button>
       </div>
     </div>`;
@@ -5851,7 +5852,7 @@ async function boot() {
       renderTopbar();
       return;
     }
-    if (action === 'backup-export' || action === 'backup-import') {
+    if ((action === 'backup-export' || action === 'backup-import') && account.isAdmin) {
       userMenuOpen = false;
       renderTopbar();
       if (action === 'backup-import') document.getElementById('backup-file').click();
@@ -5866,7 +5867,7 @@ async function boot() {
     }
   });
   document.getElementById('topbar').addEventListener('change', (e) => {
-    if (e.target.id !== 'backup-file') return;
+    if (e.target.id !== 'backup-file' || !account.isAdmin) return;
     const file = e.target.files[0];
     e.target.value = ''; // 같은 파일을 다시 골라도 change가 일어나도록
     if (file) importBackup(file);
