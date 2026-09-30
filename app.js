@@ -3146,11 +3146,9 @@ function bindAdminEvents(container, tab) {
 
 /* =========================================================================
  * 12. 이미지로 내보내기 — 매일 읽을 분량 + 현재 진행 상황을 PNG 한 장으로
- *     외부 라이브러리 없이 Canvas로 직접 그린다. (세로형, 폭 1080px)
+ *     외부 라이브러리 없이 Canvas로 직접 그린다. (16:9 가로형, 1920×1080)
  * ========================================================================= */
 
-const EXPORT_WIDTH = 1080;
-const EXPORT_PAD = 64;
 const EXPORT_FONT = "-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif";
 const EXPORT_COLORS = {
   bg: '#f5f6f8', surface: '#ffffff', text: '#1f2328', muted: '#6b7280', border: '#e3e5ea',
@@ -3243,10 +3241,9 @@ function loadImage(url) {
 }
 
 /**
- * 계획 이미지 그리기 → canvas (한눈에 보기용 압축 배치)
- *  - 머리: 제목 · 저자 · 기간
- *  - 현황: 실제 완료 / 끝 · 진행률 · 진행 막대 · 핵심 숫자 3개 · 안내 한 줄
- *  - 날짜별: 하루 한 줄 (날짜 · 범위 · 분량 · 완료). 16일 넘으면 두 칸으로.
+ * 계획 이미지 그리기 → canvas (16:9 가로형, 1920×1080)
+ *  - 왼쪽: 제목 · 저자 · 기간 / 현재 진도 · 진행 막대 · 핵심 숫자 · 안내
+ *  - 오른쪽: 날짜별 계획 (하루 한 줄). 날짜가 많으면 2~3칸으로 나누고 줄 높이를 줄여 한 화면에 맞춘다.
  * options: { basis, range: 'all' | 'upcoming' }
  */
 async function drawPlanImage(goal, options) {
@@ -3260,9 +3257,9 @@ async function drawPlanImage(goal, options) {
   const done = getDoneUnits(goal, basis);
   const C = EXPORT_COLORS;
 
-  const W = EXPORT_WIDTH;
-  const P = 56;
-  const inner = W - P * 2;
+  const W = 1920;
+  const H = 1080;
+  const P = 64;
   const font = (size, weight = 400) => `${weight} ${size}px ${EXPORT_FONT}`;
   const fit = (ctx, text, maxW) => {
     if (ctx.measureText(text).width <= maxW) return text;
@@ -3271,23 +3268,6 @@ async function drawPlanImage(goal, options) {
     return `${t}…`;
   };
 
-  // 두 칸 여부와 높이 계산
-  const twoCols = rows.length > 16;
-  const perCol = twoCols ? Math.ceil(rows.length / 2) : rows.length;
-  const ROW_H = twoCols ? 50 : 58;
-  const isRequired = goal.requiredBookId && requiredBooks.some((b) => b.id === goal.requiredBookId);
-  const headerH = Math.max(isRequired ? 196 : 150, cover ? 44 + 145 + 24 : 0);
-
-  // 안내 문구가 길면 두 줄
-  const measureCtx = document.createElement('canvas').getContext('2d');
-  measureCtx.font = font(22, 600);
-  const msgLines = wrapText(measureCtx, stripTags(msg.html), inner - 72 - 36).slice(0, 2);
-  const msgH = msgLines.length > 1 ? 80 : 46;
-  const statusH = 284 + msgH;
-  const tableTop = headerH + statusH + 24;
-  const tableH = 70 + perCol * ROW_H + 24;
-  const H = tableTop + tableH + 70;
-
   const canvas = document.createElement('canvas');
   canvas.width = W;
   canvas.height = H;
@@ -3295,66 +3275,64 @@ async function drawPlanImage(goal, options) {
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, W, H);
 
-  // ---- 머리
-  let x = P;
+  /* ===== 왼쪽 ===== */
+  const LW = 640;
+  let y = P;
+  const isRequired = goal.requiredBookId && requiredBooks.some((b) => b.id === goal.requiredBookId);
+
+  // 표지 + 제목
+  let tx = P;
   if (cover) {
-    const cw = 100;
-    const ch = Math.min(145, Math.round(cw * (cover.height / cover.width)));
+    const cw = 110;
+    const ch = Math.min(160, Math.round(cw * (cover.height / cover.width)));
     ctx.save();
     ctx.shadowColor = 'rgba(16,24,40,0.25)';
-    ctx.shadowBlur = 12;
-    ctx.drawImage(cover, P, 44, cw, ch);
+    ctx.shadowBlur = 14;
+    ctx.drawImage(cover, P, y, cw, ch);
     ctx.restore();
-    x = P + cw + 28;
+    tx = P + cw + 28;
   }
-  let y = 44;
+  const titleW = P + LW - tx;
+  let ty = y;
   if (isRequired) {
-    ctx.font = font(20, 700);
-    const tw = ctx.measureText('사역자 필독서').width + 24;
-    roundRect(ctx, x, y, tw, 34, 7, C.requiredSoft);
+    ctx.font = font(22, 700);
+    const tw = ctx.measureText('사역자 필독서').width + 26;
+    roundRect(ctx, tx, ty, tw, 38, 8, C.requiredSoft);
     ctx.fillStyle = C.required;
-    ctx.fillText('사역자 필독서', x + 12, y + 24);
-    y += 46;
+    ctx.fillText('사역자 필독서', tx + 13, ty + 27);
+    ty += 52;
   }
-  ctx.font = font(42, 800);
+  ctx.font = font(46, 800);
   ctx.fillStyle = C.text;
-  ctx.fillText(fit(ctx, goal.title, W - P - x), x, y + 38);
-  ctx.font = font(23);
+  const titleLines = wrapText(ctx, goal.title, titleW).slice(0, 2);
+  titleLines.forEach((line, i) => ctx.fillText(line, tx, ty + 44 + i * 56));
+  ty += 44 + (titleLines.length - 1) * 56;
+  ctx.font = font(24);
   ctx.fillStyle = C.muted;
+  if (getBookAuthor(goal)) {
+    ty += 42;
+    ctx.fillText(fit(ctx, `${getBookAuthor(goal)} 지음`, titleW), tx, ty);
+  }
   const rest = getRestWeekdays(goal);
-  const meta = [
-    getBookAuthor(goal) ? `${getBookAuthor(goal)} 지음` : '',
+  ty += 38;
+  ctx.fillText(fit(ctx, [
     `${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)}`,
     formatDday(s.dday),
     rest.length ? `${WEEKDAY_ORDER.filter((d) => rest.includes(d)).map((d) => WEEKDAYS_KO[d]).join('·')} 쉼` : '',
-  ].filter(Boolean).join('  ·  ');
-  ctx.fillText(fit(ctx, meta, W - P - x), x, y + 78);
+  ].filter(Boolean).join('  ·  '), titleW), tx, ty);
 
-  // ---- 현황 카드
-  y = headerH;
-  roundRect(ctx, P, y, inner, statusH, 22, C.surface);
+  // 현황 카드
+  const cardY = Math.max(ty + 44, cover ? y + 200 : 0);
+  const cardH = H - P - 44 - cardY;
+  roundRect(ctx, P, cardY, LW, cardH, 24, C.surface);
   const cx = P + 36;
-  const cw = inner - 72;
+  const cw = LW - 72;
+  let cy = cardY + 56;
 
-  // 큰 숫자: 실제 완료 / 끝 + 진행률 + 상태
   ctx.font = font(24, 600);
   ctx.fillStyle = C.muted;
-  ctx.fillText('현재 진도', cx, y + 50);
-  ctx.font = font(52, 800);
-  ctx.fillStyle = C.text;
-  const doneText = formatPosition(goal, s.basis, s.done);
-  ctx.fillText(doneText, cx, y + 112);
-  let tx = cx + ctx.measureText(doneText).width + 12;
-  ctx.font = font(30, 600);
-  ctx.fillStyle = C.muted;
-  const totalText = `/ ${formatPosition(goal, s.basis, s.total)}`;
-  ctx.fillText(totalText, tx, y + 112);
-  tx += ctx.measureText(totalText).width + 20;
-  ctx.font = font(30, 800);
-  ctx.fillStyle = C.bar;
-  ctx.fillText(`${s.percent}%`, tx, y + 112);
-
-  // 상태 배지 (오른쪽 위)
+  ctx.fillText('현재 진도', cx, cy);
+  // 상태 배지
   const badge = s.isComplete ? ['완료', C.successSoft, C.success]
     : s.isOverdue ? ['종료 · 미완료', '#fff4e0', '#9a5b00']
     : s.notStarted ? ['시작 전', C.neutralSoft, C.muted]
@@ -3363,135 +3341,165 @@ async function drawPlanImage(goal, options) {
     : ['계획대로', C.primarySoft, C.primary];
   ctx.font = font(24, 700);
   const bw = ctx.measureText(badge[0]).width + 36;
-  roundRect(ctx, cx + cw - bw, y + 28, bw, 44, 22, badge[1]);
+  roundRect(ctx, cx + cw - bw, cy - 32, bw, 46, 23, badge[1]);
   ctx.fillStyle = badge[2];
-  ctx.fillText(badge[0], cx + cw - bw + 18, y + 58);
+  ctx.fillText(badge[0], cx + cw - bw + 18, cy - 1);
+
+  cy += 70;
+  ctx.font = font(64, 800);
+  ctx.fillStyle = C.text;
+  const doneText = formatPosition(goal, s.basis, s.done);
+  ctx.fillText(doneText, cx, cy);
+  let nx = cx + ctx.measureText(doneText).width + 14;
+  ctx.font = font(32, 600);
+  ctx.fillStyle = C.muted;
+  const totalText = `/ ${formatPosition(goal, s.basis, s.total)}`;
+  ctx.fillText(totalText, nx, cy);
+  nx += ctx.measureText(totalText).width + 20;
+  ctx.font = font(34, 800);
+  ctx.fillStyle = C.bar;
+  ctx.fillText(`${s.percent}%`, nx, cy);
 
   // 진행 막대
-  const barY = y + 140;
-  roundRect(ctx, cx, barY, cw, 18, 9, C.neutralSoft);
+  cy += 36;
+  roundRect(ctx, cx, cy, cw, 20, 10, C.neutralSoft);
   const donePct = s.total ? Math.min(1, s.done / s.total) : 0;
   const targetPct = s.total ? Math.min(1, s.target / s.total) : 0;
-  roundRect(ctx, cx, barY, Math.max(18, cw * donePct), 18, 9, C.bar);
+  roundRect(ctx, cx, cy, Math.max(20, cw * donePct), 20, 10, C.bar);
   ctx.fillStyle = C.text;
-  ctx.fillRect(cx + cw * targetPct - 2, barY - 7, 4, 32);
+  ctx.fillRect(cx + cw * targetPct - 2, cy - 8, 4, 36);
+  ctx.font = font(20);
+  ctx.fillStyle = C.muted;
+  ctx.fillText('초록 = 실제 진도   |   검정 선 = 오늘까지 권장', cx, cy + 56);
 
-  // 핵심 숫자 3개
+  // 핵심 숫자 (세로 목록)
+  cy += 104;
   const facts = [
     ['하루 권장', formatAmount(s.dailyPlan, s.basis)],
     ['오늘까지 권장', formatPosition(goal, s.basis, s.target)],
     ['남은 공부일', s.isOverdue || s.isComplete ? '-' : `${s.remainingStudyDays}일`],
   ];
-  const fw = cw / 3;
-  facts.forEach(([label, value], i) => {
-    const fx = cx + i * fw;
-    ctx.font = font(22);
+  facts.forEach(([label, value]) => {
+    ctx.fillStyle = C.border;
+    ctx.fillRect(cx, cy - 36, cw, 1);
+    ctx.font = font(24);
     ctx.fillStyle = C.muted;
-    ctx.fillText(label, fx, y + 210);
+    ctx.fillText(label, cx, cy);
     ctx.font = font(30, 800);
     ctx.fillStyle = C.text;
-    ctx.fillText(value, fx, y + 248);
+    ctx.textAlign = 'right';
+    ctx.fillText(value, cx + cw, cy + 2);
+    ctx.textAlign = 'left';
+    cy += 62;
   });
 
-  // 안내 한 줄
+  // 안내 문구 (카드 아래쪽에 맞춤)
   const tone = { behind: [C.dangerSoft, '#a3261c'], ahead: [C.successSoft, C.success], done: [C.successSoft, C.success],
     ontrack: [C.primarySoft, '#1d4ab5'], ended: ['#fff4e0', '#7a4a00'], neutral: [C.neutralSoft, C.text] }[msg.tone];
-  roundRect(ctx, cx, y + 268, cw, msgH, 12, tone[0]);
-  ctx.font = font(22, 600);
+  ctx.font = font(24, 600);
+  const msgLines = wrapText(ctx, stripTags(msg.html), cw - 44).slice(0, 3);
+  const msgH = 36 + msgLines.length * 36;
+  const msgY = Math.max(cy - 10, cardY + cardH - 36 - msgH);
+  roundRect(ctx, cx, msgY, cw, msgH, 14, tone[0]);
   ctx.fillStyle = tone[1];
-  msgLines.forEach((line, i) => ctx.fillText(line, cx + 18, y + 298 + i * 32));
+  msgLines.forEach((line, i) => ctx.fillText(line, cx + 22, msgY + 44 + i * 36));
 
-  // ---- 날짜별 표
-  y = tableTop;
-  roundRect(ctx, P, y, inner, tableH, 22, C.surface);
-  ctx.font = font(28, 800);
-  ctx.fillStyle = C.text;
-  ctx.fillText(goal.type === 'book' ? '매일 읽을 분량' : '매일 들을 분량', P + 36, y + 48);
+  // 바닥글
   ctx.font = font(20);
+  ctx.fillStyle = C.muted;
+  ctx.fillText(`학습 진도 계획표 · ${today} (${weekdayKo(today)}) 기준`, P, H - P + 16);
+
+  /* ===== 오른쪽: 날짜별 계획 ===== */
+  const RX = P + LW + 40;
+  const RW = W - P - RX;
+  const RY = P;
+  const RH = H - P * 2;
+  roundRect(ctx, RX, RY, RW, RH, 24, C.surface);
+  ctx.font = font(30, 800);
+  ctx.fillStyle = C.text;
+  ctx.fillText(goal.type === 'book' ? '매일 읽을 분량' : '매일 들을 분량', RX + 36, RY + 56);
+  ctx.font = font(21);
   ctx.fillStyle = C.muted;
   ctx.textAlign = 'right';
   const basisLabel = { page: '페이지 기준', chapter: '챕터 기준', lecture: '강의' }[basis];
-  ctx.fillText(`${basisLabel} · ${options.range === 'upcoming' ? '오늘부터' : '전체 기간'}   ✓ 완료  ■ 오늘`, W - P - 36, y + 46);
+  ctx.fillText(`${basisLabel} · ${options.range === 'upcoming' ? '오늘부터' : '전체 기간'}   ✓ 완료`, RX + RW - 36, RY + 54);
   ctx.textAlign = 'left';
 
-  const colGap = 24;
-  const colW = twoCols ? (inner - 72 - colGap) / 2 : inner - 72;
-  const rowsTop = y + 70;
+  const listTop = RY + 88;
+  const listH = RH - 88 - 28;
+  const listW = RW - 72;
+  const MAX_ROW_H = 58;
+  const MIN_ROW_H = 40; // 이보다 줄이 낮아지면 칸을 늘린다
+  let cols = Math.max(1, Math.ceil(rows.length / Math.floor(listH / MIN_ROW_H)));
+  cols = Math.min(cols, 3);
+  const perCol = Math.max(1, Math.ceil(rows.length / cols));
+  const rowH = Math.min(MAX_ROW_H, listH / perCol);
+  const colGap = 28;
+  const colW = (listW - colGap * (cols - 1)) / cols;
+  const fs = rowH >= 50 ? 24 : rowH >= 40 ? 21 : 18; // 줄 높이에 맞춘 글자 크기
 
   rows.forEach((row, i) => {
-    const col = twoCols && i >= perCol ? 1 : 0;
-    const rx = P + 36 + col * (colW + colGap);
-    const ry = rowsTop + (i - col * perCol) * ROW_H;
+    const col = Math.floor(i / perCol);
+    const rx = RX + 36 + col * (colW + colGap);
+    const ry = listTop + (i - col * perCol) * rowH;
     const t = rowTextForExport(goal, basis, row);
     const dayDiff = diffDays(today, row.date);
     const checked = !t.rest && done >= row.cumulative;
     const behind = dayDiff < 0 && !checked && !t.rest;
 
-    if (dayDiff === 0) roundRect(ctx, rx - 10, ry + 4, colW + 20, ROW_H - 8, 10, C.primarySoft);
-    else if (behind) roundRect(ctx, rx - 10, ry + 4, colW + 20, ROW_H - 8, 10, C.dangerSoft);
+    if (dayDiff === 0) roundRect(ctx, rx - 10, ry + 3, colW + 20, rowH - 6, 10, C.primarySoft);
+    else if (behind) roundRect(ctx, rx - 10, ry + 3, colW + 20, rowH - 6, 10, C.dangerSoft);
     ctx.globalAlpha = checked && dayDiff !== 0 ? 0.4 : 1;
-    const base = ry + ROW_H / 2 + 8;
+    const base = ry + rowH / 2 + fs * 0.36;
 
-    // 날짜
     const d = parseDate(row.date);
     const dow = d.getDay();
-    ctx.font = font(twoCols ? 22 : 24, 700);
+    ctx.font = font(fs, 700);
     ctx.fillStyle = behind ? C.danger : C.text;
-    const dateText = `${d.getMonth() + 1}/${d.getDate()}`;
-    ctx.fillText(dateText, rx, base);
-    ctx.font = font(twoCols ? 20 : 22, 600);
+    ctx.fillText(`${d.getMonth() + 1}/${d.getDate()}`, rx, base);
+    ctx.font = font(fs - 2, 600);
     ctx.fillStyle = dow === 0 ? C.danger : dow === 6 ? C.primary : C.muted;
-    ctx.fillText(WEEKDAYS_KO[dow], rx + (twoCols ? 72 : 78), base);
+    ctx.fillText(WEEKDAYS_KO[dow], rx + fs * 3, base);
 
-    // 범위 / 분량
-    const rangeX = rx + (twoCols ? 108 : 122);
-    const checkW = 34;
-    const amountW = twoCols ? 86 : 110;
+    const rangeX = rx + fs * 4.3;
+    const checkW = fs * 1.4;
+    const compact = cols > 1; // 여러 칸이면 분량을 짧게 (11쪽)
+    const amountW = compact ? fs * 3.2 : fs * 4.6;
     const rangeMaxW = colW - (rangeX - rx) - amountW - checkW;
     if (t.rest) {
-      ctx.font = font(twoCols ? 20 : 22);
+      ctx.font = font(fs - 2);
       ctx.fillStyle = C.muted;
       ctx.fillText(t.main, rangeX, base);
     } else {
-      const range = basis === 'page'
-        ? t.main.replace(/\s*\(.*\)$/, '')
-        : basis === 'chapter'
-          ? getChapterRanges(goal.book).slice(row.prevCumulative, row.cumulative).map((c) => c.name).join(', ')
-          : t.main.replace(/\s*\(.*\)$/, '');
-      ctx.font = font(twoCols ? 22 : 24, 700);
+      const range = basis === 'chapter'
+        ? getChapterRanges(goal.book).slice(row.prevCumulative, row.cumulative).map((c) => c.name).join(', ')
+        : t.main.replace(/\s*\(.*\)$/, '');
+      ctx.font = font(fs, 700);
       ctx.fillStyle = C.text;
-      const rangeText = fit(ctx, range, twoCols || basis !== 'page' ? rangeMaxW : 170);
+      const rangeText = fit(ctx, range, basis === 'page' && cols === 1 ? Math.min(rangeMaxW, fs * 8) : rangeMaxW);
       ctx.fillText(rangeText, rangeX, base);
-      // 한 칸 배치일 때만 챕터 설명을 흐리게 덧붙임
-      if (!twoCols && basis === 'page' && t.subs[0]) {
-        const subX = rangeX + ctx.measureText(rangeText).width + 16;
-        ctx.font = font(20);
+      if (cols === 1 && basis === 'page' && t.subs[0]) {
+        const subX = rangeX + ctx.measureText(rangeText).width + 18;
+        ctx.font = font(fs - 3);
         ctx.fillStyle = C.muted;
         ctx.fillText(fit(ctx, t.subs[0], rangeX + rangeMaxW - subX), subX, base);
       }
       ctx.textAlign = 'right';
-      ctx.font = font(twoCols ? 20 : 22, 700);
+      ctx.font = font(fs - 2, 700);
       ctx.fillStyle = C.text;
-      ctx.fillText(formatAmount(row.amount, basis), rx + colW - checkW - 6, base);
+      ctx.fillText(compact && basis === 'page' ? `${row.amount}쪽` : formatAmount(row.amount, basis), rx + colW - checkW, base);
       ctx.textAlign = 'left';
     }
     if (checked) {
-      ctx.font = font(26, 800);
+      ctx.font = font(fs + 2, 800);
       ctx.fillStyle = C.success;
-      ctx.fillText('✓', rx + colW - 24, base + 1);
+      ctx.fillText('✓', rx + colW - fs, base + 1);
     }
     ctx.globalAlpha = 1;
-
     ctx.fillStyle = C.border;
-    ctx.fillRect(rx, ry + ROW_H - 1, colW, 1);
+    ctx.fillRect(rx, ry + rowH - 1, colW, 1);
   });
 
-  // ---- 바닥글
-  ctx.font = font(20);
-  ctx.fillStyle = C.muted;
-  ctx.textAlign = 'center';
-  ctx.fillText(`학습 진도 계획표 · ${today} (${weekdayKo(today)}) 기준`, W / 2, H - 30);
-  ctx.textAlign = 'left';
   return canvas;
 }
 

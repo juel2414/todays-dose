@@ -809,3 +809,5 @@ body.modal-open { overflow: hidden; }
 .member-goal-head { display: flex; align-items: flex-end; gap: 18px; margin: 8px 0 24px; }
 .member-goal-head p { margin: 0; }
 .member-goal-title { font-size: 26px; margin: 4px 0; }
+/* 16:9 미리보기가 잘 보이도록 창을 넓게 */
+.modal-card { width: min(1100px, calc(100vw - 48px)); }
