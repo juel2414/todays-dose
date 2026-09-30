@@ -2322,6 +2322,7 @@ function renderTopbar() {
       <nav class="topbar-nav">
         <a class="brand" href="#/"><img class="brand-logo" src="logo/symbol.svg" alt="" width="26" height="26">${t('오늘분량')}</a>
         <a class="nav-link" href="#/groups">${t('그룹')}</a>
+        <a class="nav-link" href="#/help">${t('도움말')}</a>
         ${account.isAdmin ? `<a class="nav-link" href="#/admin">${t('관리자')}</a>` : ''}
       </nav>
       <div class="topbar-right">
@@ -2475,6 +2476,7 @@ function parseRoute() {
   if (name === 'new' && id === 'book' && sub) return { view: 'form', bookId: sub };
   if (name === 'new' && id === 'group' && sub) return { view: 'form', groupItemId: sub };
   if (name === 'groups') return { view: 'groups' };
+  if (name === 'help') return { view: 'help' };
   if (name === 'join' && id) return { view: 'join', code: id };
   if (name === 'group' && id && sub === 'member' && sub2) {
     const [, , , , goalId] = location.hash.replace(/^#\/?/, '').split('/');
@@ -2512,6 +2514,7 @@ function render() {
     renderAdmin(root, route.tab, route);
   } else if (route.view === 'form') renderGoalForm(root, goal, route.bookId || null, route.groupItemId || null);
   else if (route.view === 'groups') renderGroups(root);
+  else if (route.view === 'help') renderHelp(root);
   else if (route.view === 'join') renderJoinGroup(root, route.code);
   else if (route.view === 'group') renderGroupPage(root, route);
   else if (route.view === 'detail') renderGoalDetail(root, goal);
@@ -8070,6 +8073,11 @@ const EN = {
   '강의 {n}개를 채웠습니다.': (p) => `Added ${p.n} lectures.`,
   '저장하기 전에 빠지거나 잘못 읽은 제목이 없는지 확인하세요.': 'Check for missing or misread titles before saving.',
   '강의 목록을 읽지 못했습니다': 'Could not read the lesson list',
+  // 도움말
+  '도움말': 'Help',
+  '궁금한 질문을 눌러 보세요.': 'Click a question to see the answer.',
+  '도움말 검색 (예: 쉬는 날, 사진, 그룹)': 'Search help (e.g. rest days, photo, group)',
+  '찾는 내용이 없어요. 다른 말로 검색해 보세요.': 'Nothing found. Try other words.',
 };
 
 /* =========================================================================
