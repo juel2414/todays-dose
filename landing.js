@@ -17,6 +17,7 @@ const LANDING_TEXT = {
     heroDesc: '책과 강의의 전체 분량을 남은 날짜에 고르게 나누고, 밀리면 다시 맞춰 드려요. 매일 오늘분량만 채우면 기한 안에 끝납니다.',
     googleCta: 'Google 계정으로 시작하기',
     heroNote: '로그인하면 어느 기기에서든 같은 계획을 볼 수 있어요.',
+    heroAi: 'AI가 목차 사진을 읽어 챕터와 시작 페이지를 한 번에 채워 드려요',
     typesLabel: '이런 목표에 쓸 수 있어요',
     typeBook: '책',
     typeCourse: '강의',
@@ -98,6 +99,20 @@ const LANDING_TEXT = {
     featTitle: '계획은 한 번만 세우고, 매일은 오늘분량만',
     featDesc: '분량을 나누고, 일정에 맞추고, 밀린 만큼 다시 맞추는 일을 앱이 대신해요.',
 
+    aiKicker: 'AI 목차 인식',
+    aiTitle: '목차 사진 한 장이면 입력 끝',
+    aiDesc: '챕터 이름과 페이지를 하나하나 옮겨 적을 필요가 없어요. 책의 목차 페이지를 찍어 올리면 AI가 읽어서 계획에 필요한 목록을 만들어 드려요.',
+    aiP1: '챕터 이름과 시작 페이지를 한 번에 채워요.',
+    aiP2: '목차가 여러 쪽이면 사진을 여러 장 함께 올리거나 끌어다 놓으면 돼요.',
+    aiP3: '페이지를 못 읽은 칸은 노랗게 표시해서 바로 고칠 수 있어요.',
+    aiP4: '도서관에 등록해 두면 팀원들은 입력 없이 바로 계획을 세워요.',
+    aiPhotoTitle: '목차',
+    aiPhotoLines: ['서론', '1장 초대교회 사람들', '2장 가정교회', '3장 회당과 교회', '4장 노예제도'],
+    aiReading: 'AI가 읽는 중',
+    aiResultTitle: '챕터 목록',
+    aiResultNote: '5개 챕터를 채웠어요',
+    aiThName: '챕터 이름',
+    aiThPage: '시작 페이지',
     schKicker: '유연한 일정',
     schTitle: '쉬는 날은 빼고, 여유 있는 날엔 더 많이',
     schDesc: '매일 똑같이 할 수 없는 게 보통이에요. 내 일정을 알려주면 그만큼 다른 날에 나눠 담아요.',
@@ -233,7 +248,9 @@ const LANDING_TEXT = {
     q4: '성경 통독은 어떻게 기록하나요?',
     a4: '마지막으로 읽은 권과 장을 고르면 돼요. 계획표에는 날짜마다 읽을 권과 장이 표시돼요.',
     q5: '데이터를 따로 백업할 수 있나요?',
-    a5: '로그인하면 계정에 자동으로 저장되고, 대시보드에서 모든 목표를 JSON 파일로 내보내거나 다시 불러올 수 있어요.',
+    a5: '로그인하면 계정에 자동으로 저장돼요. 휴대폰이나 다른 컴퓨터에서 로그인해도 같은 계획이 그대로 보여요.',
+    q6: 'AI 목차 인식은 얼마나 정확한가요?',
+    a6: '인쇄된 목차는 대부분 정확하게 읽지만, 사진이 흐리거나 페이지 번호가 없는 목차는 일부 칸을 비워 둬요. 비어 있는 칸은 노랗게 표시되니 저장하기 전에 책과 한 번 비교해 주세요. 사진은 목차를 읽는 데만 쓰고 앱에 저장하지 않아요.',
 
     /* 하단 */
     ctaTitle: '오늘 읽을 분량부터 확인해 보세요',
@@ -253,6 +270,7 @@ const LANDING_TEXT = {
     heroDesc: "Today's Dose spreads a book or course evenly across the days you have left, and helps you catch up when you fall behind. Do today's share, and you'll finish on time.",
     googleCta: 'Continue with Google',
     heroNote: 'Sign in once and see the same plan on any device.',
+    heroAi: 'AI reads a photo of the contents page and fills in every chapter and start page',
     typesLabel: 'Works for',
     typeBook: 'Books',
     typeCourse: 'Courses',
@@ -330,6 +348,20 @@ const LANDING_TEXT = {
     featTitle: "Plan once. Then just do today's share.",
     featDesc: 'Splitting the work, fitting it to your schedule, and catching up when you slip — the app handles all of it.',
 
+    aiKicker: 'AI contents reader',
+    aiTitle: 'One photo of the contents page, and you are set',
+    aiDesc: "No more copying chapter names and page numbers by hand. Snap the table of contents and AI turns it into the list your plan needs.",
+    aiP1: 'Fills in every chapter name and start page at once.',
+    aiP2: 'Contents over several pages? Upload or drag in all the photos together.',
+    aiP3: "Any page it couldn't read is highlighted so you can fix it right away.",
+    aiP4: 'Add it to the library once, and teammates can plan without typing anything.',
+    aiPhotoTitle: 'Contents',
+    aiPhotoLines: ['Introduction', '1 The early church', '2 House churches', '3 Synagogue and church', '4 Slavery'],
+    aiReading: 'AI is reading',
+    aiResultTitle: 'Chapters',
+    aiResultNote: 'Filled in 5 chapters',
+    aiThName: 'Chapter',
+    aiThPage: 'Start page',
     schKicker: 'Flexible schedule',
     schTitle: 'Skip the days you rest. Do more when you have time.',
     schDesc: "Nobody studies the same amount every day. Tell the app about your week and it moves the work to the days you're free.",
@@ -461,7 +493,9 @@ const LANDING_TEXT = {
     q4: 'How do I log Bible reading?',
     a4: 'Pick the last book and chapter you read. Your plan shows which books and chapters to read each day.',
     q5: 'Can I back up my data?',
-    a5: 'Everything saves to your account when you sign in. You can also export all your goals to a JSON file from the dashboard and import it again later.',
+    a5: 'Everything saves to your account automatically, so you see the same plan when you sign in on your phone or another computer.',
+    q6: 'How accurate is the AI contents reader?',
+    a6: "It reads most printed contents pages correctly. If the photo is blurry or the contents have no page numbers, it leaves those cells empty and highlights them, so check against the book before saving. Photos are only used to read the contents and aren't stored in the app.",
 
     ctaTitle: "Start with today's share",
     ctaDesc: 'Set one deadline and your plan is ready.',
@@ -472,6 +506,7 @@ const LANDING_TEXT = {
 
 /* ---------- 인라인 SVG ---------- */
 const LP_SVG = {
+  spark: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>`,
   check: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   brand: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   google: '<svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>',
@@ -563,6 +598,7 @@ function renderLanding(root, options) {
           <p class="lp-hero-note" data-i18n="heroNote"></p>
           <p class="lp-alert" data-lp-alert hidden></p>
         </div>
+        <p class="lp-ai-callout"><span class="lp-ai-badge">AI</span><span data-i18n="heroAi"></span></p>
         <div class="lp-types">
           <span class="lp-types-label" data-i18n="typesLabel"></span>
           <span class="lp-type-pill" data-i18n="typeBook"></span>
@@ -715,6 +751,42 @@ function renderLanding(root, options) {
       <p class="lp-section-desc" data-i18n="featDesc"></p>
 
       <div class="lp-rows">
+        <!-- AI 목차 인식 -->
+        <div class="lp-row lp-row-ai">
+          <div class="lp-row-text">
+            <p class="lp-row-kicker lp-kicker-ai"><span class="lp-ai-badge">AI</span><span data-i18n="aiKicker"></span></p>
+            <h3 class="lp-row-title" data-i18n="aiTitle"></h3>
+            <p class="lp-row-desc" data-i18n="aiDesc"></p>
+            ${points(['aiP1', 'aiP2', 'aiP3', 'aiP4'])}
+          </div>
+          <div class="lp-visual lp-visual-ai" aria-hidden="true">
+            <div class="lp-ai-flow">
+              <div class="lp-toc-photo">
+                <span class="lp-toc-photo-title" data-i18n="aiPhotoTitle"></span>
+                ${[['aiPhotoLines', 0, '1'], ['aiPhotoLines', 1, '23'], ['aiPhotoLines', 2, '51'], ['aiPhotoLines', 3, '88'], ['aiPhotoLines', 4, '124']]
+                  .map(([, i, pg]) => `<span class="lp-toc-line"><span data-ai-line="${i}"></span><i></i><b>${pg}</b></span>`).join('')}
+              </div>
+              <div class="lp-ai-arrow">
+                <span class="lp-ai-spark">${S.spark}</span>
+                <span class="lp-small" data-i18n="aiReading"></span>
+              </div>
+              <div class="lp-panel lp-ai-result">
+                <div class="lp-panel-head">
+                  <span class="lp-panel-title" data-i18n="aiResultTitle"></span>
+                  <span class="lp-ai-done" data-i18n="aiResultNote"></span>
+                </div>
+                <table class="lp-mini-table">
+                  <thead><tr><th data-i18n="aiThName"></th><th data-i18n="aiThPage"></th></tr></thead>
+                  <tbody>
+                    ${[['1', 0], ['23', 1], ['51', 2], ['88', 3], ['', 4]].map(([pg, i]) => `
+                    <tr><td data-ai-line="${i}"></td><td>${pg ? `<span class="lp-ai-page">${pg}</span>` : '<span class="lp-ai-page lp-ai-missing">?</span>'}</td></tr>`).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- 유연한 일정 -->
         <div class="lp-row">
           <div class="lp-row-text">
@@ -964,7 +1036,7 @@ function renderLanding(root, options) {
     <div class="lp-wrap">
       <h2 class="lp-section-title" data-i18n="faqTitle"></h2>
       <div class="lp-faq">
-        ${[1, 2, 3, 4, 5].map((n) => `
+        ${[1, 2, 3, 4, 5, 6].map((n) => `
         <details>
           <summary data-i18n="q${n}"></summary>
           <p class="lp-faq-a" data-i18n="a${n}"></p>
@@ -1011,6 +1083,9 @@ function renderLanding(root, options) {
     landing.querySelectorAll('[data-i18n]').forEach((el) => {
       const key = el.getAttribute('data-i18n');
       if (dict[key] !== undefined) el.textContent = dict[key];
+    });
+    landing.querySelectorAll('[data-ai-line]').forEach((el) => {
+      el.textContent = dict.aiPhotoLines[Number(el.getAttribute('data-ai-line'))] || '';
     });
     landing.querySelectorAll('[data-i18n-aria]').forEach((el) => {
       const key = el.getAttribute('data-i18n-aria');
