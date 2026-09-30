@@ -1432,6 +1432,7 @@ function render() {
   }
   // 미리보기는 상세 화면에서만 유효 (수정 → 미리보기 전환은 submitGoalForm이 상세로 바로 이동)
   if (route.view !== 'detail') detailState.preview = null;
+  if (typeof closeExportDialog === 'function') closeExportDialog();
   if (route.view === 'admin') {
     if (!account.isAdmin) { navigate('#/'); return; }
     renderAdmin(root, route.tab);
@@ -2048,6 +2049,7 @@ function renderPlanPanel(goal, basis) {
       <div class="plan-head">
         <h2 class="section-title">계획표</h2>
         <div class="plan-controls">
+          <button type="button" class="btn btn-small" data-action="export-image">이미지로 내보내기</button>
           <div class="tabs" role="tablist" aria-label="보기 방식">
             ${[['list', '목록'], ['calendar', '달력']].map(([v, label]) => `
               <button type="button" role="tab" class="tab ${v === detailState.view ? 'is-active' : ''}" data-view="${v}">${label}</button>`).join('')}
@@ -2494,6 +2496,10 @@ function rerenderDetail(goal) {
 
 function bindDetailEvents(container, goal) {
   container.addEventListener('click', (e) => {
+    if (e.target.closest('[data-action="export-image"]')) {
+      openExportDialog(goal);
+      return;
+    }
     const viewBtn = e.target.closest('[data-view]');
     if (viewBtn) {
       detailState.view = viewBtn.dataset.view;
@@ -2986,6 +2992,399 @@ function bindAdminEvents(container, tab) {
       });
     }
   }
+}
+
+/* =========================================================================
+ * 12. 이미지로 내보내기 — 매일 읽을 분량 + 현재 진행 상황을 PNG 한 장으로
+ *     외부 라이브러리 없이 Canvas로 직접 그린다. (세로형, 폭 1080px)
+ * ========================================================================= */
+
+const EXPORT_WIDTH = 1080;
+const EXPORT_PAD = 64;
+const EXPORT_FONT = "-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif";
+const EXPORT_COLORS = {
+  bg: '#f5f6f8', surface: '#ffffff', text: '#1f2328', muted: '#6b7280', border: '#e3e5ea',
+  primary: '#2f6fed', primarySoft: '#e8f0fe', danger: '#d93025', dangerSoft: '#fdecea',
+  success: '#1a7f4b', successSoft: '#e6f4ec', neutralSoft: '#eef0f3', bar: '#4a9d6b',
+  required: '#b35c00', requiredSoft: '#fff1e0',
+};
+
+/** 이미지용 행 내용 (HTML 없이 글자만) */
+function rowTextForExport(goal, basis, row) {
+  if (row.isRestDay) return { main: '쉬는 날', subs: [], rest: true };
+  if (row.amount === 0) return { main: '휴식 (분량 없음)', subs: [], rest: true };
+  const from = row.prevCumulative;
+  const to = row.cumulative;
+  if (basis === 'page') {
+    const a = unitsToPage(goal.book, from + 1);
+    const b = unitsToPage(goal.book, to);
+    return {
+      main: `${a === b ? `p.${a}` : `p.${a}~${b}`}  (${row.amount}페이지)`,
+      subs: [describeChaptersForPages(goal.book, a, b)],
+    };
+  }
+  if (basis === 'chapter') {
+    const chs = getChapterRanges(goal.book).slice(from, to);
+    return { main: `${chs.length}개 챕터`, subs: chs.map((c) => `${c.name} (p.${c.startPage}~${c.endPage})`) };
+  }
+  const titles = goal.lecture.titles.slice(from, to);
+  return { main: `${from + 1}${to - from > 1 ? `~${to}` : ''}강  (${row.amount}강)`, subs: titles.map((t, i) => `${from + i + 1}강 ${t}`) };
+}
+
+function stripTags(html) {
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  return div.textContent;
+}
+
+/** 글자를 폭에 맞게 줄바꿈 */
+function wrapText(ctx, text, maxWidth) {
+  const lines = [];
+  let line = '';
+  for (const ch of String(text)) {
+    if (ctx.measureText(line + ch).width > maxWidth && line) {
+      lines.push(line);
+      line = ch.trim() ? ch : '';
+    } else {
+      line += ch;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [''];
+}
+
+function roundRect(ctx, x, y, w, h, r, fill) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  ctx.fillStyle = fill;
+  ctx.fill();
+}
+
+function loadImage(url) {
+  return new Promise((resolve) => {
+    if (!url) { resolve(null); return; }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+/**
+ * 계획 이미지 그리기 → canvas
+ * options: { basis, range: 'all' | 'upcoming' }
+ */
+async function drawPlanImage(goal, options) {
+  const today = todayStr();
+  const { basis } = options;
+  const s = getGoalSummary(goal, undefined, today);
+  const msg = getCompareMessage(goal, s);
+  const unit = getUnitLabel(s.basis);
+  const cover = await loadImage(getCoverUrl(goal));
+  let rows = buildTimeline(goal, basis);
+  if (options.range === 'upcoming') rows = rows.filter((r) => diffDays(today, r.date) >= 0);
+  const done = getDoneUnits(goal, basis);
+
+  const W = EXPORT_WIDTH;
+  const P = EXPORT_PAD;
+  const inner = W - P * 2;
+  const font = (size, weight = 400) => `${weight} ${size}px ${EXPORT_FONT}`;
+
+  // 1) 먼저 높이를 재기 위해 행 레이아웃 계산
+  const measure = document.createElement('canvas').getContext('2d');
+  const contentX = P + 210;
+  const contentW = inner - 210 - 170;
+  const rowLayouts = rows.map((row) => {
+    const t = rowTextForExport(goal, basis, row);
+    measure.font = font(26);
+    const subLines = t.subs.flatMap((sub) => wrapText(measure, sub, contentW));
+    const height = Math.max(92, 36 + 36 + subLines.length * 34 + 22);
+    return { row, t, subLines, height: t.rest ? 72 : height };
+  });
+
+  const headerH = 330;
+  const statsH = 470;
+  const tableHeadH = 110;
+  const listH = rowLayouts.reduce((sum, r) => sum + r.height, 0);
+  const footerH = 110;
+  const H = headerH + statsH + tableHeadH + listH + footerH;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = EXPORT_COLORS.bg;
+  ctx.fillRect(0, 0, W, H);
+  ctx.textBaseline = 'alphabetic';
+
+  // 2) 머리: 표지 · 제목 · 저자 · 기간
+  let y = P;
+  let textX = P;
+  if (cover) {
+    const cw = 150;
+    const ch = Math.round(cw * (cover.height / cover.width));
+    ctx.save();
+    ctx.shadowColor = 'rgba(16,24,40,0.25)';
+    ctx.shadowBlur = 16;
+    ctx.drawImage(cover, P, y, cw, Math.min(ch, 220));
+    ctx.restore();
+    textX = P + cw + 36;
+  }
+  const tagText = goal.requiredBookId && requiredBooks.some((b) => b.id === goal.requiredBookId) ? '사역자 필독서'
+    : goal.type === 'book' ? '책' : '강의';
+  ctx.font = font(24, 700);
+  const tagW = ctx.measureText(tagText).width + 28;
+  roundRect(ctx, textX, y, tagW, 40, 8, EXPORT_COLORS.requiredSoft);
+  ctx.fillStyle = EXPORT_COLORS.required;
+  ctx.fillText(tagText, textX + 14, y + 29);
+
+  ctx.font = font(52, 800);
+  ctx.fillStyle = EXPORT_COLORS.text;
+  const titleLines = wrapText(ctx, goal.title, W - P - textX).slice(0, 2);
+  titleLines.forEach((line, i) => ctx.fillText(line, textX, y + 110 + i * 62));
+  let ty = y + 110 + (titleLines.length - 1) * 62;
+  ctx.font = font(28);
+  ctx.fillStyle = EXPORT_COLORS.muted;
+  if (getBookAuthor(goal)) {
+    ty += 48;
+    ctx.fillText(`${getBookAuthor(goal)} 지음`, textX, ty);
+  }
+  ty += 48;
+  const rest = getRestWeekdays(goal);
+  ctx.fillText(`${goal.startDate} ~ ${goal.dueDate} · ${formatDday(s.dday)}${rest.length ? ` · ${WEEKDAY_ORDER.filter((d) => rest.includes(d)).map((d) => WEEKDAYS_KO[d]).join('·')} 쉼` : ''}`, textX, ty);
+
+  // 3) 현황 카드
+  y = headerH;
+  roundRect(ctx, P, y, inner, statsH - 30, 24, EXPORT_COLORS.surface);
+  const statY = y + 36;
+  const boxGap = 16;
+  const boxW = (inner - 72 - boxGap * 3) / 4;
+  const stats = [
+    [`${s.dailyPlan}${unit}`, '하루 권장'],
+    [`${s.target}${unit}`, '오늘까지 권장'],
+    [`${s.done}${unit}`, '실제 완료'],
+    [`${s.total}${unit}`, '전체'],
+  ];
+  stats.forEach(([value, label], i) => {
+    const bx = P + 36 + i * (boxW + boxGap);
+    roundRect(ctx, bx, statY, boxW, 140, 16, '#f7f8f9');
+    ctx.textAlign = 'center';
+    ctx.font = font(value.length > 7 ? 34 : 40, 800);
+    ctx.fillStyle = EXPORT_COLORS.text;
+    ctx.fillText(value, bx + boxW / 2, statY + 72);
+    ctx.font = font(24);
+    ctx.fillStyle = EXPORT_COLORS.muted;
+    ctx.fillText(label, bx + boxW / 2, statY + 114);
+    ctx.textAlign = 'left';
+  });
+
+  // 진행 막대
+  const barY = statY + 176;
+  const barX = P + 36;
+  const barW = inner - 72;
+  roundRect(ctx, barX, barY, barW, 20, 10, EXPORT_COLORS.neutralSoft);
+  const donePct = s.total ? Math.min(1, s.done / s.total) : 0;
+  const targetPct = s.total ? Math.min(1, s.target / s.total) : 0;
+  roundRect(ctx, barX, barY, Math.max(20, barW * donePct), 20, 10, EXPORT_COLORS.bar);
+  ctx.fillStyle = EXPORT_COLORS.text;
+  ctx.fillRect(barX + barW * targetPct - 2, barY - 8, 4, 36);
+  ctx.font = font(24);
+  ctx.fillStyle = EXPORT_COLORS.muted;
+  ctx.fillText(`실제 진도 ${s.percent}%   |   오늘까지 권장 ${Math.floor(targetPct * 100)}%`, barX, barY + 62);
+
+  // 안내 문구
+  const tone = { behind: [EXPORT_COLORS.dangerSoft, '#a3261c'], ahead: [EXPORT_COLORS.successSoft, EXPORT_COLORS.success],
+    done: [EXPORT_COLORS.successSoft, EXPORT_COLORS.success], ontrack: [EXPORT_COLORS.primarySoft, '#1d4ab5'],
+    ended: ['#fff4e0', '#7a4a00'], neutral: [EXPORT_COLORS.neutralSoft, EXPORT_COLORS.text] }[msg.tone];
+  const msgY = barY + 96;
+  roundRect(ctx, barX, msgY, barW, 96, 16, tone[0]);
+  ctx.font = font(27, 600);
+  ctx.fillStyle = tone[1];
+  const msgLines = wrapText(ctx, stripTags(msg.html), barW - 48).slice(0, 2);
+  msgLines.forEach((line, i) => ctx.fillText(line, barX + 24, msgY + (msgLines.length === 1 ? 58 : 40 + i * 36)));
+
+  // 4) 날짜별 계획
+  y = headerH + statsH;
+  roundRect(ctx, P, y, inner, tableHeadH + listH + 20, 24, EXPORT_COLORS.surface);
+  ctx.font = font(34, 800);
+  ctx.fillStyle = EXPORT_COLORS.text;
+  ctx.fillText('매일 읽을 분량', P + 36, y + 62);
+  ctx.font = font(24);
+  ctx.fillStyle = EXPORT_COLORS.muted;
+  const basisLabel = { page: '페이지 기준', chapter: '챕터 기준', lecture: '강의' }[basis];
+  ctx.textAlign = 'right';
+  ctx.fillText(`${basisLabel} · ${options.range === 'upcoming' ? '오늘부터' : '전체 기간'} · ✓ 완료`, W - P - 36, y + 60);
+  ctx.textAlign = 'left';
+  y += tableHeadH;
+
+  rowLayouts.forEach(({ row, t, subLines, height }) => {
+    const dayDiff = diffDays(today, row.date);
+    const checked = !t.rest && done >= row.cumulative;
+    const behind = dayDiff < 0 && !checked && !t.rest;
+    if (dayDiff === 0) roundRect(ctx, P + 16, y, inner - 32, height - 6, 12, EXPORT_COLORS.primarySoft);
+    else if (behind) roundRect(ctx, P + 16, y, inner - 32, height - 6, 12, EXPORT_COLORS.dangerSoft);
+    ctx.globalAlpha = checked && dayDiff !== 0 ? 0.45 : 1;
+
+    // 날짜
+    const d = parseDate(row.date);
+    const dow = d.getDay();
+    ctx.font = font(28, 700);
+    ctx.fillStyle = behind ? EXPORT_COLORS.danger : EXPORT_COLORS.text;
+    ctx.fillText(`${d.getMonth() + 1}/${d.getDate()}`, P + 40, y + 46);
+    ctx.font = font(26, 600);
+    ctx.fillStyle = dow === 0 ? EXPORT_COLORS.danger : dow === 6 ? EXPORT_COLORS.primary : EXPORT_COLORS.muted;
+    ctx.fillText(`(${WEEKDAYS_KO[dow]})`, P + 120, y + 46);
+    if (dayDiff === 0) {
+      roundRect(ctx, P + 40, y + 60, 70, 32, 6, EXPORT_COLORS.primary);
+      ctx.font = font(20, 700);
+      ctx.fillStyle = '#fff';
+      ctx.fillText('오늘', P + 54, y + 83);
+    }
+
+    // 내용
+    ctx.font = t.rest ? font(26) : font(29, 700);
+    ctx.fillStyle = t.rest ? EXPORT_COLORS.muted : EXPORT_COLORS.text;
+    ctx.fillText(t.main, contentX, y + 46);
+    ctx.font = font(26);
+    ctx.fillStyle = EXPORT_COLORS.muted;
+    subLines.forEach((line, i) => ctx.fillText(line, contentX, y + 88 + i * 34));
+
+    // 누적 · 완료
+    ctx.textAlign = 'right';
+    if (!t.rest) {
+      ctx.font = font(24);
+      ctx.fillStyle = EXPORT_COLORS.muted;
+      ctx.fillText(`누적 ${formatCumulative(goal, basis, row.cumulative)}`, W - P - 90, y + 46);
+    }
+    if (checked) {
+      ctx.font = font(34, 800);
+      ctx.fillStyle = EXPORT_COLORS.success;
+      ctx.fillText('✓', W - P - 40, y + 48);
+    }
+    ctx.textAlign = 'left';
+    ctx.globalAlpha = 1;
+
+    ctx.fillStyle = EXPORT_COLORS.border;
+    ctx.fillRect(P + 36, y + height - 3, inner - 72, 1);
+    y += height;
+  });
+
+  // 5) 바닥글
+  ctx.font = font(22);
+  ctx.fillStyle = EXPORT_COLORS.muted;
+  ctx.textAlign = 'center';
+  ctx.fillText(`학습 진도 계획표 · ${today} (${weekdayKo(today)}) 기준`, W / 2, H - 44);
+  ctx.textAlign = 'left';
+  return canvas;
+}
+
+/* ----- 내보내기 창 ----- */
+
+const exportState = { goal: null, options: null, canvas: null };
+
+async function openExportDialog(goal) {
+  exportState.goal = goal;
+  exportState.options = { basis: detailState.basis, range: 'all' };
+  let dialog = document.getElementById('export-dialog');
+  if (!dialog) {
+    dialog = document.createElement('div');
+    dialog.id = 'export-dialog';
+    dialog.className = 'modal';
+    document.body.appendChild(dialog);
+    dialog.addEventListener('click', onExportDialogClick);
+    dialog.addEventListener('change', onExportDialogChange);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeExportDialog(); });
+  }
+  const bases = getBases(goal);
+  dialog.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="export-title">
+      <div class="modal-head">
+        <h2 id="export-title" class="section-title">이미지로 내보내기</h2>
+        <button type="button" class="btn-icon" data-action="export-close" aria-label="닫기">×</button>
+      </div>
+      <div class="export-options">
+        ${bases.length > 1 ? `
+          <div class="segmented">
+            ${bases.map((b) => `<label><input type="radio" name="export-basis" value="${b}" ${b === exportState.options.basis ? 'checked' : ''}> ${b === 'page' ? '페이지 기준' : '챕터 기준'}</label>`).join('')}
+          </div>` : ''}
+        <div class="segmented">
+          <label><input type="radio" name="export-range" value="all" checked> 전체 기간</label>
+          <label><input type="radio" name="export-range" value="upcoming"> 오늘부터</label>
+        </div>
+      </div>
+      <div class="export-preview" id="export-preview"><span class="muted">그리는 중…</span></div>
+      <div class="modal-actions">
+        <span id="export-status" class="muted"></span>
+        <button type="button" class="btn" data-action="export-copy">이미지 복사</button>
+        <button type="button" class="btn btn-primary" data-action="export-download">PNG 저장</button>
+      </div>
+    </div>`;
+  dialog.hidden = false;
+  document.body.classList.add('modal-open');
+  await redrawExport();
+}
+
+async function redrawExport() {
+  const canvas = await drawPlanImage(exportState.goal, exportState.options);
+  exportState.canvas = canvas;
+  const box = document.getElementById('export-preview');
+  box.innerHTML = '';
+  const img = document.createElement('img');
+  img.alt = '내보낼 이미지 미리보기';
+  img.src = canvas.toDataURL('image/png');
+  box.appendChild(img);
+}
+
+function closeExportDialog() {
+  const dialog = document.getElementById('export-dialog');
+  if (!dialog || dialog.hidden) return;
+  dialog.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+function exportFileName() {
+  const safe = exportState.goal.title.replace(/[\\/:*?"<>|]/g, '').trim() || '계획표';
+  return `${safe}-계획표-${todayStr()}.png`;
+}
+
+function canvasToBlob(canvas) {
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+}
+
+async function onExportDialogClick(e) {
+  if (e.target.id === 'export-dialog') { closeExportDialog(); return; }
+  const action = e.target.closest('[data-action]')?.dataset.action;
+  const status = document.getElementById('export-status');
+  if (action === 'export-close') closeExportDialog();
+  if (action === 'export-download') {
+    const blob = await canvasToBlob(exportState.canvas);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = exportFileName();
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    status.textContent = '저장했습니다.';
+  }
+  if (action === 'export-copy') {
+    try {
+      const blob = await canvasToBlob(exportState.canvas);
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      status.textContent = '복사했습니다. 카톡 등에 붙여넣기 하세요.';
+    } catch (err) {
+      console.warn('[export] 복사 실패:', err);
+      status.textContent = '이 브라우저에서는 복사할 수 없습니다. PNG 저장을 이용하세요.';
+    }
+  }
+}
+
+async function onExportDialogChange(e) {
+  if (e.target.name === 'export-basis') exportState.options.basis = e.target.value;
+  if (e.target.name === 'export-range') exportState.options.range = e.target.value;
+  await redrawExport();
 }
 
 /* =========================================================================
