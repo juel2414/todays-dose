@@ -1176,3 +1176,9 @@ body.modal-open { overflow: hidden; }
 .chip-x:hover { opacity: 1; background: rgba(0, 0, 0, 0.08); }
 .input-small { padding: 4px 8px; font-size: 13px; height: auto; width: auto; }
 .member-group-add { color: var(--muted); }
+
+/* 그룹 공유 목표 종류: 필독서 · 필수 시청 */
+.shared-book { background: #fff1e0; color: #b35c00; }
+.shared-lecture { background: #e2f4f4; color: #0e8a8a; }
+.shared-other { background: var(--neutral-soft); color: var(--muted); }
+.shared-kind-title { font-size: 15px; margin: 18px 0 10px; display: flex; align-items: center; gap: 8px; }

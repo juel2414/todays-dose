@@ -2608,7 +2608,7 @@ function renderGoalCard(goal, s) {
     <a class="goal-card ${s.isActive ? '' : 'is-finished'}" href="#/goal/${escapeHtml(goal.id)}">
       <div class="card-top">
         <span class="card-tags">
-          ${tagKind ? renderBookTag(tagKind) : `<span class="type-tag type-${goal.type}">${typeLabel(goal.type)}</span>`}
+          ${tagKind ? renderBookTag(tagKind) : goal.groupId ? renderSharedTag(goal.type) : `<span class="type-tag type-${goal.type}">${typeLabel(goal.type)}</span>`}
           ${goal.groupId && groupNameOf(goal.groupId) ? `<span class="type-tag type-group">${escapeHtml(groupNameOf(goal.groupId))}</span>` : ''}
           ${changed ? `<span class="badge badge-ended">${t('내용 변경됨')}</span>` : ''}
         </span>
@@ -2728,7 +2728,7 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
 
     <form id="goal-form" class="panel ${locked ? 'is-locked' : ''}" novalidate>
       ${requiredBook ? `<p class="notice notice-info">${t('도서관에 있는 책입니다. 책 제목과 챕터는 관리자가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.')}</p>` : ''}
-      ${groupItem && !requiredBook ? `<p class="notice notice-info">${t("'{group}' 그룹에서 공유된 목표입니다. 이름과 내용은 리더가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.", { group: escapeHtml(groupNameOf(groupItem.groupId)) })}</p>` : ''}
+      ${groupItem && !requiredBook ? `<p class="notice notice-info">${t("'{group}' 그룹의 {kind}입니다. 이름과 내용은 리더가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.", { group: escapeHtml(groupNameOf(groupItem.groupId)), kind: t(sharedKindOf(groupItem.type).label) })}</p>` : ''}
       ${started ? `<p class="notice">${t('진행 중인 목표입니다. 날짜·쉬는 요일·챕터·강의 목록을 바꾸면 원래 계획은 보관하고, 오늘부터 마감일까지 남은 분량을 다시 나눕니다. 저장하면 새 계획을 먼저 미리보기로 보여드립니다.')}</p>` : ''}
 
       <div class="field">
@@ -5370,7 +5370,7 @@ function renderAdminGroup(g) {
         <span class="admin-group-name">${escapeHtml(g.name)}</span>
         <span class="muted">${t('리더 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })}</span>
         <span class="muted">${t('멤버 {n}명', { n: members.length })}</span>
-        <span class="muted">${t('공유 목표 {n}개', { n: items.length })}</span>
+        <span class="muted">${summarizeShared(items)}</span>
       </summary>
       ${open ? `
       <div class="admin-group-body">
@@ -5405,11 +5405,11 @@ function renderAdminGroup(g) {
           </tbody>
         </table>` : `<p class="muted small">${t('아직 참여한 멤버가 없습니다.')}</p>`}
 
-        <h3 class="admin-group-sub">${t('공유한 목표')}</h3>
-        ${items.length ? items.map((item) => renderGroupItemProgress(item, members, memberGoals,
+        ${items.length ? groupItemsByKind(items).map(({ kind, items: list }) => `<h3 class="admin-group-sub">${t(kind.label)} <span class="count">${list.length}</span></h3>`
+          + list.map((item) => renderGroupItemProgress(item, members, memberGoals,
           `<button type="button" class="btn btn-small btn-danger" data-action="ag-item-delete" data-item="${escapeHtml(item.id)}">${t('공유 취소')}</button>`,
-          (m, goal) => `#/admin/member/${m.user_id}/${goal.id}`)).join('')
-          : `<p class="muted small">${t('리더가 아직 공유한 목표가 없습니다.')}</p>`}
+          (m, goal) => `#/admin/member/${m.user_id}/${goal.id}`)).join('')).join('')
+          : `<p class="muted small">${t('리더가 아직 필독서나 필수 시청을 정하지 않았습니다.')}</p>`}
       </div>` : ''}
     </details>`;
 }
@@ -6201,6 +6201,34 @@ function groupItemForGoal(goal) {
   return goal && goal.groupItemId ? groupItems.find((i) => i.id === goal.groupItemId) || null : null;
 }
 
+/** 그룹 공유 목표의 이름: 책은 필독서, 강의는 필수 시청, 그 밖은 공유 목표 */
+const SHARED_KINDS = [
+  { key: 'book', label: '필독서', count: '필독서 {n}권' },
+  { key: 'lecture', label: '필수 시청', count: '필수 시청 {n}개' },
+  { key: 'other', label: '공유 목표', count: '공유 목표 {n}개' },
+];
+
+function sharedKindOf(type) {
+  return SHARED_KINDS.find((k) => k.key === type) || SHARED_KINDS[2];
+}
+
+function renderSharedTag(type) {
+  const kind = sharedKindOf(type);
+  return `<span class="type-tag shared-${kind.key}">${t(kind.label)}</span>`;
+}
+
+/** 종류별로 나누기 → [{ kind, items }] (빈 종류는 뺀다) */
+function groupItemsByKind(items) {
+  return SHARED_KINDS.map((kind) => ({ kind, items: items.filter((i) => sharedKindOf(i.type) === kind) }))
+    .filter((x) => x.items.length);
+}
+
+/** "필독서 2권 · 필수 시청 1개" (없으면 "아직 없음") */
+function summarizeShared(items) {
+  const parts = groupItemsByKind(items).map(({ kind, items: list }) => t(kind.count, { n: list.length }));
+  return parts.length ? parts.join(' · ') : t('필독서·필수 시청 없음');
+}
+
 function groupNameOf(groupId) {
   const g = myGroups.find((x) => x.id === groupId);
   return g ? g.name : '';
@@ -6361,8 +6389,8 @@ function renderGroups(root) {
           <span class="muted small">${t('멤버 {n}명', { n: g.memberCount })}</span>
         </div>
         <h3 class="card-title">${escapeHtml(g.name)}</h3>
-        <p class="card-meta">${g.isLeader ? t('공유한 목표 {n}개', { n: items.length })
-          : t('공유된 목표 {n}개 · 계획 {planned}개', { n: items.length, planned })}</p>
+        <p class="card-meta">${g.isLeader ? summarizeShared(items)
+          : `${summarizeShared(items)} · ${t('계획 {n}개', { n: planned })}`}</p>
       </a>`;
   }).join('');
 
@@ -6504,14 +6532,14 @@ function renderGroupHeader(group, actions) {
 function renderMemberGroup(group) {
   const today = todayStr();
   const items = groupItems.filter((i) => i.groupId === group.id);
-  const rows = items.map((item) => {
+  const renderRow = (item) => {
     const goal = findGoalForGroupItem(appData.goals, item.id);
     const s = goal ? getGoalSummary(goal, undefined, today) : null;
     return `
       <div class="group-item">
         ${renderCoverThumb(item.coverUrl, 'sm')}
         <div class="group-item-main">
-          <div><span class="type-tag type-${item.type}">${typeLabel(item.type)}</span> <strong>${escapeHtml(item.title)}</strong></div>
+          <div>${renderSharedTag(item.type)} <strong>${escapeHtml(item.title)}</strong></div>
           <div class="muted small">${escapeHtml(describeShareContent(item))}</div>
         </div>
         <div class="group-item-side">
@@ -6520,14 +6548,16 @@ function renderMemberGroup(group) {
           : `<a class="btn btn-primary btn-small" href="#/new/group/${escapeHtml(item.id)}">${t('계획 세우기')}</a>`}
         </div>
       </div>`;
-  }).join('');
+  };
+  const sections = groupItemsByKind(items).map(({ kind, items: list }) => `
+    <section class="panel">
+      <h2 class="section-title">${t(kind.label)} <span class="count">${list.length}</span></h2>
+      <div class="group-items">${list.map(renderRow).join('')}</div>
+    </section>`).join('');
   return `
     ${renderGroupHeader(group, `<button type="button" class="btn btn-danger" data-action="group-leave">${t('그룹 나가기')}</button>`)}
-    <section class="panel">
-      <h2 class="section-title">${t('공유된 목표')} <span class="count">${items.length}</span></h2>
-      ${items.length ? `<div class="group-items">${rows}</div>` : `<div class="empty">${t('리더가 아직 공유한 목표가 없습니다.')}</div>`}
-      <p class="muted small">${t('리더는 여기서 만든 계획의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.')}</p>
-    </section>`;
+    ${sections || `<div class="empty">${t('리더가 아직 필독서나 필수 시청을 정하지 않았습니다.')}</div>`}
+    <p class="muted small">${t('리더는 여기서 만든 계획의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.')}</p>`;
 }
 
 /**
@@ -6563,7 +6593,7 @@ function renderGroupItemProgress(item, members, memberGoals, actionsHtml, linkFo
       <div class="group-item">
         ${renderCoverThumb(item.coverUrl, 'sm')}
         <div class="group-item-main">
-          <div><span class="type-tag type-${item.type}">${typeLabel(item.type)}</span> <strong>${escapeHtml(item.title)}</strong></div>
+          <div>${renderSharedTag(item.type)} <strong>${escapeHtml(item.title)}</strong></div>
           <div class="muted small">${escapeHtml(describeShareContent(item))}${members ? ` · ${t('계획 세운 멤버 {n}/{total}명', { n: plannedCount, total: members.length })}` : ''}</div>
         </div>
         <div class="group-item-side">${actionsHtml}</div>
@@ -6585,7 +6615,7 @@ function renderLeaderGroup(group) {
   const shareable = appData.goals.filter((g) => !sharedSources.has(g.id) && !g.groupItemId);
   const loading = !groupState.loaded;
 
-  const itemsHtml = items.map((item) => {
+  const renderItem = (item) => {
     const source = item.sourceGoalId ? getGoal(item.sourceGoalId) : null;
     const actions = `
       ${isSourceGoalChanged(item, source) ? `<button type="button" class="btn btn-small" data-action="share-update" data-item="${escapeHtml(item.id)}"
@@ -6593,7 +6623,10 @@ function renderLeaderGroup(group) {
       <button type="button" class="btn btn-small btn-danger" data-action="share-delete" data-item="${escapeHtml(item.id)}">${t('공유 취소')}</button>`;
     return renderGroupItemProgress(item, loading ? null : groupState.members, groupState.memberGoals, actions,
       (m, goal) => `#/group/${group.id}/member/${m.user_id}/${goal.id}`);
-  }).join('');
+  };
+  const itemsHtml = groupItemsByKind(items).map(({ kind, items: list }) => `
+    <h3 class="shared-kind-title">${t(kind.label)} <span class="count">${list.length}</span></h3>
+    ${list.map(renderItem).join('')}`).join('');
 
   const membersHtml = groupState.members.map((m) => `
     <tr>
@@ -6622,7 +6655,7 @@ function renderLeaderGroup(group) {
     </section>
 
     <div class="section-head">
-      <h2 class="section-title">${t('공유한 목표')} <span class="count">${items.length}</span></h2>
+      <h2 class="section-title">${t('필독서 · 필수 시청')} <span class="count">${items.length}</span></h2>
       <button type="button" class="btn btn-primary" data-action="share-open">${t('+ 내 목표 공유하기')}</button>
     </div>
     ${groupState.sharing ? `
@@ -6639,7 +6672,7 @@ function renderLeaderGroup(group) {
       : `<p class="muted">${t('공유할 목표가 없습니다. 먼저 <a href="#/new">새 목표</a>를 만들어 주세요. (그룹에서 받은 목표는 다시 공유할 수 없어요)')}</p>
          <button type="button" class="btn btn-small" data-action="share-close">${t('닫기')}</button>`}
     </div>` : ''}
-    ${items.length ? itemsHtml : `<div class="empty">${t('아직 공유한 목표가 없습니다. 내 목표를 공유하면 멤버들이 같은 내용으로 계획을 세울 수 있어요.')}</div>`}
+    ${items.length ? itemsHtml : `<div class="empty">${t('아직 필독서나 필수 시청이 없습니다. 내 책·강의 목표를 공유하면 멤버들이 같은 내용으로 계획을 세울 수 있어요.')}</div>`}
 
     <section class="panel">
       <h2 class="section-title">${t('멤버')} <span class="count">${loading ? '' : groupState.members.length}</span></h2>
@@ -6783,7 +6816,7 @@ function renderGroupInbox() {
   const cards = pending.map((item) => `
     <div class="goal-card required-empty">
       <div class="card-top">
-        <span class="type-tag type-group">${escapeHtml(groupNameOf(item.groupId))}</span>
+        <span class="card-tags">${renderSharedTag(item.type)} <span class="type-tag type-group">${escapeHtml(groupNameOf(item.groupId))}</span></span>
         <span class="badge badge-waiting">${t('계획 없음')}</span>
       </div>
       <div class="card-book">
@@ -6797,7 +6830,7 @@ function renderGroupInbox() {
     </div>`).join('');
   return `
     <section class="required-section">
-      <h2 class="section-title">${t('그룹에서 공유된 목표')} <span class="count">${pending.length}</span></h2>
+      <h2 class="section-title">${t('그룹 필독서 · 필수 시청')} <span class="count">${pending.length}</span></h2>
       <div class="card-grid">${cards}</div>
     </section>`;
 }
@@ -7453,6 +7486,18 @@ const EN = {
   '+ 그룹 추가': '+ Add group',
   '그룹 선택': 'Choose group',
   '아직 배정된 책이 없습니다. <a href="#/admin/books">도서관</a>에서 정하세요. (그룹의 진도는 <a href="#/admin/members">회원 관리</a>의 그룹에서 봅니다)': 'No assigned books yet. Assign them in the <a href="#/admin/books">Library</a>. (See group progress under groups in <a href="#/admin/members">Members</a>.)',
+  // 필독서 · 필수 시청
+  '필독서 {n}권': (p) => `${p.n} required ${p.n === 1 ? 'book' : 'books'}`,
+  '필수 시청': 'Required viewing',
+  '필수 시청 {n}개': (p) => `${p.n} required ${p.n === 1 ? 'lecture' : 'lectures'}`,
+  '공유 목표': 'Shared goal',
+  '필독서·필수 시청 없음': 'No required books or lectures',
+  '계획 {n}개': (p) => `${p.n} planned`,
+  '리더가 아직 필독서나 필수 시청을 정하지 않았습니다.': 'The leader has not set any required books or lectures yet.',
+  '필독서 · 필수 시청': 'Required books · lectures',
+  '아직 필독서나 필수 시청이 없습니다. 내 책·강의 목표를 공유하면 멤버들이 같은 내용으로 계획을 세울 수 있어요.': 'No required books or lectures yet. Share one of your book or lecture goals so members can plan with the same contents.',
+  '그룹 필독서 · 필수 시청': 'Required in your groups',
+  "'{group}' 그룹의 {kind}입니다. 이름과 내용은 리더가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.": (p) => `${p.kind} in the group '${p.group}'. The leader sets its name and contents; here you can only set the start date, due date and rest days.`,
 };
 
 /* =========================================================================
