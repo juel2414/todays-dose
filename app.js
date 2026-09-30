@@ -2793,15 +2793,6 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
         <div id="library-picker" class="library-picker" hidden></div>
       </div>` : ''}
 
-      ${!isEdit && !locked ? `
-      <div data-section="book-search" class="book-search">
-        <div class="book-search-row">
-          <input id="f-book-q" type="search" class="input" placeholder="${t('책 제목이나 ISBN으로 찾기')}" aria-label="${t('책 검색')}">
-          <button type="button" class="btn" data-action="book-search">${t('책 검색')}</button>
-          <span class="field-hint">${t('국립중앙도서관 정보로 제목·저자·마지막 페이지를 채우고, 목차가 있으면 챕터도 채워요.')}</span>
-        </div>
-        <div id="book-search-results" class="book-search-results" hidden></div>
-      </div>` : ''}
 
       <div class="field">
         <label class="field-label" for="f-title" id="f-title-label"></label>
@@ -2971,7 +2962,6 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
   });
   form.addEventListener('input', updateFormView);
   bindChapterEditor(form, updateFormView);
-  bindBookSearch(form, updateFormView);
   bindLibraryPicker(form);
   form.addEventListener('click', (e) => {
     if (e.target.id === 'add-rest-date') {
@@ -3737,8 +3727,6 @@ function updateFormView() {
   const isBook = input.type === 'book';
   const isBible = input.type === 'bible';
   document.querySelector('[data-section="book"]').hidden = !isBook;
-  const searchSection = document.querySelector('[data-section="book-search"]');
-  if (searchSection) searchSection.hidden = !isBook;
   const pickSection = document.querySelector('[data-section="book-pick"]');
   if (pickSection) pickSection.hidden = !isBook;
   document.querySelector('[data-section="lecture"]').hidden = input.type !== 'lecture';
@@ -5269,6 +5257,15 @@ function renderAdminBooks() {
       <h2 class="section-title">${reviewing ? t('제출된 책 검토') : book ? t('도서관 책 수정') : t('도서관에 책 추가')}</h2>
       ${reviewing ? `<p class="notice notice-info">${t('{name}님이 {date}에 만든 계획에서 제출된 책입니다. 필요하면 고친 뒤 승인하세요. 고친 내용은 제출한 사람에게 적용 여부를 묻습니다.', { name: escapeHtml(submitterName(book)), date: timestampToDate(book.createdAt) })}</p>`
         : book ? `<p class="notice">${t('저장하면 이미 계획을 세운 사람에게 "내용 변경됨"이 표시되고, 각자 미리보기를 확인한 뒤 자기 계획에 적용합니다.')}</p>` : ''}
+      ${editing === 'new' ? `
+      <div class="book-search">
+        <div class="book-search-row">
+          <input id="f-book-q" type="search" class="input" placeholder="${t('책 제목이나 ISBN으로 찾기')}" aria-label="${t('책 검색')}">
+          <button type="button" class="btn" data-action="book-search">${t('책 검색')}</button>
+          <span class="field-hint">${t('국립중앙도서관 정보로 제목·저자·마지막 페이지를 채우고, 목차가 있으면 챕터도 채워요.')}</span>
+        </div>
+        <div id="book-search-results" class="book-search-results" hidden></div>
+      </div>` : ''}
       <div class="book-form-top">
         <div class="cover-picker">
           <div class="cover-preview" id="cover-preview">${renderCoverPreview(book)}</div>
@@ -5919,6 +5916,7 @@ function bindAdminEvents(container, tab) {
       });
       form.querySelector('#assign-search').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
       bindChapterEditor(form, refreshChapterEditor);
+      bindBookSearch(form, refreshChapterEditor);
       form.addEventListener('submit', (e) => {
         e.preventDefault();
         submitBookForm(form);
