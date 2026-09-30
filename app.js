@@ -2040,6 +2040,9 @@ function setSaveState(state) {
 
 /* ----- 상단 바 (로그인 정보 · 저장 상태) ----- */
 
+/** 상단 바 이름 메뉴(백업 내보내기·복원)가 열려 있는지 — 저장 상태가 바뀌어 다시 그려도 유지 */
+let userMenuOpen = false;
+
 function renderTopbar() {
   const bar = document.getElementById('topbar');
   if (!bar) return;
@@ -2063,7 +2066,16 @@ function renderTopbar() {
       <div class="topbar-right">
         ${renderLangToggle()}
         ${status}
-        <span class="user">${escapeHtml(name || currentUser.email || '')}</span>
+        <div class="user-menu">
+          <button type="button" class="user-menu-btn" data-action="user-menu" aria-haspopup="true" aria-expanded="${userMenuOpen}">
+            ${escapeHtml(name || currentUser.email || '')} <span aria-hidden="true">▾</span>
+          </button>
+          <div class="user-menu-list" ${userMenuOpen ? '' : 'hidden'}>
+            <button type="button" data-action="backup-export" title="${t('모든 목표와 진도 기록을 JSON 파일로 저장합니다')}">${t('백업 내보내기')}</button>
+            <button type="button" data-action="backup-import" title="${t('백업한 JSON 파일로 전체 데이터를 바꿉니다')}">${t('백업에서 복원')}</button>
+            <input type="file" id="backup-file" accept=".json,application/json" hidden>
+          </div>
+        </div>
         <button type="button" class="btn btn-small" data-action="sign-out">${t('로그아웃')}</button>
       </div>
     </div>`;
@@ -2256,10 +2268,6 @@ function renderDashboard(root) {
         <p class="muted">${escapeHtml(today)} (${weekdayLabel(today)})</p>
       </div>
       <div class="header-actions">
-        <button type="button" class="btn" data-action="export" ${appData.goals.length ? '' : 'disabled'}
-          title="${t('모든 목표와 진도 기록을 JSON 파일로 저장합니다')}">${t('JSON 내보내기')}</button>
-        <button type="button" class="btn" data-action="import" title="${t('백업한 JSON 파일로 전체 데이터를 바꿉니다')}">${t('JSON 불러오기')}</button>
-        <input type="file" id="import-file" accept=".json,application/json" hidden>
         <a class="btn btn-primary" href="#/new">${t('+ 새 목표 추가')}</a>
       </div>
     </header>
@@ -2279,19 +2287,8 @@ function renderDashboard(root) {
       <div class="card-grid">${finished.map((x) => renderGoalCard(x.goal, x.s)).join('')}</div>
     </section>` : ''}
   `;
-  bindDashboardEvents(root);
 }
 
-function bindDashboardEvents(root) {
-  const fileInput = root.querySelector('#import-file');
-  root.querySelector('[data-action="export"]').addEventListener('click', exportBackup);
-  root.querySelector('[data-action="import"]').addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', () => {
-    const file = fileInput.files[0];
-    fileInput.value = ''; // 같은 파일을 다시 골라도 change가 일어나도록
-    if (file) importBackup(file);
-  });
-}
 
 function exportBackup() {
   const blob = new Blob([serializeBackup(appData)], { type: 'application/json' });
@@ -5354,6 +5351,9 @@ async function onExportDialogChange(e) {
 
 const EN = {
   // 공통 · 상단 바 · 로그인
+  '백업 내보내기': 'Export backup',
+  '백업에서 복원': 'Restore from backup',
+  '내보낼 목표가 없습니다.': 'There are no goals to export.',
   '오늘분량': "Today's Dose",
   '언어': 'Language',
   '저장 중…': 'Saving…',
@@ -5846,10 +5846,36 @@ async function boot() {
   window.addEventListener('hashchange', render);
   document.getElementById('topbar').addEventListener('click', async (e) => {
     const action = e.target.closest('[data-action]')?.dataset.action;
+    if (action === 'user-menu') {
+      userMenuOpen = !userMenuOpen;
+      renderTopbar();
+      return;
+    }
+    if (action === 'backup-export' || action === 'backup-import') {
+      userMenuOpen = false;
+      renderTopbar();
+      if (action === 'backup-import') document.getElementById('backup-file').click();
+      else if (appData && appData.goals.length) exportBackup();
+      else alert(t('내보낼 목표가 없습니다.'));
+      return;
+    }
     if (action === 'retry-save') retrySave();
     if (action === 'sign-out') {
       if (pendingSaves > 0 && !confirm(t('아직 저장 중입니다. 그래도 로그아웃할까요?'))) return;
       await signOut();
+    }
+  });
+  document.getElementById('topbar').addEventListener('change', (e) => {
+    if (e.target.id !== 'backup-file') return;
+    const file = e.target.files[0];
+    e.target.value = ''; // 같은 파일을 다시 골라도 change가 일어나도록
+    if (file) importBackup(file);
+  });
+  // 메뉴 바깥을 누르면 닫기
+  document.addEventListener('click', (e) => {
+    if (userMenuOpen && !e.target.closest('.user-menu')) {
+      userMenuOpen = false;
+      renderTopbar();
     }
   });
   window.addEventListener('beforeunload', (e) => {
