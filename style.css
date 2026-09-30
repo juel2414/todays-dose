@@ -797,3 +797,15 @@ body.modal-open { overflow: hidden; }
 .modal-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .modal-actions #export-status { margin-right: auto; font-size: 13px; }
 .plan-table .col-amount { width: 100px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ===== 관리자: 회원 계획 ===== */
+.admin-intro { margin: 0 0 16px; }
+.member-link { color: var(--text); font-weight: 700; text-decoration: none; }
+.member-link:hover { color: var(--primary); text-decoration: underline; }
+.small { font-size: 12px; }
+.admin-table tr.is-finished-row td { opacity: 0.6; }
+.admin-book-head .section-title { display: flex; align-items: center; gap: 8px; }
+.check-mark { color: var(--success); font-weight: 800; font-size: 18px; }
+.member-goal-head { display: flex; align-items: flex-end; gap: 18px; margin: 8px 0 24px; }
+.member-goal-head p { margin: 0; }
+.member-goal-title { font-size: 26px; margin: 4px 0; }

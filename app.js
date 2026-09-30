@@ -599,7 +599,9 @@ function getGoalSummary(goal, basis = getPrimaryBasis(goal), today = todayStr())
 
   // 하루 권장: 지금 계획의 공부하는 날 하루 평균
   const planStudyDays = Math.max(1, countStudyDays(plan.startDate, plan.endDate, plan.restWeekdays));
-  const dailyPlan = Math.round((plan.to - plan.from) / planStudyDays);
+  // 10 미만이면 소수 한 자리까지 (예: 하루 0.3강)
+  const avgPlan = (plan.to - plan.from) / planStudyDays;
+  const dailyPlan = avgPlan >= 10 ? Math.round(avgPlan) : Math.round(avgPlan * 10) / 10;
   // 지금부터 기한을 맞추려면: 남은 분량 ÷ 오늘 포함 남은 공부하는 날
   const remaining = total - done;
   const fromDate = diffDays(today, goal.startDate) > 0 ? goal.startDate : today;
@@ -950,10 +952,9 @@ async function adminDeleteRequiredBook(id) {
   if (error) throw error;
 }
 
-/** 모든 사용자의 필독서 목표 → [{ userId, goal }] */
-async function adminLoadRequiredGoals() {
-  const { data, error } = await getSupabase().from(GOALS_TABLE)
-    .select('user_id, data').not('data->>requiredBookId', 'is', null);
+/** 모든 회원의 목표 (개인 목표 포함) → [{ userId, goal }] */
+async function adminLoadAllGoals() {
+  const { data, error } = await getSupabase().from(GOALS_TABLE).select('user_id, data');
   if (error) throw error;
   return data.map((r) => ({ userId: r.user_id, goal: r.data }));
 }
@@ -1407,9 +1408,10 @@ async function startApp(user) {
 }
 
 function parseRoute() {
-  const [name, id, sub] = location.hash.replace(/^#\/?/, '').split('/');
+  const [name, id, sub, sub2] = location.hash.replace(/^#\/?/, '').split('/');
   if (name === 'new' && id === 'book' && sub) return { view: 'form', bookId: sub };
   if (name === 'new') return { view: 'form' };
+  if (name === 'admin' && id === 'member' && sub && sub2) return { view: 'admin', tab: 'member', userId: sub, goalId: sub2 };
   if (name === 'admin') return { view: 'admin', tab: id || 'progress' };
   if (name === 'edit' && id) return { view: 'form', id };
   if (name === 'goal' && id) return { view: 'detail', id };
@@ -1435,7 +1437,7 @@ function render() {
   if (typeof closeExportDialog === 'function') closeExportDialog();
   if (route.view === 'admin') {
     if (!account.isAdmin) { navigate('#/'); return; }
-    renderAdmin(root, route.tab);
+    renderAdmin(root, route.tab, route);
   } else if (route.view === 'form') renderGoalForm(root, goal, route.bookId || null);
   else if (route.view === 'detail') renderGoalDetail(root, goal);
   else renderDashboard(root);
@@ -2105,17 +2107,51 @@ function renderSummaryPanel(goal, s) {
   const { min, max } = getProgressBounds(goal);
   const isBook = goal.type === 'book';
   const cur = goal.progress.current;
-  const position = isBook
-    ? `${cur < bookFirstPage(goal.book) ? '아직 읽지 않음' : `p.${cur}까지 읽음`} · 완료 챕터 ${completedChapterCount(goal.book, cur)}/${goal.book.chapters.length}`
-    : (cur === 0 ? '아직 듣지 않음' : `${cur}강까지 완료`);
-  const targetPercent = s.total > 0 ? Math.min(100, (s.target / s.total) * 100) : 0;
-  const donePercent = s.total > 0 ? Math.min(100, (s.done / s.total) * 100) : 0;
-  const msg = getCompareMessage(goal, s);
   const replanBlocker = getReplanBlocker(goal);
   const previewing = !!detailState.preview;
 
   return `
     <section class="panel summary-panel">
+      ${renderCompareBlock(goal, s)}
+
+      <div class="summary-info">
+        <div><span class="info-label">현재 위치</span>${escapeHtml(describePosition(goal))}</div>
+        <div class="summary-today"><span class="info-label">오늘 할 일</span>${renderTodayAmount(goal, s)}</div>
+      </div>
+
+      <div class="summary-actions">
+        <form class="progress-form" data-action="progress" novalidate>
+          <label for="progress-input" class="field-label">${isBook ? '마지막으로 읽은 페이지' : '완료한 강의 수'}</label>
+          <input id="progress-input" type="number" class="input input-num" min="${min}" max="${max}" value="${cur}">
+          <span class="muted">${isBook ? `(p.${min}~${max})` : `(0~${max}강)`}</span>
+          <button type="submit" class="btn btn-primary">진도 기록</button>
+          <span class="progress-error" hidden></span>
+        </form>
+        <div class="plan-actions">
+          <button type="button" class="btn" data-action="replan" ${replanBlocker || previewing ? 'disabled' : ''}
+            title="${escapeHtml(replanBlocker || '오늘부터 마감일까지 남은 분량을 다시 균등하게 나눕니다')}">재분배</button>
+          <button type="button" class="btn" data-action="due" ${previewing ? 'disabled' : ''}>마감일 변경</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+/** 현재 위치 문구: "p.42까지 읽음 · 완료 챕터 5/23" */
+function describePosition(goal) {
+  const cur = goal.progress.current;
+  if (goal.type === 'book') {
+    return `${cur < bookFirstPage(goal.book) ? '아직 읽지 않음' : `p.${cur}까지 읽음`} · 완료 챕터 ${completedChapterCount(goal.book, cur)}/${goal.book.chapters.length}`;
+  }
+  return cur === 0 ? '아직 듣지 않음' : `${cur}강까지 완료`;
+}
+
+/** 계획 대비 현황: 숫자 상자 4개 + 진행 막대 + 안내 문구 (내 화면·관리자 화면 공용) */
+function renderCompareBlock(goal, s) {
+  const targetPercent = s.total > 0 ? Math.min(100, (s.target / s.total) * 100) : 0;
+  const donePercent = s.total > 0 ? Math.min(100, (s.done / s.total) * 100) : 0;
+  const msg = getCompareMessage(goal, s);
+  return `
       <div class="summary-top">
         <h2 class="section-title">계획 대비 현황</h2>
         ${renderStatusBadge(s)}
@@ -2138,29 +2174,7 @@ function renderSummaryPanel(goal, s) {
         <span><i class="legend-marker"></i>검정 선 = 오늘까지 권장 ${Math.floor(targetPercent)}%</span>
       </div>
 
-      <div class="compare-message tone-${msg.tone}">${msg.html}</div>
-
-      <div class="summary-info">
-        <div><span class="info-label">현재 위치</span>${escapeHtml(position)}</div>
-        <div class="summary-today"><span class="info-label">오늘 할 일</span>${renderTodayAmount(goal, s)}</div>
-      </div>
-
-      <div class="summary-actions">
-        <form class="progress-form" data-action="progress" novalidate>
-          <label for="progress-input" class="field-label">${isBook ? '마지막으로 읽은 페이지' : '완료한 강의 수'}</label>
-          <input id="progress-input" type="number" class="input input-num" min="${min}" max="${max}" value="${cur}">
-          <span class="muted">${isBook ? `(p.${min}~${max})` : `(0~${max}강)`}</span>
-          <button type="submit" class="btn btn-primary">진도 기록</button>
-          <span class="progress-error" hidden></span>
-        </form>
-        <div class="plan-actions">
-          <button type="button" class="btn" data-action="replan" ${replanBlocker || previewing ? 'disabled' : ''}
-            title="${escapeHtml(replanBlocker || '오늘부터 마감일까지 남은 분량을 다시 균등하게 나눕니다')}">재분배</button>
-          <button type="button" class="btn" data-action="due" ${previewing ? 'disabled' : ''}>마감일 변경</button>
-        </div>
-      </div>
-    </section>
-  `;
+      <div class="compare-message tone-${msg.tone}">${msg.html}</div>`;
 }
 
 /* ----- 새 계획 미리보기 (계획표 자리에 표시) ----- */
@@ -2350,7 +2364,7 @@ function renderAmountCell(basis, row) {
   return row.amount === 0 ? '<span class="muted">-</span>' : `<strong>${row.amount}${getUnitLabel(basis)}</strong>`;
 }
 
-function renderPlanTable(goal, basis) {
+function renderPlanTable(goal, basis, readOnly = false) {
   const today = todayStr();
   const rows = buildTimeline(goal, basis);
   const replanned = !!goal.plans[basis].current;
@@ -2368,6 +2382,7 @@ function renderPlanTable(goal, basis) {
         <td class="col-cum">${formatCumulative(goal, basis, row.cumulative)}</td>
         <td class="col-check">
           ${row.amount === 0 ? '<span class="muted">-</span>'
+            : readOnly ? (checked ? '<span class="check-mark">✓</span>' : '')
             : `<input type="checkbox" class="row-check" data-date="${row.date}" ${checked ? 'checked' : ''}
                 aria-label="${row.date} 완료">`}
         </td>
@@ -2612,13 +2627,15 @@ const adminState = {
   loading: false,
   error: null,
   profiles: [],
-  goals: [], // [{ userId, goal }] 모든 사용자의 필독서 목표
+  goals: [], // [{ userId, goal }] 모든 회원의 목표
+  viewBasis: null, // 회원 계획 보기에서 선택한 기준 (책: page/chapter)
   editingBookId: null, // null | 'new' | 책 id
   cover: null, // 편집 중인 표지 { file?, previewUrl, removed? }
 };
 
 const ADMIN_TABS = [
   ['progress', '진도 현황'],
+  ['plans', '회원 계획'],
   ['books', '사역자 필독서'],
   ['members', '회원 관리'],
 ];
@@ -2628,7 +2645,7 @@ async function loadAdminData() {
   adminState.error = null;
   try {
     const [profiles, books, goals] = await Promise.all([
-      adminLoadProfiles(), loadRequiredBooks(), adminLoadRequiredGoals(),
+      adminLoadProfiles(), loadRequiredBooks(), adminLoadAllGoals(),
     ]);
     adminState.profiles = profiles;
     adminState.goals = goals.filter((x) => checkGoalShape(x.goal, 0) === null);
@@ -2650,8 +2667,8 @@ function profileName(p) {
   return p.name || p.email;
 }
 
-function renderAdmin(root, tab) {
-  if (!ADMIN_TABS.some(([t]) => t === tab)) tab = 'progress';
+function renderAdmin(root, tab, route = {}) {
+  if (tab !== 'member' && !ADMIN_TABS.some(([t]) => t === tab)) tab = 'progress';
   let body;
   if (adminState.error) {
     body = `<div class="errors">불러오지 못했습니다: ${escapeHtml(adminState.error)}</div>`;
@@ -2662,6 +2679,10 @@ function renderAdmin(root, tab) {
     body = renderAdminBooks();
   } else if (tab === 'members') {
     body = renderAdminMembers();
+  } else if (tab === 'plans') {
+    body = renderAdminPlans();
+  } else if (tab === 'member') {
+    body = renderAdminMemberGoal(route.userId, route.goalId);
   } else {
     body = renderAdminProgress();
   }
@@ -2678,7 +2699,7 @@ function renderAdmin(root, tab) {
         </div>
       </header>
       <nav class="tabs admin-tabs" aria-label="관리자 메뉴">
-        ${ADMIN_TABS.map(([t, label]) => `<a class="tab ${t === tab ? 'is-active' : ''}" href="#/admin/${t}">${label}</a>`).join('')}
+        ${ADMIN_TABS.map(([t, label]) => `<a class="tab ${t === tab || (tab === 'member' && t === 'plans') ? 'is-active' : ''}" href="#/admin/${t}">${label}</a>`).join('')}
       </nav>
       ${body}
     </div>`;
@@ -2734,7 +2755,7 @@ function renderAdminProgress() {
               const donePct = s.total ? Math.min(100, (s.done / s.total) * 100) : 0;
               return `
                 <tr>
-                  <td><strong>${escapeHtml(profileName(p))}</strong></td>
+                  <td><a class="member-link" href="#/admin/member/${escapeHtml(p.user_id)}/${escapeHtml(goal.id)}">${escapeHtml(profileName(p))}</a></td>
                   <td class="muted">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
                   <td class="num">${s.target}페이지</td>
                   <td class="num">${s.done}페이지</td>
@@ -2750,6 +2771,116 @@ function renderAdminProgress() {
         </table>
       </section>`;
   }).join('') + '<p class="muted admin-legend">진도 막대: 초록 = 실제 진도, 검정 선 = 오늘까지 권장 · 각자 정한 기간 기준입니다.</p>';
+}
+
+/* ----- 회원 계획 (개인 목표 포함, 읽기 전용) ----- */
+
+function renderAdminPlans() {
+  const today = todayStr();
+  const byUser = new Map();
+  adminState.goals.forEach(({ userId, goal }) => {
+    if (!byUser.has(userId)) byUser.set(userId, []);
+    byUser.get(userId).push(goal);
+  });
+  const withGoals = adminState.profiles.filter((p) => byUser.has(p.user_id));
+  const withoutGoals = adminState.profiles.filter((p) => !byUser.has(p.user_id));
+  if (!withGoals.length) return '<div class="empty">아직 목표를 만든 회원이 없습니다.</div>';
+
+  const sections = withGoals.map((p) => {
+    const items = byUser.get(p.user_id)
+      .map((goal) => ({ goal, s: getGoalSummary(goal, undefined, today) }))
+      .sort((a, b) => (a.s.isActive === b.s.isActive ? diffDays(b.goal.dueDate, a.goal.dueDate) : a.s.isActive ? -1 : 1));
+    return `
+      <section class="panel admin-book">
+        <div class="admin-book-head">
+          <div>
+            <h2 class="section-title">${escapeHtml(profileName(p))} ${p.in_team ? '<span class="type-tag type-required">우리 팀</span>' : ''}</h2>
+            <span class="muted">${escapeHtml(p.email)}</span>
+          </div>
+          <span class="muted">목표 ${items.length}개 · 진행 중 ${items.filter((x) => x.s.isActive).length}개</span>
+        </div>
+        <table class="admin-table">
+          <thead>
+            <tr><th>목표</th><th>기간</th><th class="num">오늘까지 권장</th><th class="num">실제 완료</th><th class="num">전체</th><th class="col-bar">진도</th><th>상태</th></tr>
+          </thead>
+          <tbody>
+            ${items.map(({ goal, s }) => renderAdminGoalRow(p, goal, s)).join('')}
+          </tbody>
+        </table>
+      </section>`;
+  }).join('');
+
+  return `
+    <p class="muted admin-intro">회원들이 만든 모든 목표입니다. 목표를 누르면 날짜별 계획표를 볼 수 있습니다. (읽기 전용)</p>
+    ${sections}
+    ${withoutGoals.length ? `<p class="muted admin-legend">목표가 없는 회원: ${withoutGoals.map((p) => escapeHtml(profileName(p))).join(', ')}</p>` : ''}`;
+}
+
+function renderAdminGoalRow(p, goal, s) {
+  const unit = getUnitLabel(s.basis);
+  const targetPct = s.total ? Math.min(100, (s.target / s.total) * 100) : 0;
+  const donePct = s.total ? Math.min(100, (s.done / s.total) * 100) : 0;
+  const book = goal.requiredBookId ? requiredBooks.find((b) => b.id === goal.requiredBookId) : null;
+  return `
+    <tr class="${s.isActive ? '' : 'is-finished-row'}">
+      <td>
+        <a class="member-link" href="#/admin/member/${escapeHtml(p.user_id)}/${escapeHtml(goal.id)}">${escapeHtml(goal.title)}</a>
+        <div class="muted small">${book ? '필독서' : goal.type === 'book' ? '책' : '강의'}${getBookAuthor(goal) ? ` · ${escapeHtml(getBookAuthor(goal))}` : ''}</div>
+      </td>
+      <td class="muted">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
+      <td class="num">${s.target}${unit}</td>
+      <td class="num">${s.done}${unit}</td>
+      <td class="num">${s.total}${unit}</td>
+      <td class="col-bar">
+        <div class="mini-bar"><div class="compare-fill" style="width:${donePct}%"></div><div class="compare-marker" style="left:${targetPct}%"></div></div>
+        <span class="mini-pct">${s.percent}%</span>
+      </td>
+      <td>${renderStatusBadge(s)}</td>
+    </tr>`;
+}
+
+/** 회원 한 사람의 목표 상세 (읽기 전용) */
+function renderAdminMemberGoal(userId, goalId) {
+  const entry = adminState.goals.find((x) => x.userId === userId && x.goal.id === goalId);
+  const p = adminState.profiles.find((x) => x.user_id === userId);
+  if (!entry || !p) return '<div class="empty">목표를 찾을 수 없습니다. <a href="#/admin/plans">회원 계획</a>으로 돌아가세요.</div>';
+  const goal = entry.goal;
+  const bases = getBases(goal);
+  if (!bases.includes(adminState.viewBasis)) adminState.viewBasis = getPrimaryBasis(goal);
+  const basis = adminState.viewBasis;
+  const s = getGoalSummary(goal);
+  const rest = getRestWeekdays(goal);
+
+  return `
+    <a class="back-link" href="#/admin/plans">← 회원 계획</a>
+    <div class="member-goal-head">
+      ${renderCoverThumb(getCoverUrl(goal), 'lg')}
+      <div>
+        <p class="muted">${escapeHtml(profileName(p))}님의 계획</p>
+        <h2 class="member-goal-title">${escapeHtml(goal.title)}</h2>
+        ${getBookAuthor(goal) ? `<p class="detail-author">${escapeHtml(getBookAuthor(goal))} 지음</p>` : ''}
+        <p class="muted">${goal.startDate} ~ ${goal.dueDate} · ${formatDday(s.dday)}${rest.length ? ` · 쉬는 요일 ${WEEKDAY_ORDER.filter((d) => rest.includes(d)).map((d) => WEEKDAYS_KO[d]).join('·')}` : ''}</p>
+      </div>
+    </div>
+
+    <section class="panel summary-panel">
+      ${renderCompareBlock(goal, s)}
+      <div class="summary-info">
+        <div><span class="info-label">현재 위치</span>${escapeHtml(describePosition(goal))}</div>
+        <div class="summary-today"><span class="info-label">오늘 할 일</span>${renderTodayAmount(goal, s)}</div>
+      </div>
+    </section>
+
+    <section class="panel plan-panel">
+      <div class="plan-head">
+        <h2 class="section-title">계획표 <span class="badge badge-waiting">읽기 전용</span></h2>
+        ${bases.length > 1 ? `
+          <div class="tabs" role="tablist">
+            ${bases.map((b) => `<button type="button" role="tab" class="tab ${b === basis ? 'is-active' : ''}" data-action="admin-basis" data-basis="${b}">${b === 'page' ? '페이지 기준' : '챕터 기준'}</button>`).join('')}
+          </div>` : ''}
+      </div>
+      ${renderPlanTable(goal, basis, true)}
+    </section>`;
 }
 
 /* ----- 사역자 필독서 ----- */
@@ -2920,6 +3051,11 @@ function bindAdminEvents(container, tab) {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
     const action = btn.dataset.action;
+    if (action === 'admin-basis') {
+      adminState.viewBasis = btn.dataset.basis;
+      render();
+      return;
+    }
     if (action === 'admin-refresh') {
       adminState.loaded = false;
       adminState.editingBookId = null;
