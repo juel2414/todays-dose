@@ -4731,6 +4731,7 @@ function renderAdminBooks() {
           </label>
           <button type="button" class="btn btn-small" data-action="cover-remove">${t('표지 빼기')}</button>
           <span class="field-hint">${t('JPG·PNG·WEBP, 3MB 이하')}</span>
+          <span class="field-hint">${t('표지 칸에 이미지를 끌어다 놓아도 돼요.')}</span>
         </div>
         <div class="book-form-fields">
           <div class="field">
@@ -5006,7 +5007,59 @@ function renderAdminMembers() {
     </table>`;
 }
 
+/** 표지로 쓸 이미지 파일을 고른다 (파일 선택·끌어다 놓기 공통) */
+function setCoverDraftFile(container, file) {
+  const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+  if (!allowed.includes(file.type)) {
+    alert(t('표지는 JPG·PNG·WEBP·GIF 이미지로 올려 주세요.'));
+    return;
+  }
+  if (file.size > 3 * 1024 * 1024) {
+    alert(t('표지 이미지는 3MB 이하로 올려 주세요.'));
+    return;
+  }
+  resetCoverDraft();
+  adminState.cover = { file, previewUrl: URL.createObjectURL(file) };
+  container.querySelector('#cover-preview').innerHTML = renderCoverPreview(null);
+}
+
+/** 표지 칸에 이미지를 끌어다 놓기 */
+function bindCoverDrop(container) {
+  const zone = container.querySelector('.cover-picker');
+  if (!zone) return;
+  const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+  let depth = 0;
+  zone.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth++;
+    zone.classList.add('is-dragover');
+  });
+  zone.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  zone.addEventListener('dragleave', () => {
+    depth = Math.max(0, depth - 1);
+    if (!depth) zone.classList.remove('is-dragover');
+  });
+  zone.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth = 0;
+    zone.classList.remove('is-dragover');
+    const file = [...e.dataTransfer.files].find((f) => f.type.startsWith('image/'));
+    if (!file) {
+      alert(t('표지는 JPG·PNG·WEBP·GIF 이미지로 올려 주세요.'));
+      return;
+    }
+    setCoverDraftFile(container, file);
+  });
+}
+
 function bindAdminEvents(container, tab) {
+  bindCoverDrop(container);
   container.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
@@ -5068,15 +5121,8 @@ function bindAdminEvents(container, tab) {
   container.addEventListener('change', async (e) => {
     if (e.target.id === 'cover-file') {
       const file = e.target.files[0];
-      if (!file) return;
-      if (file.size > 3 * 1024 * 1024) {
-        alert(t('표지 이미지는 3MB 이하로 올려 주세요.'));
-        e.target.value = '';
-        return;
-      }
-      resetCoverDraft();
-      adminState.cover = { file, previewUrl: URL.createObjectURL(file) };
-      container.querySelector('#cover-preview').innerHTML = renderCoverPreview(null);
+      e.target.value = '';
+      if (file) setCoverDraftFile(container, file);
       return;
     }
     if (e.target.dataset.action !== 'team-toggle') return;
@@ -5645,6 +5691,8 @@ const EN = {
   '오늘부터 하루': 'From today, do',
   '이미 다 끝냈어요': 'Already finished',
   '{left} 남음 · 오늘 분량 {amount}': '{left} left · today {amount}',
+  '표지 칸에 이미지를 끌어다 놓아도 돼요.': 'You can also drag an image onto the cover.',
+  '표지는 JPG·PNG·WEBP·GIF 이미지로 올려 주세요.': 'Please use a JPG, PNG, WEBP or GIF image for the cover.',
   '오늘분량': "Today's Dose",
   '언어': 'Language',
   '저장 중…': 'Saving…',

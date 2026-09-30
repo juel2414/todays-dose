@@ -1104,3 +1104,6 @@ body.modal-open { overflow: hidden; }
 /* ===== 로고 ===== */
 .brand { display: inline-flex; align-items: center; gap: 8px; }
 .brand-logo { width: 26px; height: 26px; display: block; }
+.cover-picker { transition: background 0.15s; border-radius: 10px; }
+.cover-picker.is-dragover { background: var(--primary-soft); outline: 2px dashed var(--primary); outline-offset: 4px; }
+.cover-picker.is-dragover .cover-preview { border-color: var(--primary); }
