@@ -759,7 +759,7 @@ input[type="date"].input { width: 180px; }
 .cover-empty { font-size: 13px; color: var(--muted); }
 
 /* ===== 기간 빠른 선택 ===== */
-.quick-due { display: flex; align-items: center; gap: 6px; margin: -8px 0 20px; }
+.quick-due { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 20px; }
 .quick-due .field-hint { margin-right: 4px; }
 .daily-estimate { margin-left: 12px; font-size: 14px; color: var(--primary); }
 
@@ -1108,3 +1108,11 @@ body.modal-open { overflow: hidden; }
 .cover-picker.is-dragover { background: var(--primary-soft); outline: 2px dashed var(--primary); outline-offset: 4px; }
 .cover-picker.is-dragover .cover-preview { border-color: var(--primary); }
 .nowrap { white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ===== 기간 정하는 방법 (마감일 / 하루 분량) ===== */
+.plan-mode { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin: 0 0 14px; }
+.segmented-small label { padding: 7px 14px; font-size: 14px; }
+.pace-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; }
+.pace-row .input-num { width: 100px; }
+.pace-result { margin-left: 4px; color: var(--primary); }
+.due-picker.pace-row { margin-top: -6px; }
