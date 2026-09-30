@@ -205,6 +205,85 @@ function chaptersInPageRange(book, startPage, endPage) {
     }));
 }
 
+/* ----- 성경 통독 (개역개정 66권, 권별 장 수) ----- */
+
+const BIBLE_BOOKS = [
+  ['창세기', 50], ['출애굽기', 40], ['레위기', 27], ['민수기', 36], ['신명기', 34],
+  ['여호수아', 24], ['사사기', 21], ['룻기', 4], ['사무엘상', 31], ['사무엘하', 24],
+  ['열왕기상', 22], ['열왕기하', 25], ['역대상', 29], ['역대하', 36], ['에스라', 10],
+  ['느헤미야', 13], ['에스더', 10], ['욥기', 42], ['시편', 150], ['잠언', 31],
+  ['전도서', 12], ['아가', 8], ['이사야', 66], ['예레미야', 52], ['예레미야애가', 5],
+  ['에스겔', 48], ['다니엘', 12], ['호세아', 14], ['요엘', 3], ['아모스', 9],
+  ['오바댜', 1], ['요나', 4], ['미가', 7], ['나훔', 3], ['하박국', 3],
+  ['스바냐', 3], ['학개', 2], ['스가랴', 14], ['말라기', 4],
+  ['마태복음', 28], ['마가복음', 16], ['누가복음', 24], ['요한복음', 21], ['사도행전', 28],
+  ['로마서', 16], ['고린도전서', 16], ['고린도후서', 13], ['갈라디아서', 6], ['에베소서', 6],
+  ['빌립보서', 4], ['골로새서', 4], ['데살로니가전서', 5], ['데살로니가후서', 3], ['디모데전서', 6],
+  ['디모데후서', 4], ['디도서', 3], ['빌레몬서', 1], ['히브리서', 13], ['야고보서', 5],
+  ['베드로전서', 5], ['베드로후서', 3], ['요한일서', 5], ['요한이서', 1], ['요한삼서', 1],
+  ['유다서', 1], ['요한계시록', 22],
+].map(([name, chapters]) => ({ name, chapters }));
+
+/** 자주 쓰는 범위 [이름, 시작 권 번호, 끝 권 번호] (0부터) */
+const BIBLE_PRESETS = [
+  ['성경 전체', 0, 65], ['구약', 0, 38], ['신약', 39, 65],
+  ['모세오경', 0, 4], ['역사서', 5, 16], ['시가서', 17, 21], ['선지서', 22, 38],
+  ['복음서', 39, 42], ['서신서', 44, 64],
+];
+
+function bibleBooksInRange(startIdx, endIdx) {
+  return BIBLE_BOOKS.slice(startIdx, endIdx + 1).map((b) => ({ ...b }));
+}
+
+function bibleIndexOf(name) {
+  return BIBLE_BOOKS.findIndex((b) => b.name === name);
+}
+
+/** 범위 이름: 프리셋과 같으면 "신약", 아니면 "창세기~신명기" */
+function bibleRangeLabel(startIdx, endIdx) {
+  const preset = BIBLE_PRESETS.find(([, a, b]) => a === startIdx && b === endIdx);
+  if (preset) return preset[0];
+  return startIdx === endIdx ? BIBLE_BOOKS[startIdx].name : `${BIBLE_BOOKS[startIdx].name}~${BIBLE_BOOKS[endIdx].name}`;
+}
+
+function bibleTotalChapters(bible) {
+  return bible.books.reduce((sum, b) => sum + b.chapters, 0);
+}
+
+/** 범위 안 n번째 장(1부터) → { index, name, chapter } */
+function biblePosition(bible, n) {
+  let left = n;
+  for (let i = 0; i < bible.books.length; i++) {
+    const b = bible.books[i];
+    if (left <= b.chapters) return { index: i, name: b.name, chapter: left };
+    left -= b.chapters;
+  }
+  const last = bible.books[bible.books.length - 1];
+  return { index: bible.books.length - 1, name: last.name, chapter: last.chapters };
+}
+
+/** 범위 안 (권 순서, 장) → 누적 장 수 */
+function bibleUnitsFromPosition(bible, bookIndex, chapter) {
+  let units = 0;
+  for (let i = 0; i < bookIndex; i++) units += bible.books[i].chapters;
+  return units + chapter;
+}
+
+/** 누적 장 수 → "창세기 3장" (0이면 '-') */
+function formatBiblePosition(bible, units) {
+  if (units <= 0) return '-';
+  const p = biblePosition(bible, units);
+  return `${p.name} ${p.chapter}장`;
+}
+
+/** (from 초과 ~ to 이하) → "창세기 4~6장" / "창세기 50장 ~ 출애굽기 2장" */
+function describeBibleRange(bible, from, to) {
+  const a = biblePosition(bible, from + 1);
+  const b = biblePosition(bible, to);
+  if (a.index === b.index) return a.chapter === b.chapter ? `${a.name} ${a.chapter}장` : `${a.name} ${a.chapter}~${b.chapter}장`;
+  return `${a.name} ${a.chapter}장 ~ ${b.name} ${b.chapter}장`;
+}
+
 /** 강의 제목 텍스트 → 배열 (빈 줄 무시) */
 function parseLectureLines(text) {
   return text
@@ -221,10 +300,11 @@ function clamp(n, min, max) {
  * 4. 목표(Goal)
  *
  * Goal = {
- *   id, type: 'book' | 'lecture', title, startDate, dueDate, createdAt, updatedAt,
+ *   id, type: 'book' | 'lecture' | 'bible', title, startDate, dueDate, createdAt, updatedAt,
  *   restWeekdays: number[],                  // 쉬는 요일 (0=일 ~ 6=토)
  *   book?:    { chapters: [{ name, startPage }], lastPage, author? },
  *   lecture?: { titles: [string] },
+ *   bible?:   { books: [{ name, chapters }] },   // 통독 범위 (순서대로)
  *   progress: {
  *     current: number,                       // 책: 마지막으로 읽은 페이지 / 강의: 완료한 강의 수
  *     history: [{ date: 'YYYY-MM-DD', value }] // 날짜당 마지막 값 하나
@@ -233,13 +313,16 @@ function clamp(n, min, max) {
  *     [basis]: { original: Plan, current: Plan | null }  // current는 재분배 후에만 존재
  *   }
  * }
- * basis: 책 → 'page', 'chapter' / 강의 → 'lecture'
+ * basis: 책 → 'page', 'chapter' / 강의 → 'lecture' / 성경 통독 → 'bible' (장 단위)
  * ========================================================================= */
 
 const BASES_BY_TYPE = {
   book: ['page', 'chapter'],
   lecture: ['lecture'],
+  bible: ['bible'],
 };
+
+const TYPE_LABELS = { book: '책', lecture: '강의', bible: '성경 통독' };
 
 function generateId() {
   return `g_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -253,6 +336,7 @@ function getBases(goal) {
 function getTotalUnits(goal, basis) {
   if (basis === 'page') return bookTotalPages(goal.book);
   if (basis === 'chapter') return goal.book.chapters.length;
+  if (basis === 'bible') return bibleTotalChapters(goal.bible);
   return goal.lecture.titles.length;
 }
 
@@ -276,6 +360,7 @@ function getProgressBounds(goal) {
   if (goal.type === 'book') {
     return { min: bookFirstPage(goal.book) - 1, max: goal.book.lastPage };
   }
+  if (goal.type === 'bible') return { min: 0, max: bibleTotalChapters(goal.bible) };
   return { min: 0, max: goal.lecture.titles.length };
 }
 
@@ -349,6 +434,32 @@ function getRestWeekdays(goal) {
   return goal.restWeekdays || [];
 }
 
+function createBibleGoal({ title, startDate, dueDate, restWeekdays = [], bibleStart, bibleEnd }) {
+  const now = new Date().toISOString();
+  const goal = {
+    id: generateId(),
+    type: 'bible',
+    title: title.trim(),
+    startDate,
+    dueDate,
+    restWeekdays: normalizeWeekdays(restWeekdays),
+    createdAt: now,
+    updatedAt: now,
+    bible: { books: bibleBooksInRange(Number(bibleStart), Number(bibleEnd)) },
+    progress: { current: 0, history: [] },
+    plans: null,
+  };
+  goal.plans = buildInitialPlans(goal);
+  return goal;
+}
+
+/** 입력 종류에 맞게 목표 만들기 */
+function createGoalFromInput(input, requiredBookId = null) {
+  if (input.type === 'book') return createBookGoal({ ...input, requiredBookId });
+  if (input.type === 'bible') return createBibleGoal(input);
+  return createLectureGoal(input);
+}
+
 /* ----- 검증: 오류 메시지 배열을 반환 (빈 배열이면 통과) ----- */
 
 function validateCommonInput({ title, startDate, dueDate, restWeekdays = [] }) {
@@ -401,6 +512,22 @@ function validateBookStructure(input) {
   return errors;
 }
 
+function validateBibleInput(input) {
+  const errors = validateCommonInput(input);
+  const a = Number(input.bibleStart);
+  const b = Number(input.bibleEnd);
+  if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b > 65) errors.push('통독 범위를 선택하세요.');
+  else if (a > b) errors.push('통독 범위의 시작 권이 끝 권보다 뒤에 있습니다.');
+  return errors;
+}
+
+/** 종류에 맞는 입력 검증 */
+function validateGoalInput(input) {
+  if (input.type === 'book') return validateBookInput(input);
+  if (input.type === 'bible') return validateBibleInput(input);
+  return validateLectureInput(input);
+}
+
 function validateLectureInput(input) {
   const errors = validateCommonInput(input);
   if (!input.titles || input.titles.length === 0) errors.push('강의 제목을 한 줄 이상 입력하세요.');
@@ -447,7 +574,7 @@ function hasGoalStarted(goal, today = todayStr()) {
 
 /** 수정 입력 추가 검증: 진행 중인 목표는 오늘부터 재분배하므로 마감일이 오늘 이후여야 한다 */
 function validateGoalEdit(goal, input, today = todayStr()) {
-  const errors = goal.type === 'book' ? validateBookInput(input) : validateLectureInput(input);
+  const errors = validateGoalInput({ ...input, type: goal.type });
   // 이름만 바꾸는 등 계획에 영향이 없는 수정은 날짜 제한을 두지 않는다 (마감 지난 목표도 이름 수정 가능)
   if (errors.length || !isPlanAffectingEdit(goal, input)) return errors;
   if (hasGoalStarted(goal, today) && isValidDateStr(input.dueDate) && diffDays(today, input.dueDate) < 0) {
@@ -479,7 +606,13 @@ function isPlanAffectingEdit(goal, input) {
   if (goal.startDate !== input.startDate || goal.dueDate !== input.dueDate) return true;
   if (getRestWeekdays(goal).join() !== normalizeWeekdays(input.restWeekdays).join()) return true;
   if (goal.type === 'book') return isBookStructureChanged(goal, input);
+  if (goal.type === 'bible') return isBibleRangeChanged(goal, input);
   return JSON.stringify(goal.lecture.titles) !== JSON.stringify(input.titles);
+}
+
+function isBibleRangeChanged(goal, input) {
+  const books = bibleBooksInRange(Number(input.bibleStart), Number(input.bibleEnd));
+  return goal.bible.books.map((b) => b.name).join() !== books.map((b) => b.name).join();
 }
 
 /**
@@ -502,6 +635,8 @@ function applyGoalEdit(goal, input, today = todayStr()) {
       lastPage: Number(input.lastPage),
     };
     if (input.author && input.author.trim()) goal.book.author = input.author.trim();
+  } else if (goal.type === 'bible') {
+    goal.bible = { books: bibleBooksInRange(Number(input.bibleStart), Number(input.bibleEnd)) };
   } else {
     goal.lecture = { titles: [...input.titles] };
   }
@@ -557,6 +692,8 @@ function goalToInput(goal) {
     lastPage: goal.type === 'book' ? goal.book.lastPage : NaN,
     author: goal.type === 'book' ? getBookAuthor(goal) : '',
     titles: goal.type === 'lecture' ? [...goal.lecture.titles] : [],
+    bibleStart: goal.type === 'bible' ? bibleIndexOf(goal.bible.books[0].name) : 0,
+    bibleEnd: goal.type === 'bible' ? bibleIndexOf(goal.bible.books[goal.bible.books.length - 1].name) : 65,
   };
 }
 
@@ -577,11 +714,11 @@ function changeDueDate(goal, dueDate, today = todayStr()) {
 
 /** 대시보드 등에서 대표로 쓰는 기준: 책은 페이지, 강의는 강의 */
 function getPrimaryBasis(goal) {
-  return goal.type === 'book' ? 'page' : 'lecture';
+  return goal.type === 'book' ? 'page' : goal.type;
 }
 
 function getUnitLabel(basis) {
-  return { page: '페이지', chapter: '챕터', lecture: '강' }[basis];
+  return { page: '페이지', chapter: '챕터', lecture: '강', bible: '장' }[basis];
 }
 
 function getGoalSummary(goal, basis = getPrimaryBasis(goal), today = todayStr()) {
@@ -639,6 +776,7 @@ function describeUnitsRange(goal, basis, from, to) {
   if (basis === 'chapter') {
     return getChapterRanges(goal.book).slice(from, to).map((c) => c.name).join(', ');
   }
+  if (basis === 'bible') return describeBibleRange(goal.bible, from, to);
   if (to - from === 1) return `${to}강 · ${goal.lecture.titles[to - 1]}`;
   return `${from + 1}~${to}강`;
 }
@@ -1029,6 +1167,12 @@ function checkGoalShape(goal, index) {
       && b.chapters.every((c, i) => c && typeof c.name === 'string' && Number.isInteger(c.startPage) && c.startPage >= 1
         && c.startPage <= b.lastPage && (i === 0 || c.startPage > b.chapters[i - 1].startPage));
     if (!chaptersOk) return `${label}: 챕터 정보가 올바르지 않습니다.`;
+  } else if (goal.type === 'bible') {
+    const books = goal.bible && goal.bible.books;
+    if (!Array.isArray(books) || !books.length
+      || !books.every((b) => b && bibleIndexOf(b.name) >= 0 && Number.isInteger(b.chapters) && b.chapters > 0)) {
+      return `${label}: 통독 범위가 올바르지 않습니다.`;
+    }
   } else if (!goal.lecture || !Array.isArray(goal.lecture.titles) || goal.lecture.titles.length === 0
     || !goal.lecture.titles.every((t) => typeof t === 'string')) {
     return `${label}: 강의 목록이 올바르지 않습니다.`;
@@ -1229,6 +1373,17 @@ function runPlanSelfTests() {
   applyGoalEdit(linked, inputFromRequiredBook(linked, rb2), '2026-09-30');
   check('필독서: 변경 반영(시작 전 → 계획 새로)', linked.book.chapters.length === 3 && linked.plans.chapter.original.to === 3
     && linked.requiredBookId === 'b1' && !isRequiredBookChanged(linked, rb2));
+
+  // 성경 통독
+  check('성경: 전체 1189장 · 구약 929 · 신약 260', bibleTotalChapters({ books: bibleBooksInRange(0, 65) }) === 1189
+    && bibleTotalChapters({ books: bibleBooksInRange(0, 38) }) === 929 && bibleTotalChapters({ books: bibleBooksInRange(39, 65) }) === 260);
+  const bg = createBibleGoal({ title: '통독', startDate: '2026-10-01', dueDate: '2026-10-10', bibleStart: 0, bibleEnd: 1 });
+  check('성경: 범위 설명', describeBibleRange(bg.bible, 0, 3) === '창세기 1~3장'
+    && describeBibleRange(bg.bible, 48, 52) === '창세기 49장 ~ 출애굽기 2장' && describeBibleRange(bg.bible, 89, 90) === '출애굽기 40장');
+  check('성경: 위치 변환', bibleUnitsFromPosition(bg.bible, 1, 2) === 52 && formatBiblePosition(bg.bible, 52) === '출애굽기 2장');
+  check('성경: 계획 합계 90장', buildSchedule(getActivePlan(bg, 'bible')).at(-1).cumulative === 90);
+  check('성경: 범위 역순 차단', validateBibleInput({ title: 'x', startDate: '2026-10-01', dueDate: '2026-10-02', bibleStart: 5, bibleEnd: 2 }).length > 0);
+  check('성경: 백업 형식 검사 통과', checkGoalShape(bg, 0) === null);
 
   // 입력 검증
   check(
@@ -1585,7 +1740,7 @@ function renderCoverThumb(url, size = 'md') {
 
 /** 목표 카드. requiredBook이 있으면 필독서 표시와 변경 알림 */
 function renderGoalCard(goal, s, requiredBook = null) {
-  const typeLabel = goal.type === 'book' ? '책' : '강의';
+  const typeLabel = TYPE_LABELS[goal.type];
   const changed = requiredBook && isRequiredBookChanged(goal, requiredBook);
   return `
     <a class="goal-card ${s.isActive ? '' : 'is-finished'}" href="#/goal/${escapeHtml(goal.id)}">
@@ -1676,7 +1831,7 @@ function renderGoalForm(root, goal, bookId = null) {
   detailState.draft = null;
   const v = draft || (goal ? goalToInput(goal) : {
     title: '', startDate: todayStr(), dueDate: '', restWeekdays: [],
-    chapters: [{ name: '', startPage: '' }], lastPage: '', titles: [],
+    chapters: [{ name: '', startPage: '' }], lastPage: '', titles: [], bibleStart: 0, bibleEnd: 65,
   });
   if (bookId) {
     Object.assign(v, { title: requiredBook.title, author: requiredBook.author || '', chapters: requiredBook.chapters, lastPage: requiredBook.lastPage });
@@ -1701,6 +1856,7 @@ function renderGoalForm(root, goal, bookId = null) {
         <div class="segmented">
           <label><input type="radio" name="type" value="book" ${type === 'book' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> 책</label>
           <label><input type="radio" name="type" value="lecture" ${type === 'lecture' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> 강의</label>
+          <label><input type="radio" name="type" value="bible" ${type === 'bible' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> 성경 통독</label>
         </div>
       </div>
 
@@ -1758,6 +1914,26 @@ function renderGoalForm(root, goal, bookId = null) {
         </div>
       </div>
 
+      <div data-section="bible">
+        <div class="field">
+          <span class="field-label">통독 범위</span>
+          <div class="bible-presets">
+            ${BIBLE_PRESETS.map(([name, a, b]) => `<button type="button" class="btn btn-small" data-bible-preset="${a},${b}">${name}</button>`).join('')}
+          </div>
+          <div class="bible-range">
+            <select id="f-bible-start" class="input bible-select">
+              ${BIBLE_BOOKS.map((b, i) => `<option value="${i}" ${i === Number(v.bibleStart) ? 'selected' : ''}>${b.name}</option>`).join('')}
+            </select>
+            <span>부터</span>
+            <select id="f-bible-end" class="input bible-select">
+              ${BIBLE_BOOKS.map((b, i) => `<option value="${i}" ${i === Number(v.bibleEnd) ? 'selected' : ''}>${b.name}</option>`).join('')}
+            </select>
+            <span>까지</span>
+          </div>
+          <span id="f-bible-summary" class="field-hint"></span>
+        </div>
+      </div>
+
       <div id="form-errors" class="errors" hidden></div>
 
       <div class="form-actions">
@@ -1770,10 +1946,24 @@ function renderGoalForm(root, goal, bookId = null) {
   fillChapterEditor(v.chapters, locked);
 
   const form = root.querySelector('#goal-form');
-  form.addEventListener('change', (e) => { if (e.target.name === 'type') updateFormView(); });
+  form.addEventListener('change', (e) => {
+    if (e.target.name === 'type' || e.target.classList.contains('bible-select')) {
+      syncBibleAutoTitle(form);
+      updateFormView();
+    }
+  });
   form.addEventListener('input', updateFormView);
   bindChapterEditor(form, updateFormView);
   form.addEventListener('click', (e) => {
+    const preset = e.target.closest('[data-bible-preset]')?.dataset.biblePreset;
+    if (preset) {
+      const [a, b] = preset.split(',');
+      form.querySelector('#f-bible-start').value = a;
+      form.querySelector('#f-bible-end').value = b;
+      syncBibleAutoTitle(form);
+      updateFormView();
+      return;
+    }
     const weeks = e.target.closest('[data-weeks]')?.dataset.weeks;
     if (!weeks) return;
     const start = form.querySelector('#f-start').value;
@@ -1885,6 +2075,20 @@ function addChapterRow(ch) {
   document.getElementById('chapter-rows').appendChild(tr);
 }
 
+/** 성경 통독: 이름이 비어 있거나 자동으로 채운 이름이면 범위에 맞춰 이름을 바꿔 준다 */
+function syncBibleAutoTitle(form) {
+  if (getFormType() !== 'bible') return;
+  const titleEl = form.querySelector('#f-title');
+  const a = Number(form.querySelector('#f-bible-start').value);
+  const b = Number(form.querySelector('#f-bible-end').value);
+  if (a > b) return;
+  const auto = `성경 통독 · ${bibleRangeLabel(a, b)}`;
+  if (!titleEl.value.trim() || titleEl.value === form.dataset.autoTitle) {
+    titleEl.value = auto;
+    form.dataset.autoTitle = auto;
+  }
+}
+
 function getFormType() {
   return document.querySelector('#goal-form input[name="type"]:checked').value;
 }
@@ -1899,6 +2103,8 @@ function collectFormInput() {
     dueDate: val('f-due'),
     ...readChapterEditor(),
     author: val('f-author'),
+    bibleStart: Number(val('f-bible-start')),
+    bibleEnd: Number(val('f-bible-end')),
     titles: parseLectureLines(val('f-lectures')),
     restWeekdays: [...document.querySelectorAll('input[name="rest-weekday"]:checked')].map((el) => Number(el.value)),
   };
@@ -1908,9 +2114,16 @@ function collectFormInput() {
 function updateFormView() {
   const input = collectFormInput();
   const isBook = input.type === 'book';
+  const isBible = input.type === 'bible';
   document.querySelector('[data-section="book"]').hidden = !isBook;
-  document.querySelector('[data-section="lecture"]').hidden = isBook;
-  document.getElementById('f-title-label').textContent = isBook ? '책 제목' : '강의 이름';
+  document.querySelector('[data-section="lecture"]').hidden = input.type !== 'lecture';
+  document.querySelector('[data-section="bible"]').hidden = !isBible;
+  document.getElementById('f-title-label').textContent = { book: '책 제목', lecture: '강의 이름', bible: '통독 이름' }[input.type];
+  const bibleChapters = input.bibleStart <= input.bibleEnd
+    ? bibleBooksInRange(input.bibleStart, input.bibleEnd).reduce((sum, b) => sum + b.chapters, 0) : 0;
+  document.getElementById('f-bible-summary').textContent = input.bibleStart <= input.bibleEnd
+    ? `${input.bibleEnd - input.bibleStart + 1}권 · ${bibleChapters}장`
+    : '시작 권이 끝 권보다 뒤에 있습니다';
 
   const days = isValidDateStr(input.startDate) && isValidDateStr(input.dueDate)
     ? countDaysInclusive(input.startDate, input.dueDate) : null;
@@ -1929,10 +2142,10 @@ function updateFormView() {
     const first = input.chapters[0] && input.chapters[0].startPage;
     const total = isBook
       ? (Number.isInteger(first) && Number.isInteger(input.lastPage) ? input.lastPage - first + 1 : 0)
-      : input.titles.length;
+      : isBible ? bibleChapters : input.titles.length;
     if (study > 0 && total > 0) {
       const avg = total / study;
-      const unit = isBook ? '페이지' : '강';
+      const unit = isBook ? '페이지' : isBible ? '장' : '강';
       daily = `공부하는 날 하루 약 <b>${avg >= 10 ? Math.round(avg) : Math.round(avg * 10) / 10}${unit}</b>`;
     }
   }
@@ -1946,7 +2159,7 @@ function submitGoalForm(goal, requiredBookId = null) {
   const input = collectFormInput();
   const errors = goal
     ? validateGoalEdit(goal, input)
-    : input.type === 'book' ? validateBookInput(input) : validateLectureInput(input);
+    : validateGoalInput(input);
 
   const box = document.getElementById('form-errors');
   if (errors.length) {
@@ -1967,7 +2180,7 @@ function submitGoalForm(goal, requiredBookId = null) {
     }
     navigate(`#/goal/${goal.id}`);
   } else {
-    const created = input.type === 'book' ? createBookGoal({ ...input, requiredBookId }) : createLectureGoal(input);
+    const created = createGoalFromInput(input, requiredBookId);
     appData.goals.push(created);
     commit();
     navigate(requiredBookId ? `#/goal/${created.id}` : '#/');
@@ -2015,7 +2228,7 @@ function renderGoalDetail(root, goal) {
           <p class="muted">
             ${goal.requiredBookId && requiredBooks.some((b) => b.id === goal.requiredBookId)
               ? '<span class="type-tag type-required">필독서</span>'
-              : `<span class="type-tag type-${goal.type}">${goal.type === 'book' ? '책' : '강의'}</span>`}
+              : `<span class="type-tag type-${goal.type}">${TYPE_LABELS[goal.type]}</span>`}
             ${goal.startDate} ~ ${goal.dueDate} · ${formatDday(s.dday)}
             ${getRestWeekdays(goal).length ? ` · 쉬는 요일 ${WEEKDAY_ORDER.filter((d) => getRestWeekdays(goal).includes(d)).map((d) => WEEKDAYS_KO[d]).join('·')}` : ''}
           </p>
@@ -2074,11 +2287,12 @@ function formatAmount(n, basis) {
 /** 위치 표시: 책(페이지 기준)은 페이지 번호 "p.42", 그 외는 개수 "3강" */
 function formatPosition(goal, basis, units) {
   if (basis === 'page') return units > 0 ? `p.${unitsToPage(goal.book, units)}` : '-';
+  if (basis === 'bible') return formatBiblePosition(goal.bible, units);
   return formatAmount(units, basis);
 }
 
 function totalLabel(basis) {
-  return basis === 'page' ? '마지막 페이지' : '전체';
+  return basis === 'page' ? '마지막 페이지' : basis === 'bible' ? '끝' : '전체';
 }
 
 /** 현황 안내 문구와 색 */
@@ -2131,9 +2345,10 @@ function renderSummaryPanel(goal, s) {
 
       <div class="summary-actions">
         <form class="progress-form" data-action="progress" novalidate>
+          ${goal.type === 'bible' ? renderBibleProgressInputs(goal) : `
           <label for="progress-input" class="field-label">${isBook ? '마지막으로 읽은 페이지' : '완료한 강의 수'}</label>
           <input id="progress-input" type="number" class="input input-num" min="${min}" max="${max}" value="${cur}">
-          <span class="muted">${isBook ? `(p.${min}~${max})` : `(0~${max}강)`}</span>
+          <span class="muted">${isBook ? `(p.${min}~${max})` : `(0~${max}강)`}</span>`}
           <button type="submit" class="btn btn-primary">진도 기록</button>
           <span class="progress-error" hidden></span>
         </form>
@@ -2147,11 +2362,40 @@ function renderSummaryPanel(goal, s) {
   `;
 }
 
+/** 성경 통독 진도 입력: 마지막으로 읽은 권 + 장 */
+function renderBibleProgressInputs(goal) {
+  const cur = goal.progress.current;
+  const pos = cur > 0 ? biblePosition(goal.bible, cur) : null;
+  return `
+    <label for="progress-book" class="field-label">마지막으로 읽은 곳</label>
+    <select id="progress-book" class="input bible-select">
+      <option value="-1" ${pos ? '' : 'selected'}>아직 안 읽음</option>
+      ${goal.bible.books.map((b, i) => `<option value="${i}" ${pos && pos.index === i ? 'selected' : ''}>${b.name}</option>`).join('')}
+    </select>
+    <input id="progress-chapter" type="number" class="input input-num" min="1" value="${pos ? pos.chapter : ''}" aria-label="장">
+    <span class="muted">장까지</span>`;
+}
+
+/** 성경 통독 진도 입력값 → 누적 장 수 (오류면 문자열) */
+function readBibleProgressInput(goal, form) {
+  const bookIndex = Number(form.querySelector('#progress-book').value);
+  if (bookIndex < 0) return 0;
+  const book = goal.bible.books[bookIndex];
+  const chapter = Number(form.querySelector('#progress-chapter').value);
+  if (!Number.isInteger(chapter) || chapter < 1 || chapter > book.chapters) {
+    return `${book.name}은(는) 1~${book.chapters}장입니다.`;
+  }
+  return bibleUnitsFromPosition(goal.bible, bookIndex, chapter);
+}
+
 /** 현재 위치 문구: "p.42까지 읽음 · 완료 챕터 5/23" */
 function describePosition(goal) {
   const cur = goal.progress.current;
   if (goal.type === 'book') {
     return `${cur < bookFirstPage(goal.book) ? '아직 읽지 않음' : `p.${cur}까지 읽음`} · 완료 챕터 ${completedChapterCount(goal.book, cur)}/${goal.book.chapters.length}`;
+  }
+  if (goal.type === 'bible') {
+    return cur === 0 ? '아직 읽지 않음' : `${formatBiblePosition(goal.bible, cur)}까지 읽음 · ${cur}/${bibleTotalChapters(goal.bible)}장`;
   }
   return cur === 0 ? '아직 듣지 않음' : `${cur}강까지 완료`;
 }
@@ -2218,6 +2462,8 @@ function describeEditChanges(goal, input) {
   if (goal.type === 'book') {
     if (isBookStructureChanged(goal, input)) changes.push('챕터·페이지');
     if (getBookAuthor(goal) !== (input.author || '').trim()) changes.push('저자');
+  } else if (goal.type === 'bible') {
+    if (isBibleRangeChanged(goal, input)) changes.push(`통독 범위(${bibleRangeLabel(Number(input.bibleStart), Number(input.bibleEnd))})`);
   } else if (JSON.stringify(goal.lecture.titles) !== JSON.stringify(input.titles)) {
     changes.push(`강의 목록(${goal.lecture.titles.length}개 → ${input.titles.length}개)`);
   }
@@ -2314,7 +2560,7 @@ function renderPreviewBody(goal, clone, basis, preview, today) {
         <tr>
           <th class="col-date">날짜</th>
           <th class="col-weekday">요일</th>
-          <th>${goal.type === 'book' ? '읽을 내용' : '들을 강의'}</th>
+          <th>${goal.type === 'lecture' ? '들을 강의' : '읽을 내용'}</th>
           <th class="col-amount">분량</th>
           <th class="col-cum">새 누적 목표</th>
           <th class="col-cum">지금 계획 누적</th>
@@ -2338,6 +2584,7 @@ function describeRowContent(goal, basis, row) {
     return `<strong>${a === b ? `p.${a}` : `p.${a}~${b}`}</strong>
       <span class="muted">· ${escapeHtml(describeChaptersForPages(goal.book, a, b))}</span>`;
   }
+  if (basis === 'bible') return `<strong>${escapeHtml(describeBibleRange(goal.bible, from, to))}</strong>`;
   if (basis === 'chapter') {
     return getChapterRanges(goal.book).slice(from, to)
       .map((c) => `<div>${escapeHtml(c.name)} <span class="muted">(p.${Number(c.startPage)}~${Number(c.endPage)})</span></div>`)
@@ -2352,6 +2599,7 @@ function describeRowContent(goal, basis, row) {
 function formatCumulative(goal, basis, units) {
   if (basis === 'page') return units === 0 ? '-' : `p.${unitsToPage(goal.book, units)}`;
   if (basis === 'chapter') return `${units}챕터`;
+  if (basis === 'bible') return formatBiblePosition(goal.bible, units);
   return `${units}강`;
 }
 
@@ -2405,7 +2653,7 @@ function renderPlanTable(goal, basis, readOnly = false) {
         <tr>
           <th class="col-date">날짜</th>
           <th class="col-weekday">요일</th>
-          <th>${goal.type === 'book' ? '읽을 내용' : '들을 강의'}</th>
+          <th>${goal.type === 'lecture' ? '들을 강의' : '읽을 내용'}</th>
           <th class="col-amount">분량</th>
           <th class="col-cum">누적 목표</th>
           <th class="col-check">완료</th>
@@ -2427,6 +2675,10 @@ function describeCellContent(goal, basis, row) {
     const b = unitsToPage(goal.book, to);
     return `<strong>${a === b ? `p.${a}` : `p.${a}~${b}`}</strong>
       <span class="cell-sub">${escapeHtml(describeChaptersForPages(goal.book, a, b))}</span>`;
+  }
+  if (basis === 'bible') {
+    return `<strong>${escapeHtml(describeBibleRange(goal.bible, from, to))}</strong>
+      <span class="cell-sub">${row.amount}장</span>`;
   }
   const items = basis === 'chapter'
     ? getChapterRanges(goal.book).slice(from, to).map((c) => escapeHtml(c.name))
@@ -2611,8 +2863,20 @@ function bindDetailEvents(container, goal) {
   // 방식 1: 직접 입력
   container.querySelector('[data-action="progress"]').addEventListener('submit', (e) => {
     e.preventDefault();
-    const input = e.target.querySelector('#progress-input');
     const errorBox = e.target.querySelector('.progress-error');
+    if (goal.type === 'bible') {
+      const units = readBibleProgressInput(goal, e.target);
+      if (typeof units === 'string') {
+        errorBox.textContent = units;
+        errorBox.hidden = false;
+        return;
+      }
+      setProgress(goal, units);
+      commit();
+      rerenderDetail(goal);
+      return;
+    }
+    const input = e.target.querySelector('#progress-input');
     const { min, max } = getProgressBounds(goal);
     const value = Number(input.value);
     if (input.value === '' || !Number.isInteger(value) || value < min || value > max) {
@@ -2834,7 +3098,7 @@ function renderAdminGoalRow(p, goal, s) {
     <tr class="${s.isActive ? '' : 'is-finished-row'}">
       <td>
         <a class="member-link" href="#/admin/member/${escapeHtml(p.user_id)}/${escapeHtml(goal.id)}">${escapeHtml(goal.title)}</a>
-        <div class="muted small">${book ? '필독서' : goal.type === 'book' ? '책' : '강의'}${getBookAuthor(goal) ? ` · ${escapeHtml(getBookAuthor(goal))}` : ''}</div>
+        <div class="muted small">${book ? '필독서' : TYPE_LABELS[goal.type]}${getBookAuthor(goal) ? ` · ${escapeHtml(getBookAuthor(goal))}` : ''}</div>
       </td>
       <td class="muted">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
       <td class="num">${formatPosition(goal, s.basis, s.target)}</td>
@@ -3171,6 +3435,7 @@ function rowTextForExport(goal, basis, row) {
       subs: [describeChaptersForPages(goal.book, a, b)],
     };
   }
+  if (basis === 'bible') return { main: describeBibleRange(goal.bible, from, to), subs: [] };
   if (basis === 'chapter') {
     const chs = getChapterRanges(goal.book).slice(from, to);
     return { main: `${chs.length}개 챕터`, subs: chs.map((c) => `${c.name} (p.${c.startPage}~${c.endPage})`) };
@@ -3417,11 +3682,11 @@ async function drawPlanImage(goal, options) {
   roundRect(ctx, RX, RY, RW, RH, 24, C.surface);
   ctx.font = font(30, 800);
   ctx.fillStyle = C.text;
-  ctx.fillText(goal.type === 'book' ? '매일 읽을 분량' : '매일 들을 분량', RX + 36, RY + 56);
+  ctx.fillText(goal.type === 'lecture' ? '매일 들을 분량' : '매일 읽을 분량', RX + 36, RY + 56);
   ctx.font = font(21);
   ctx.fillStyle = C.muted;
   ctx.textAlign = 'right';
-  const basisLabel = { page: '페이지 기준', chapter: '챕터 기준', lecture: '강의' }[basis];
+  const basisLabel = { page: '페이지 기준', chapter: '챕터 기준', lecture: '강의', bible: '장 단위' }[basis];
   ctx.fillText(`${basisLabel} · ${options.range === 'upcoming' ? '오늘부터' : '전체 기간'}   ✓ 완료`, RX + RW - 36, RY + 54);
   ctx.textAlign = 'left';
 

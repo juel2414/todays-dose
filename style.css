@@ -811,3 +811,10 @@ body.modal-open { overflow: hidden; }
 .member-goal-title { font-size: 26px; margin: 4px 0; }
 /* 16:9 미리보기가 잘 보이도록 창을 넓게 */
 .modal-card { width: min(1100px, calc(100vw - 48px)); }
+
+/* ===== 성경 통독 ===== */
+.type-bible { background: #eaf6ee; color: #1a7f4b; }
+.bible-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.bible-range { display: flex; align-items: center; gap: 10px; }
+.bible-select { width: 170px; }
+.progress-form .bible-select { width: 160px; }
