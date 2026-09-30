@@ -8078,6 +8078,11 @@ const EN = {
   '궁금한 질문을 눌러 보세요.': 'Click a question to see the answer.',
   '도움말 검색 (예: 쉬는 날, 사진, 그룹)': 'Search help (e.g. rest days, photo, group)',
   '찾는 내용이 없어요. 다른 말로 검색해 보세요.': 'Nothing found. Try other words.',
+  '오늘분량 사용 설명서': 'Today’s Dose guide',
+  '처음이라면 1번부터 차례로 따라 해 보세요. 그림의 빨간 번호를 순서대로 누르면 돼요.': 'New here? Follow along from step 1 — click the red numbers in each picture in order.',
+  '목차': 'Contents',
+  '자주 묻는 질문': 'FAQ',
+  '설명서의 화면 그림은 한국어 화면이에요.': 'Screenshots in this guide show the Korean screens.',
 };
 
 /* =========================================================================
