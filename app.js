@@ -14,6 +14,83 @@
  * ========================================================================= */
 
 /* =========================================================================
+ * 0. 언어 (한국어 / English)
+ *    - 화면 문구는 한국어 원문을 키로 쓴다: t('계획대로'), t('{n}페이지 밀림', { n })
+ *    - 'ko'면 키를 그대로(매개변수만 채워서), 'en'이면 EN 사전(맨 아래)의 번역을 쓴다.
+ *    - 같은 한국어가 영어에서 다르게 번역돼야 하면 키 뒤에 '||맥락'을 붙인다 (한국어 화면에는 안 보임).
+ *    - 저장 데이터(성경 권 이름 등)는 항상 한국어 그대로 두고, 화면에 보일 때만 번역한다.
+ * ========================================================================= */
+
+const LANG_STORAGE_KEY = 'studyPlanner.lang';
+const LANGS = ['ko', 'en'];
+let currentLang = 'ko'; // 브라우저가 아닌 환경(node 자가 검증)에서는 항상 한국어
+const missingTranslations = new Set();
+
+function t(key, params) {
+  const sep = key.indexOf('||');
+  let text = sep >= 0 ? key.slice(0, sep) : key;
+  if (currentLang === 'en') {
+    if (Object.prototype.hasOwnProperty.call(EN, key)) {
+      const v = EN[key];
+      text = typeof v === 'function' ? v(params || {}) : v;
+    } else if (typeof window !== 'undefined' && !missingTranslations.has(key)) {
+      missingTranslations.add(key);
+      console.warn('[i18n] 번역 없음:', key);
+    }
+  }
+  if (!params) return text;
+  return text.replace(/\{(\w+)\}/g, (m, name) => (params[name] !== undefined && params[name] !== null ? String(params[name]) : m));
+}
+
+/** 영어 복수형: plural(1, 'day') → '1 day', plural(3, 'day') → '3 days' */
+function plural(n, one, many = `${one}s`) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+function isLang(lang) {
+  return LANGS.includes(lang);
+}
+
+/** 로그인 전 언어: 저장된 선택 → 브라우저 언어(ko*) → 영어 */
+function detectInitialLang() {
+  try {
+    const saved = localStorage.getItem(LANG_STORAGE_KEY);
+    if (isLang(saved)) return saved;
+  } catch {
+    // 저장 공간을 쓸 수 없는 환경
+  }
+  const nav = (typeof navigator !== 'undefined' && (navigator.language || '')) || '';
+  return /^ko\b/i.test(nav) ? 'ko' : 'en';
+}
+
+function storeLang(lang) {
+  try {
+    localStorage.setItem(LANG_STORAGE_KEY, lang);
+  } catch {
+    // 저장 공간을 쓸 수 없는 환경이면 무시
+  }
+}
+
+/** 언어를 바꾸고 문서 제목·lang 속성을 맞춘다 (화면 다시 그리기는 호출한 쪽에서) */
+function applyLanguage(lang) {
+  currentLang = isLang(lang) ? lang : 'ko';
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang = currentLang;
+    document.title = t('학습 진도 계획표');
+  }
+}
+
+/** 한국어 | English 전환 버튼 (상단 바 · 로그인 화면) */
+function renderLangToggle() {
+  return `
+    <div class="tabs lang-toggle" role="group" aria-label="${t('언어')}">
+      ${[['ko', '한국어'], ['en', 'English']].map(([code, label]) => `
+        <button type="button" class="tab ${currentLang === code ? 'is-active' : ''}" data-lang="${code}" lang="${code}"
+          aria-pressed="${currentLang === code}">${label}</button>`).join('')}
+    </div>`;
+}
+
+/* =========================================================================
  * 1. 날짜 유틸
  *    - 모든 날짜는 'YYYY-MM-DD' 문자열로 다룬다.
  *    - toISOString()처럼 UTC로 바꾸는 함수는 쓰지 않는다 (하루 밀림 방지).
@@ -21,6 +98,8 @@
 
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const WEEKDAYS_KO = ['일', '월', '화', '수', '목', '금', '토'];
+const WEEKDAYS_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0]; // 화면 표시 순서: 월~일
 
 function pad2(n) {
@@ -67,6 +146,21 @@ function countDaysInclusive(start, end) {
 
 function weekdayKo(str) {
   return WEEKDAYS_KO[parseDate(str).getDay()];
+}
+
+/** 요일 이름 (0=일 ~ 6=토), 현재 언어로 */
+function weekdayName(day) {
+  return (currentLang === 'en' ? WEEKDAYS_EN : WEEKDAYS_KO)[day];
+}
+
+/** 'YYYY-MM-DD'의 요일, 현재 언어로 */
+function weekdayLabel(str) {
+  return weekdayName(parseDate(str).getDay());
+}
+
+/** 쉬는 요일 목록 → "월·수" / "Mon·Wed" (월요일부터) */
+function weekdayListLabel(days) {
+  return WEEKDAY_ORDER.filter((d) => days.includes(d)).map(weekdayName).join('·');
 }
 
 /* =========================================================================
@@ -272,6 +366,31 @@ const BIBLE_BOOKS = [
   ['유다서', 1], ['요한계시록', 22],
 ].map(([name, chapters]) => ({ name, chapters }));
 
+/** 영어 권 이름 (BIBLE_BOOKS와 같은 순서) — 화면 표시용 */
+const BIBLE_BOOKS_EN = [
+  'Genesis', 'Exodus', 'Leviticus', 'Numbers', 'Deuteronomy',
+  'Joshua', 'Judges', 'Ruth', '1 Samuel', '2 Samuel',
+  '1 Kings', '2 Kings', '1 Chronicles', '2 Chronicles', 'Ezra',
+  'Nehemiah', 'Esther', 'Job', 'Psalms', 'Proverbs',
+  'Ecclesiastes', 'Song of Songs', 'Isaiah', 'Jeremiah', 'Lamentations',
+  'Ezekiel', 'Daniel', 'Hosea', 'Joel', 'Amos',
+  'Obadiah', 'Jonah', 'Micah', 'Nahum', 'Habakkuk',
+  'Zephaniah', 'Haggai', 'Zechariah', 'Malachi',
+  'Matthew', 'Mark', 'Luke', 'John', 'Acts',
+  'Romans', '1 Corinthians', '2 Corinthians', 'Galatians', 'Ephesians',
+  'Philippians', 'Colossians', '1 Thessalonians', '2 Thessalonians', '1 Timothy',
+  '2 Timothy', 'Titus', 'Philemon', 'Hebrews', 'James',
+  '1 Peter', '2 Peter', '1 John', '2 John', '3 John',
+  'Jude', 'Revelation',
+];
+
+/** 저장된(한국어) 권 이름 → 현재 언어의 권 이름 */
+function bibleBookName(name) {
+  if (currentLang !== 'en') return name;
+  const i = BIBLE_BOOKS.findIndex((b) => b.name === name);
+  return i >= 0 ? BIBLE_BOOKS_EN[i] : name;
+}
+
 /** 자주 쓰는 범위 [이름, 시작 권 번호, 끝 권 번호] (0부터) */
 const BIBLE_PRESETS = [
   ['성경 전체', 0, 65], ['구약', 0, 38], ['신약', 39, 65],
@@ -290,8 +409,9 @@ function bibleIndexOf(name) {
 /** 범위 이름: 프리셋과 같으면 "신약", 아니면 "창세기~신명기" */
 function bibleRangeLabel(startIdx, endIdx) {
   const preset = BIBLE_PRESETS.find(([, a, b]) => a === startIdx && b === endIdx);
-  if (preset) return preset[0];
-  return startIdx === endIdx ? BIBLE_BOOKS[startIdx].name : `${BIBLE_BOOKS[startIdx].name}~${BIBLE_BOOKS[endIdx].name}`;
+  if (preset) return t(preset[0]);
+  const a = bibleBookName(BIBLE_BOOKS[startIdx].name);
+  return startIdx === endIdx ? a : t('{from}~{to}', { from: a, to: bibleBookName(BIBLE_BOOKS[endIdx].name) });
 }
 
 function bibleTotalChapters(bible) {
@@ -321,15 +441,19 @@ function bibleUnitsFromPosition(bible, bookIndex, chapter) {
 function formatBiblePosition(bible, units) {
   if (units <= 0) return '-';
   const p = biblePosition(bible, units);
-  return `${p.name} ${p.chapter}장`;
+  return t('{book} {n}장', { book: bibleBookName(p.name), n: p.chapter });
 }
 
 /** (from 초과 ~ to 이하) → "창세기 4~6장" / "창세기 50장 ~ 출애굽기 2장" */
 function describeBibleRange(bible, from, to) {
   const a = biblePosition(bible, from + 1);
   const b = biblePosition(bible, to);
-  if (a.index === b.index) return a.chapter === b.chapter ? `${a.name} ${a.chapter}장` : `${a.name} ${a.chapter}~${b.chapter}장`;
-  return `${a.name} ${a.chapter}장 ~ ${b.name} ${b.chapter}장`;
+  const nameA = bibleBookName(a.name);
+  if (a.index === b.index) {
+    return a.chapter === b.chapter ? t('{book} {n}장', { book: nameA, n: a.chapter })
+      : t('{book} {from}~{to}장', { book: nameA, from: a.chapter, to: b.chapter });
+  }
+  return t('{book1} {ch1}장 ~ {book2} {ch2}장', { book1: nameA, ch1: a.chapter, book2: bibleBookName(b.name), ch2: b.chapter });
 }
 
 /** 강의 제목 텍스트 → 배열 (빈 줄 무시) */
@@ -373,6 +497,11 @@ const BASES_BY_TYPE = {
 };
 
 const TYPE_LABELS = { book: '책', lecture: '강의', bible: '성경 통독' };
+
+/** 종류 이름, 현재 언어로 */
+function typeLabel(type) {
+  return t(TYPE_LABELS[type]);
+}
 
 function generateId() {
   return `g_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -538,7 +667,7 @@ function getRestDateLabel(goal, date) {
 /** 쉬는 날 표시 문구: "쉬는 날" / "쉬는 날 · 수련회" */
 function restText(goal, date) {
   const label = getRestDateLabel(goal, date);
-  return label ? `쉬는 날 · ${label}` : '쉬는 날';
+  return label ? t('쉬는 날 · {label}', { label }) : t('쉬는 날');
 }
 
 function createBibleGoal({ title, startDate, dueDate, restWeekdays = [], restDates = [], extraDates = [], bibleStart, bibleEnd }) {
@@ -573,15 +702,15 @@ function createGoalFromInput(input, requiredBookId = null) {
 
 function validateCommonInput({ title, startDate, dueDate, restWeekdays = [], restDates = [] }) {
   const errors = [];
-  if (!title || !title.trim()) errors.push('이름을 입력하세요.');
-  if (!isValidDateStr(startDate)) errors.push('시작일이 올바르지 않습니다.');
-  if (!isValidDateStr(dueDate)) errors.push('마감일이 올바르지 않습니다.');
+  if (!title || !title.trim()) errors.push(t('이름을 입력하세요.'));
+  if (!isValidDateStr(startDate)) errors.push(t('시작일이 올바르지 않습니다.'));
+  if (!isValidDateStr(dueDate)) errors.push(t('마감일이 올바르지 않습니다.'));
   if (normalizeWeekdays(restWeekdays).length === 7) {
-    errors.push('쉬는 요일을 모두 선택할 수는 없습니다.');
+    errors.push(t('쉬는 요일을 모두 선택할 수는 없습니다.'));
   } else if (isValidDateStr(startDate) && isValidDateStr(dueDate)) {
-    if (diffDays(startDate, dueDate) < 0) errors.push('마감일은 시작일과 같거나 뒤여야 합니다.');
+    if (diffDays(startDate, dueDate) < 0) errors.push(t('마감일은 시작일과 같거나 뒤여야 합니다.'));
     else if (countStudyDays(startDate, dueDate, restWeekdays, restDates) === 0) {
-      errors.push('기간 안에 공부하는 날이 없습니다. 기간이나 쉬는 요일을 바꾸세요.');
+      errors.push(t('기간 안에 공부하는 날이 없습니다. 기간이나 쉬는 요일을 바꾸세요.'));
     }
   }
   return errors;
@@ -597,25 +726,25 @@ function validateBookStructure(input) {
   const { chapters, lastPage } = input;
   const last = Number(lastPage);
 
-  if (!Number.isInteger(last) || last < 1) errors.push('마지막 페이지를 1 이상의 정수로 입력하세요.');
+  if (!Number.isInteger(last) || last < 1) errors.push(t('마지막 페이지를 1 이상의 정수로 입력하세요.'));
   if (!chapters || chapters.length === 0) {
-    errors.push('챕터를 한 개 이상 입력하세요.');
+    errors.push(t('챕터를 한 개 이상 입력하세요.'));
     return errors;
   }
 
   chapters.forEach((ch, i) => {
-    const label = `${i + 1}번째 챕터`;
+    const label = t('{n}번째 챕터', { n: i + 1 });
     const start = Number(ch.startPage);
-    if (!ch.name || !ch.name.trim()) errors.push(`${label}: 이름을 입력하세요.`);
+    if (!ch.name || !ch.name.trim()) errors.push(`${label}: ${t('이름을 입력하세요.')}`);
     if (!Number.isInteger(start) || start < 1) {
-      errors.push(`${label}: 시작 페이지를 1 이상의 정수로 입력하세요.`);
+      errors.push(`${label}: ${t('시작 페이지를 1 이상의 정수로 입력하세요.')}`);
       return;
     }
     if (i > 0 && start <= Number(chapters[i - 1].startPage)) {
-      errors.push(`${label}: 시작 페이지가 앞 챕터보다 커야 합니다 (오름차순).`);
+      errors.push(`${label}: ${t('시작 페이지가 앞 챕터보다 커야 합니다 (오름차순).')}`);
     }
     if (Number.isInteger(last) && start > last) {
-      errors.push(`${label}: 시작 페이지가 마지막 페이지(${last})보다 큽니다.`);
+      errors.push(`${label}: ${t('시작 페이지가 마지막 페이지({last})보다 큽니다.', { last })}`);
     }
   });
   return errors;
@@ -625,8 +754,8 @@ function validateBibleInput(input) {
   const errors = validateCommonInput(input);
   const a = Number(input.bibleStart);
   const b = Number(input.bibleEnd);
-  if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b > 65) errors.push('통독 범위를 선택하세요.');
-  else if (a > b) errors.push('통독 범위의 시작 권이 끝 권보다 뒤에 있습니다.');
+  if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b > 65) errors.push(t('통독 범위를 선택하세요.'));
+  else if (a > b) errors.push(t('통독 범위의 시작 권이 끝 권보다 뒤에 있습니다.'));
   return errors;
 }
 
@@ -639,7 +768,7 @@ function validateGoalInput(input) {
 
 function validateLectureInput(input) {
   const errors = validateCommonInput(input);
-  if (!input.titles || input.titles.length === 0) errors.push('강의 제목을 한 줄 이상 입력하세요.');
+  if (!input.titles || input.titles.length === 0) errors.push(t('강의 제목을 한 줄 이상 입력하세요.'));
   return errors;
 }
 
@@ -687,12 +816,12 @@ function validateGoalEdit(goal, input, today = todayStr()) {
   // 이름만 바꾸는 등 계획에 영향이 없는 수정은 날짜 제한을 두지 않는다 (마감 지난 목표도 이름 수정 가능)
   if (errors.length || !isPlanAffectingEdit(goal, input)) return errors;
   if (hasGoalStarted(goal, today) && isValidDateStr(input.dueDate) && diffDays(today, input.dueDate) < 0) {
-    errors.push('진행 중인 목표는 마감일을 오늘 이후로 정해야 합니다.');
+    errors.push(t('진행 중인 목표는 마감일을 오늘 이후로 정해야 합니다.'));
   } else if (hasGoalStarted(goal, today) && isValidDateStr(input.dueDate) && isValidDateStr(input.startDate)
     && normalizeWeekdays(input.restWeekdays).length < 7) {
     const from = diffDays(today, input.startDate) > 0 ? input.startDate : today;
     if (countStudyDays(from, input.dueDate, input.restWeekdays, input.restDates) === 0) {
-      errors.push('오늘부터 마감일까지 공부하는 날이 없습니다. 마감일이나 쉬는 요일을 바꾸세요.');
+      errors.push(t('오늘부터 마감일까지 공부하는 날이 없습니다. 마감일이나 쉬는 요일을 바꾸세요.'));
     }
   }
   return errors;
@@ -800,10 +929,10 @@ function replanGoal(goal, today = todayStr()) {
 /** 재분배 가능 여부 (불가능하면 이유 문자열) */
 function getReplanBlocker(goal, today = todayStr()) {
   const s = getGoalSummary(goal, undefined, today);
-  if (s.isComplete) return '이미 완료한 목표입니다.';
-  if (s.isOverdue) return '마감일이 지났습니다. 마감일을 변경해 주세요.';
-  if (!hasGoalStarted(goal, today)) return '아직 시작 전이라 재분배할 필요가 없습니다.';
-  if (s.remainingStudyDays === 0) return '오늘부터 마감일까지 공부하는 날이 없습니다. 마감일을 변경해 주세요.';
+  if (s.isComplete) return t('이미 완료한 목표입니다.');
+  if (s.isOverdue) return t('마감일이 지났습니다. 마감일을 변경해 주세요.');
+  if (!hasGoalStarted(goal, today)) return t('아직 시작 전이라 재분배할 필요가 없습니다.');
+  if (s.remainingStudyDays === 0) return t('오늘부터 마감일까지 공부하는 날이 없습니다. 마감일을 변경해 주세요.');
   return null;
 }
 
@@ -846,8 +975,39 @@ function getPrimaryBasis(goal) {
   return goal.type === 'book' ? 'page' : goal.type;
 }
 
-function getUnitLabel(basis) {
-  return { page: '페이지', chapter: '챕터', lecture: '강', bible: '장' }[basis];
+const UNIT_LABELS = { page: '페이지', chapter: '챕터', lecture: '강', bible: '장' };
+const UNIT_LABELS_EN = { page: ['page', 'pages'], chapter: ['chapter', 'chapters'], lecture: ['lecture', 'lectures'], bible: ['chapter', 'chapters'] };
+
+/** 단위 이름. 영어는 n에 맞춰 단수/복수 (n을 안 주면 복수) */
+function getUnitLabel(basis, n) {
+  if (currentLang === 'en') return UNIT_LABELS_EN[basis][n === 1 ? 0 : 1];
+  return UNIT_LABELS[basis];
+}
+
+/** 분량 표시: "35페이지" / "35 pages" */
+function formatAmount(n, basis) {
+  return currentLang === 'en' ? `${n} ${getUnitLabel(basis, n)}` : `${n}${getUnitLabel(basis)}`;
+}
+
+/** 분량 범위: "3~4페이지" / "3–4 pages" (같으면 하나만) */
+function formatAmountRange(lo, hi, basis) {
+  if (lo === hi) return formatAmount(lo, basis);
+  return currentLang === 'en' ? `${lo}–${hi} ${getUnitLabel(basis)}` : `${lo}~${hi}${getUnitLabel(basis)}`;
+}
+
+/** 완료/전체: "12/300페이지" / "12/300 pages" */
+function formatFraction(done, total, basis) {
+  return currentLang === 'en' ? `${done}/${total} ${getUnitLabel(basis, total)}` : `${done}/${total}${getUnitLabel(basis)}`;
+}
+
+/** 강의 번호: "3강" / "Lecture 3" */
+function lectureLabel(n) {
+  return t('{n}강', { n });
+}
+
+/** 일수: "5일" / "5 days" */
+function formatDays(n) {
+  return t('{n}일', { n });
 }
 
 function getGoalSummary(goal, basis = getPrimaryBasis(goal), today = todayStr()) {
@@ -906,14 +1066,14 @@ function describeUnitsRange(goal, basis, from, to) {
     return getChapterRanges(goal.book).slice(from, to).map((c) => c.name).join(', ');
   }
   if (basis === 'bible') return describeBibleRange(goal.bible, from, to);
-  if (to - from === 1) return `${to}강 · ${goal.lecture.titles[to - 1]}`;
-  return `${from + 1}~${to}강`;
+  if (to - from === 1) return `${lectureLabel(to)} · ${goal.lecture.titles[to - 1]}`;
+  return t('{from}~{to}강', { from: from + 1, to });
 }
 
 /** 페이지 범위가 걸치는 챕터: 전부 덮으면 이름, 일부면 "이름 일부" */
 function describeChaptersForPages(book, startPage, endPage) {
   const list = chaptersInPageRange(book, startPage, endPage)
-    .map((ch) => (ch.coversChapterStart && ch.coversChapterEnd ? ch.name : `${ch.name} 일부`));
+    .map((ch) => (ch.coversChapterStart && ch.coversChapterEnd ? ch.name : t('{name} 일부', { name: ch.name })));
   if (list.length <= 2) return list.join(' ~ ');
   return `${list[0]} ~ ${list.at(-1)}`;
 }
@@ -1046,11 +1206,11 @@ function createEmptyData() {
 /** 예전 버전 데이터를 현재 스키마로 올린다 (버전이 늘면 여기에 단계 추가) */
 function migrateData(raw) {
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.goals)) {
-    throw new Error('올바른 데이터 형식이 아닙니다.');
+    throw new Error(t('올바른 데이터 형식이 아닙니다.'));
   }
   const version = raw.schemaVersion || 0;
   if (version > SCHEMA_VERSION) {
-    throw new Error(`이 앱보다 새로운 버전(${version})의 데이터입니다.`);
+    throw new Error(t('이 앱보다 새로운 버전({version})의 데이터입니다.', { version }));
   }
   // if (version < 2) { ...v1 → v2 변환... }
   return { ...raw, schemaVersion: SCHEMA_VERSION };
@@ -1127,7 +1287,7 @@ async function saveData(data) {
 const PROFILES_TABLE = 'study_planner_profiles';
 const REQUIRED_BOOKS_TABLE = 'study_planner_required_books';
 
-/** 로그인할 때마다 프로필 갱신 + 관리자/팀 여부 확인 → { isAdmin, inTeam } */
+/** 로그인할 때마다 프로필 갱신 + 관리자/팀 여부 확인 → { isAdmin, inTeam, language } */
 async function loadAccount(user) {
   const sb = getSupabase();
   const meta = user.user_metadata || {};
@@ -1137,7 +1297,21 @@ async function loadAccount(user) {
   ]);
   if (profile.error) throw profile.error;
   if (admin.error) throw admin.error;
-  return { isAdmin: admin.data === true, inTeam: !!(profile.data && profile.data.in_team) };
+  return {
+    isAdmin: admin.data === true,
+    inTeam: !!(profile.data && profile.data.in_team),
+    language: profile.data && isLang(profile.data.language) ? profile.data.language : null,
+  };
+}
+
+/** 계정에 언어 저장 (실패해도 화면은 그대로, 경고만) */
+async function saveAccountLanguage(lang) {
+  try {
+    const { error } = await getSupabase().rpc('study_planner_set_language', { p_language: lang });
+    if (error) console.warn('[account] 언어 저장 실패:', error);
+  } catch (err) {
+    console.warn('[account] 언어 저장 실패:', err);
+  }
 }
 
 function rowToRequiredBook(row) {
@@ -1259,7 +1433,7 @@ function serializeBackup(data) {
 }
 
 function backupFileName(today = todayStr()) {
-  return `학습계획표-백업-${today}.json`;
+  return t('학습계획표-백업-{date}.json', { date: today });
 }
 
 function isValidPlan(plan) {
@@ -1282,57 +1456,58 @@ function isDateNumberMap(obj, valueOk) {
 
 /** 불러온 목표 하나의 형식 검사 (문제가 있으면 오류 메시지, 없으면 null) */
 function checkGoalShape(goal, index) {
-  const label = `${index + 1}번째 목표${goal && goal.title ? `(${goal.title})` : ''}`;
-  if (!goal || typeof goal !== 'object') return `${label}: 형식이 올바르지 않습니다.`;
+  const label = `${t('{n}번째 목표', { n: index + 1 })}${goal && goal.title ? `(${goal.title})` : ''}`;
+  const fail = (message) => `${label}: ${t(message)}`;
+  if (!goal || typeof goal !== 'object') return fail('형식이 올바르지 않습니다.');
   if (typeof goal.id !== 'string' || !/^[\w-]{1,64}$/.test(goal.id) || typeof goal.title !== 'string') {
-    return `${label}: id 또는 이름이 올바르지 않습니다.`;
+    return fail('id 또는 이름이 올바르지 않습니다.');
   }
-  if (!BASES_BY_TYPE[goal.type]) return `${label}: 종류(type)가 올바르지 않습니다.`;
-  if (!isValidDateStr(goal.startDate) || !isValidDateStr(goal.dueDate)) return `${label}: 날짜가 올바르지 않습니다.`;
+  if (!BASES_BY_TYPE[goal.type]) return fail('종류(type)가 올바르지 않습니다.');
+  if (!isValidDateStr(goal.startDate) || !isValidDateStr(goal.dueDate)) return fail('날짜가 올바르지 않습니다.');
   if (goal.book && goal.book.author !== undefined && typeof goal.book.author !== 'string') {
-    return `${label}: 저자 정보가 올바르지 않습니다.`;
+    return fail('저자 정보가 올바르지 않습니다.');
   }
   if (goal.requiredBookId !== undefined && (typeof goal.requiredBookId !== 'string'
     || !/^[\w-]{1,64}$/.test(goal.requiredBookId))) {
-    return `${label}: 필독서 연결 정보가 올바르지 않습니다.`;
+    return fail('필독서 연결 정보가 올바르지 않습니다.');
   }
   if (goal.extraDates !== undefined && (!Array.isArray(goal.extraDates)
     || !goal.extraDates.every((x) => x && isValidDateStr(x.date) && EXTRA_WEIGHTS.includes(x.weight)))) {
-    return `${label}: 여유 있는 날 정보가 올바르지 않습니다.`;
+    return fail('여유 있는 날 정보가 올바르지 않습니다.');
   }
   if (goal.restDates !== undefined && (!Array.isArray(goal.restDates)
     || !goal.restDates.every((x) => x && isValidDateStr(x.date) && typeof x.label === 'string'))) {
-    return `${label}: 쉬는 날 정보가 올바르지 않습니다.`;
+    return fail('쉬는 날 정보가 올바르지 않습니다.');
   }
   if (goal.restWeekdays !== undefined && (!Array.isArray(goal.restWeekdays)
     || !goal.restWeekdays.every((d) => Number.isInteger(d) && d >= 0 && d <= 6))) {
-    return `${label}: 쉬는 요일 정보가 올바르지 않습니다.`;
+    return fail('쉬는 요일 정보가 올바르지 않습니다.');
   }
   if (goal.type === 'book') {
     const b = goal.book;
     const chaptersOk = b && Array.isArray(b.chapters) && b.chapters.length > 0 && Number.isInteger(b.lastPage)
       && b.chapters.every((c, i) => c && typeof c.name === 'string' && Number.isInteger(c.startPage) && c.startPage >= 1
         && c.startPage <= b.lastPage && (i === 0 || c.startPage > b.chapters[i - 1].startPage));
-    if (!chaptersOk) return `${label}: 챕터 정보가 올바르지 않습니다.`;
+    if (!chaptersOk) return fail('챕터 정보가 올바르지 않습니다.');
   } else if (goal.type === 'bible') {
     const books = goal.bible && goal.bible.books;
     if (!Array.isArray(books) || !books.length
       || !books.every((b) => b && bibleIndexOf(b.name) >= 0 && Number.isInteger(b.chapters) && b.chapters > 0)) {
-      return `${label}: 통독 범위가 올바르지 않습니다.`;
+      return fail('통독 범위가 올바르지 않습니다.');
     }
   } else if (!goal.lecture || !Array.isArray(goal.lecture.titles) || goal.lecture.titles.length === 0
     || !goal.lecture.titles.every((t) => typeof t === 'string')) {
-    return `${label}: 강의 목록이 올바르지 않습니다.`;
+    return fail('강의 목록이 올바르지 않습니다.');
   }
   const pr = goal.progress;
   if (!pr || !Number.isInteger(pr.current) || !Array.isArray(pr.history)
     || !pr.history.every((h) => h && isValidDateStr(h.date) && Number.isFinite(h.value))) {
-    return `${label}: 진도 정보가 올바르지 않습니다.`;
+    return fail('진도 정보가 올바르지 않습니다.');
   }
   for (const basis of BASES_BY_TYPE[goal.type]) {
     const p = goal.plans && goal.plans[basis];
     if (!p || !isValidPlan(p.original) || (p.current && !isValidPlan(p.current))) {
-      return `${label}: 계획 정보가 올바르지 않습니다.`;
+      return fail('계획 정보가 올바르지 않습니다.');
     }
   }
   return null;
@@ -1344,13 +1519,13 @@ function parseBackup(text) {
   try {
     raw = JSON.parse(text);
   } catch {
-    throw new Error('JSON 파일을 읽을 수 없습니다. 파일이 손상되었거나 JSON 형식이 아닙니다.');
+    throw new Error(t('JSON 파일을 읽을 수 없습니다. 파일이 손상되었거나 JSON 형식이 아닙니다.'));
   }
   const data = migrateData(raw);
   const problems = data.goals.map(checkGoalShape).filter(Boolean);
   if (problems.length) throw new Error(problems.slice(0, 5).join('\n'));
   const ids = new Set(data.goals.map((g) => g.id));
-  if (ids.size !== data.goals.length) throw new Error('같은 id를 가진 목표가 여러 개 있습니다.');
+  if (ids.size !== data.goals.length) throw new Error(t('같은 id를 가진 목표가 여러 개 있습니다.'));
   return { schemaVersion: SCHEMA_VERSION, goals: data.goals };
 }
 
@@ -1641,31 +1816,33 @@ function renderTopbar() {
     return;
   }
   const status = {
-    saving: '<span class="save-state is-saving">저장 중…</span>',
-    saved: '<span class="save-state is-saved">저장됨</span>',
-    error: '<span class="save-state is-error">저장 실패 <button type="button" class="link-btn" data-action="retry-save">다시 시도</button></span>',
+    saving: `<span class="save-state is-saving">${t('저장 중…')}</span>`,
+    saved: `<span class="save-state is-saved">${t('저장됨')}</span>`,
+    error: `<span class="save-state is-error">${t('저장 실패')} <button type="button" class="link-btn" data-action="retry-save">${t('다시 시도')}</button></span>`,
   }[saveState];
   const name = currentUser.user_metadata && (currentUser.user_metadata.full_name || currentUser.user_metadata.name);
   bar.hidden = false;
   bar.innerHTML = `
     <div class="topbar-inner">
       <nav class="topbar-nav">
-        <a class="brand" href="#/">학습 진도 계획표</a>
-        ${account.isAdmin ? '<a class="nav-link" href="#/admin">관리자</a>' : ''}
+        <a class="brand" href="#/">${t('학습 진도 계획표')}</a>
+        ${account.isAdmin ? `<a class="nav-link" href="#/admin">${t('관리자')}</a>` : ''}
       </nav>
       <div class="topbar-right">
+        ${renderLangToggle()}
         ${status}
         <span class="user">${escapeHtml(name || currentUser.email || '')}</span>
-        <button type="button" class="btn btn-small" data-action="sign-out">로그아웃</button>
+        <button type="button" class="btn btn-small" data-action="sign-out">${t('로그아웃')}</button>
       </div>
     </div>`;
 }
 
 /* ----- 로그인 · 시작 화면 ----- */
 
-function renderMessageScreen(root, title, html) {
+function renderMessageScreen(root, title, html, withLang = false) {
   root.innerHTML = `
     <div class="login-screen">
+      ${withLang ? `<div class="login-lang">${renderLangToggle()}</div>` : ''}
       <div class="login-card">
         <h1>${title}</h1>
         ${html}
@@ -1675,21 +1852,21 @@ function renderMessageScreen(root, title, html) {
 
 function renderLogin(root, errorMessage = '') {
   const isFile = location.protocol === 'file:';
-  renderMessageScreen(root, '학습 진도 계획표', `
-    <p class="muted">책·강의의 마감일까지 매일 할 분량을 계획하고 진도를 기록합니다.<br>
-      구글 계정으로 로그인하면 어느 기기에서든 같은 계획을 볼 수 있습니다.</p>
-    ${isFile ? `<p class="errors">파일을 직접 연 상태에서는 로그인할 수 없습니다. 배포된 인터넷 주소(https://…)로 열어 주세요.</p>` : ''}
+  renderMessageScreen(root, t('학습 진도 계획표'), `
+    <p class="muted">${t('책·강의의 마감일까지 매일 할 분량을 계획하고 진도를 기록합니다.')}<br>
+      ${t('구글 계정으로 로그인하면 어느 기기에서든 같은 계획을 볼 수 있습니다.')}</p>
+    ${isFile ? `<p class="errors">${t('파일을 직접 연 상태에서는 로그인할 수 없습니다. 배포된 인터넷 주소(https://…)로 열어 주세요.')}</p>` : ''}
     ${errorMessage ? `<p class="errors">${escapeHtml(errorMessage)}</p>` : ''}
     <button type="button" class="btn btn-google" data-action="google-login" ${isFile ? 'disabled' : ''}>
       <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 38.2 44 33 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
-      Google 계정으로 로그인
-    </button>`);
+      ${t('Google 계정으로 로그인')}
+    </button>`, true);
   root.querySelector('[data-action="google-login"]').addEventListener('click', async (e) => {
     e.currentTarget.disabled = true;
     try {
       await signInWithGoogle(); // 구글 로그인 페이지로 이동
     } catch (err) {
-      renderLogin(root, `로그인을 시작하지 못했습니다: ${err.message}`);
+      renderLogin(root, t('로그인을 시작하지 못했습니다: {message}', { message: err.message }));
     }
   });
 }
@@ -1699,14 +1876,14 @@ async function startApp(user) {
   const root = document.getElementById('app');
   currentUser = user;
   renderTopbar();
-  renderMessageScreen(root, '불러오는 중…', '<p class="muted">계정에 저장된 목표를 불러오고 있습니다.</p>');
+  renderMessageScreen(root, t('불러오는 중…'), `<p class="muted">${t('계정에 저장된 목표를 불러오고 있습니다.')}</p>`);
   try {
     appData = await loadData();
   } catch (err) {
     console.error('[storage] 불러오기 실패:', err);
-    renderMessageScreen(root, '불러오지 못했습니다', `
+    renderMessageScreen(root, t('불러오지 못했습니다'), `
       <p class="errors">${escapeHtml(err.message || String(err))}</p>
-      <button type="button" class="btn btn-primary" data-action="reload">다시 시도</button>`);
+      <button type="button" class="btn btn-primary" data-action="reload">${t('다시 시도')}</button>`);
     root.querySelector('[data-action="reload"]').addEventListener('click', () => startApp(user));
     return;
   }
@@ -1714,6 +1891,7 @@ async function startApp(user) {
   // 관리자·팀 정보와 필독서 — 실패해도 내 계획은 쓸 수 있게 경고만 남긴다
   try {
     account = await loadAccount(user);
+    syncAccountLanguage(account.language);
     requiredBooks = account.inTeam || account.isAdmin ? await loadRequiredBooks() : [];
   } catch (err) {
     console.warn('[account] 팀·필독서 정보를 불러오지 못했습니다:', err);
@@ -1724,8 +1902,8 @@ async function startApp(user) {
 
   const legacy = readLegacyGoals().filter((g) => !getGoal(g.id));
   if (legacy.length) {
-    const move = confirm(`이 브라우저에 로그인 전에 만든 목표 ${legacy.length}개가 있습니다.\n계정으로 옮길까요?\n\n`
-      + '(취소를 누르면 옮기지 않고, 다시 묻지 않습니다. 브라우저의 데이터는 지워지지 않습니다.)');
+    const move = confirm(t('이 브라우저에 로그인 전에 만든 목표 {n}개가 있습니다.\n계정으로 옮길까요?\n\n'
+      + '(취소를 누르면 옮기지 않고, 다시 묻지 않습니다. 브라우저의 데이터는 지워지지 않습니다.)', { n: legacy.length }));
     if (move) {
       appData.goals.push(...legacy);
       await commit();
@@ -1735,6 +1913,38 @@ async function startApp(user) {
     }
   }
   render();
+}
+
+/** 로그인 후 계정의 언어를 따른다. 계정에 없으면 지금 언어를 계정에 저장 */
+function syncAccountLanguage(lang) {
+  if (isLang(lang)) {
+    storeLang(lang);
+    if (lang !== currentLang) applyLanguage(lang);
+  } else {
+    saveAccountLanguage(currentLang);
+  }
+}
+
+/** 전환 버튼: 언어를 바꾸고 지금 화면을 다시 그린다 */
+function changeLanguage(lang) {
+  if (!isLang(lang) || lang === currentLang) return;
+  applyLanguage(lang);
+  storeLang(lang);
+  if (currentUser) saveAccountLanguage(lang);
+  renderTopbar();
+  const root = document.getElementById('app');
+  if (!currentUser) {
+    if (root.querySelector('[data-action="google-login"]')) renderLogin(root);
+    return;
+  }
+  if (!appData) return; // 불러오는 중
+  // 입력 중이던 목표 폼 값은 유지
+  if (parseRoute().view === 'form' && document.getElementById('goal-form')) langFormDraft = collectFormInput();
+  const exportOpen = exportState.goal && document.getElementById('export-dialog') && !document.getElementById('export-dialog').hidden;
+  const y = window.scrollY;
+  render();
+  window.scrollTo(0, y);
+  if (exportOpen && parseRoute().view === 'detail') openExportDialog(exportState.goal, exportState.options);
 }
 
 function parseRoute() {
@@ -1803,30 +2013,30 @@ function renderDashboard(root) {
   root.innerHTML = `
     <header class="page-header">
       <div>
-        <h1>학습 진도 계획표</h1>
-        <p class="muted">${escapeHtml(today)} (${weekdayKo(today)})</p>
+        <h1>${t('학습 진도 계획표')}</h1>
+        <p class="muted">${escapeHtml(today)} (${weekdayLabel(today)})</p>
       </div>
       <div class="header-actions">
         <button type="button" class="btn" data-action="export" ${appData.goals.length ? '' : 'disabled'}
-          title="모든 목표와 진도 기록을 JSON 파일로 저장합니다">JSON 내보내기</button>
-        <button type="button" class="btn" data-action="import" title="백업한 JSON 파일로 전체 데이터를 바꿉니다">JSON 불러오기</button>
+          title="${t('모든 목표와 진도 기록을 JSON 파일로 저장합니다')}">${t('JSON 내보내기')}</button>
+        <button type="button" class="btn" data-action="import" title="${t('백업한 JSON 파일로 전체 데이터를 바꿉니다')}">${t('JSON 불러오기')}</button>
         <input type="file" id="import-file" accept=".json,application/json" hidden>
-        <a class="btn btn-primary" href="#/new">+ 새 목표 추가</a>
+        <a class="btn btn-primary" href="#/new">${t('+ 새 목표 추가')}</a>
       </div>
     </header>
 
     ${showRequired ? renderRequiredSection(today) : ''}
 
     <section>
-      <h2 class="section-title">진행 중 <span class="count">${active.length}</span></h2>
+      <h2 class="section-title">${t('진행 중')} <span class="count">${active.length}</span></h2>
       ${active.length
         ? `<div class="card-grid">${active.map((x) => renderGoalCard(x.goal, x.s)).join('')}</div>`
-        : `<div class="empty">진행 중인 목표가 없습니다. <a href="#/new">새 목표를 추가</a>해 보세요.</div>`}
+        : `<div class="empty">${t('진행 중인 목표가 없습니다. <a href="#/new">새 목표를 추가</a>해 보세요.')}</div>`}
     </section>
 
     ${finished.length ? `
     <section class="finished-section">
-      <h2 class="section-title">완료 / 종료 <span class="count">${finished.length}</span></h2>
+      <h2 class="section-title">${t('완료 / 종료')} <span class="count">${finished.length}</span></h2>
       <div class="card-grid">${finished.map((x) => renderGoalCard(x.goal, x.s)).join('')}</div>
     </section>` : ''}
   `;
@@ -1858,18 +2068,18 @@ function exportBackup() {
 
 function importBackup(file) {
   const reader = new FileReader();
-  reader.onerror = () => alert('파일을 읽지 못했습니다.');
+  reader.onerror = () => alert(t('파일을 읽지 못했습니다.'));
   reader.onload = () => {
     let data;
     try {
       data = parseBackup(String(reader.result));
     } catch (err) {
-      alert(`불러올 수 없습니다.\n\n${err.message}`);
+      alert(t('불러올 수 없습니다.\n\n{message}', { message: err.message }));
       return;
     }
-    const message = `'${file.name}'에서 목표 ${data.goals.length}개를 불러옵니다.\n\n`
-      + `지금 있는 목표 ${appData.goals.length}개는 모두 지워지고 파일 내용으로 바뀝니다.\n`
-      + '계속할까요? (필요하면 먼저 "JSON 내보내기"로 백업하세요)';
+    const message = t("'{file}'에서 목표 {n}개를 불러옵니다.\n\n"
+      + '지금 있는 목표 {current}개는 모두 지워지고 파일 내용으로 바뀝니다.\n'
+      + '계속할까요? (필요하면 먼저 "JSON 내보내기"로 백업하세요)', { file: file.name, n: data.goals.length, current: appData.goals.length });
     if (!confirm(message)) return;
     appData = data;
     commit();
@@ -1886,23 +2096,23 @@ function renderRequiredSection(today) {
     return `
       <div class="goal-card required-empty">
         <div class="card-top">
-          <span class="type-tag type-required">필독서</span>
-          <span class="badge badge-waiting">계획 없음</span>
+          <span class="type-tag type-required">${t('필독서')}</span>
+          <span class="badge badge-waiting">${t('계획 없음')}</span>
         </div>
         <div class="card-book">
           ${renderCoverThumb(book.coverUrl)}
           <div>
             <h3 class="card-title">${escapeHtml(book.title)}</h3>
             ${book.author ? `<p class="card-author">${escapeHtml(book.author)}</p>` : ''}
-            <p class="card-meta">${pages}페이지 · ${book.chapters.length}개 챕터</p>
+            <p class="card-meta">${t('{pages}페이지 · {n}개 챕터', { pages, n: book.chapters.length })}</p>
           </div>
         </div>
-        <a class="btn btn-primary" href="#/new/book/${escapeHtml(book.id)}">계획 세우기</a>
+        <a class="btn btn-primary" href="#/new/book/${escapeHtml(book.id)}">${t('계획 세우기')}</a>
       </div>`;
   }).join('');
   return `
     <section class="required-section">
-      <h2 class="section-title">사역자 필독서 <span class="count">${requiredBooks.length}</span></h2>
+      <h2 class="section-title">${t('사역자 필독서')} <span class="count">${requiredBooks.length}</span></h2>
       <div class="card-grid">${cards}</div>
     </section>`;
 }
@@ -1915,14 +2125,13 @@ function renderCoverThumb(url, size = 'md') {
 
 /** 목표 카드. requiredBook이 있으면 필독서 표시와 변경 알림 */
 function renderGoalCard(goal, s, requiredBook = null) {
-  const typeLabel = TYPE_LABELS[goal.type];
   const changed = requiredBook && isRequiredBookChanged(goal, requiredBook);
   return `
     <a class="goal-card ${s.isActive ? '' : 'is-finished'}" href="#/goal/${escapeHtml(goal.id)}">
       <div class="card-top">
         <span class="card-tags">
-          ${requiredBook ? '<span class="type-tag type-required">필독서</span>' : `<span class="type-tag type-${goal.type}">${typeLabel}</span>`}
-          ${changed ? '<span class="badge badge-ended">내용 변경됨</span>' : ''}
+          ${requiredBook ? `<span class="type-tag type-required">${t('필독서')}</span>` : `<span class="type-tag type-${goal.type}">${typeLabel(goal.type)}</span>`}
+          ${changed ? `<span class="badge badge-ended">${t('내용 변경됨')}</span>` : ''}
         </span>
         ${renderStatusBadge(s)}
       </div>
@@ -1934,15 +2143,15 @@ function renderGoalCard(goal, s, requiredBook = null) {
         </div>
       </div>
       <div class="card-meta">
-        <span>마감 ${escapeHtml(goal.dueDate)}</span>
+        <span>${t('마감 {date}', { date: escapeHtml(goal.dueDate) })}</span>
         <span class="dday ${s.isActive && s.dday <= 3 ? 'is-urgent' : ''}">${formatDday(s.dday)}</span>
       </div>
       <div class="progress">
         <div class="progress-bar"><div class="progress-fill" style="width:${s.percent}%"></div></div>
-        <span class="progress-text">${s.percent}% · ${s.done}/${s.total}${getUnitLabel(s.basis)}</span>
+        <span class="progress-text">${s.percent}% · ${formatFraction(s.done, s.total, s.basis)}</span>
       </div>
       <div class="card-today">
-        <span class="label">오늘 할 분량</span>
+        <span class="label">${t('오늘 할 분량')}</span>
         ${renderTodayAmount(goal, s)}
       </div>
     </a>
@@ -1950,25 +2159,23 @@ function renderGoalCard(goal, s, requiredBook = null) {
 }
 
 function renderStatusBadge(s) {
-  const unit = getUnitLabel(s.basis);
-  if (s.isComplete) return '<span class="badge badge-done">완료</span>';
-  if (s.isOverdue) return '<span class="badge badge-ended">종료 · 미완료</span>';
-  if (s.notStarted) return '<span class="badge badge-waiting">시작 전</span>';
-  if (s.diff < 0) return `<span class="badge badge-behind">${-s.diff}${unit} 밀림</span>`;
-  if (s.diff > 0) return `<span class="badge badge-ahead">${s.diff}${unit} 앞섬</span>`;
-  return '<span class="badge badge-ontrack">계획대로</span>';
+  if (s.isComplete) return `<span class="badge badge-done">${t('완료')}</span>`;
+  if (s.isOverdue) return `<span class="badge badge-ended">${t('종료 · 미완료')}</span>`;
+  if (s.notStarted) return `<span class="badge badge-waiting">${t('시작 전')}</span>`;
+  if (s.diff < 0) return `<span class="badge badge-behind">${t('{amount} 밀림', { amount: formatAmount(-s.diff, s.basis) })}</span>`;
+  if (s.diff > 0) return `<span class="badge badge-ahead">${t('{amount} 앞섬', { amount: formatAmount(s.diff, s.basis) })}</span>`;
+  return `<span class="badge badge-ontrack">${t('계획대로')}</span>`;
 }
 
 function renderTodayAmount(goal, s) {
-  if (s.isComplete) return '<span class="today-main">모두 완료했습니다</span>';
-  if (s.isOverdue) return '<span class="today-main">마감일이 지났습니다</span>';
-  if (s.notStarted) return `<span class="today-main">${formatShortDate(goal.startDate)} 시작</span>`;
+  if (s.isComplete) return `<span class="today-main">${t('모두 완료했습니다')}</span>`;
+  if (s.isOverdue) return `<span class="today-main">${t('마감일이 지났습니다')}</span>`;
+  if (s.notStarted) return `<span class="today-main">${t('{date} 시작', { date: formatShortDate(goal.startDate) })}</span>`;
   const row = s.todayRow;
   if (!row) return '<span class="today-main">-</span>';
-  if (row.isRestDay) return `<span class="today-main">오늘은 ${escapeHtml(restText(goal, row.date))}</span>`;
-  if (row.amount === 0) return '<span class="today-main">휴식(분량 없음)</span>';
+  if (row.isRestDay) return `<span class="today-main">${t('오늘은 {rest}', { rest: escapeHtml(restText(goal, row.date)) })}</span>`;
+  if (row.amount === 0) return `<span class="today-main">${t('휴식(분량 없음)')}</span>`;
 
-  const unit = getUnitLabel(s.basis);
   const doneToday = s.done >= row.cumulative;
   let sub = '';
   if (s.basis === 'page') {
@@ -1977,8 +2184,8 @@ function renderTodayAmount(goal, s) {
   }
   return `
     <span class="today-main">${escapeHtml(describeUnitsRange(goal, s.basis, row.prevCumulative, row.cumulative))}
-      <span class="muted">(${row.amount}${unit})</span>
-      ${doneToday ? '<span class="today-check">✓ 완료</span>' : ''}
+      <span class="muted">(${formatAmount(row.amount, s.basis)})</span>
+      ${doneToday ? `<span class="today-check">✓ ${t('완료')}</span>` : ''}
     </span>
     ${sub ? `<span class="today-sub">${escapeHtml(sub)}</span>` : ''}
   `;
@@ -1988,8 +2195,13 @@ function renderTodayAmount(goal, s) {
  * 9. 화면 — 목표 추가 / 수정
  * ========================================================================= */
 
+/** 언어를 바꿀 때 입력 중이던 목표 폼 값 (다시 그린 폼에 한 번 채운다) */
+let langFormDraft = null;
+
 function renderGoalForm(root, goal, bookId = null) {
   const isEdit = !!goal;
+  const langDraft = langFormDraft;
+  langFormDraft = null;
   // 사역자 필독서로 계획 세우기: 책 정보는 필독서 것을 쓰고 잠근다
   const requiredBook = bookId ? requiredBooks.find((b) => b.id === bookId)
     : (goal && goal.requiredBookId ? requiredBooks.find((b) => b.id === goal.requiredBookId) : null);
@@ -1999,10 +2211,10 @@ function renderGoalForm(root, goal, bookId = null) {
     if (existing) { navigate(`#/goal/${existing.id}`); return; }
   }
   const locked = !!requiredBook;
-  const type = goal ? goal.type : 'book';
+  const type = goal ? goal.type : (langDraft && langDraft.type) || 'book';
   const started = isEdit && hasGoalStarted(goal);
   // 미리보기에서 "수정으로 돌아가기"를 누르면 입력하던 값(draft)으로 다시 채운다
-  const draft = isEdit && detailState.draft && detailState.goalId === goal.id ? detailState.draft : null;
+  const draft = langDraft || (isEdit && detailState.draft && detailState.goalId === goal.id ? detailState.draft : null);
   detailState.draft = null;
   const v = draft || (goal ? goalToInput(goal) : {
     title: '', startDate: todayStr(), dueDate: '', restWeekdays: [], restDates: [], extraDates: [],
@@ -2015,23 +2227,21 @@ function renderGoalForm(root, goal, bookId = null) {
   root.innerHTML = `
     <header class="page-header">
       <div>
-        <a class="back-link" href="${isEdit ? `#/goal/${escapeHtml(goal.id)}` : '#/'}">← ${isEdit ? '목표 상세' : '대시보드'}</a>
-        <h1>${isEdit ? '목표 수정' : bookId ? '필독서 계획 세우기' : '새 목표 추가'}</h1>
+        <a class="back-link" href="${isEdit ? `#/goal/${escapeHtml(goal.id)}` : '#/'}">← ${isEdit ? t('목표 상세') : t('대시보드')}</a>
+        <h1>${isEdit ? t('목표 수정') : bookId ? t('필독서 계획 세우기') : t('새 목표 추가')}</h1>
       </div>
     </header>
 
     <form id="goal-form" class="panel ${locked ? 'is-locked' : ''}" novalidate>
-      ${locked ? `<p class="notice notice-info">사역자 필독서입니다. 책 제목과 챕터는 관리자가 정하며,
-        여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.</p>` : ''}
-      ${started ? `<p class="notice">진행 중인 목표입니다. 날짜·쉬는 요일·챕터·강의 목록을 바꾸면 원래 계획은 보관하고,
-        오늘부터 마감일까지 남은 분량을 다시 나눕니다. 저장하면 새 계획을 먼저 미리보기로 보여드립니다.</p>` : ''}
+      ${locked ? `<p class="notice notice-info">${t('사역자 필독서입니다. 책 제목과 챕터는 관리자가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.')}</p>` : ''}
+      ${started ? `<p class="notice">${t('진행 중인 목표입니다. 날짜·쉬는 요일·챕터·강의 목록을 바꾸면 원래 계획은 보관하고, 오늘부터 마감일까지 남은 분량을 다시 나눕니다. 저장하면 새 계획을 먼저 미리보기로 보여드립니다.')}</p>` : ''}
 
       <div class="field">
-        <span class="field-label">종류</span>
+        <span class="field-label">${t('종류')}</span>
         <div class="segmented">
-          <label><input type="radio" name="type" value="book" ${type === 'book' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> 책</label>
-          <label><input type="radio" name="type" value="lecture" ${type === 'lecture' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> 강의</label>
-          <label><input type="radio" name="type" value="bible" ${type === 'bible' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> 성경 통독</label>
+          <label><input type="radio" name="type" value="book" ${type === 'book' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> ${typeLabel('book')}</label>
+          <label><input type="radio" name="type" value="lecture" ${type === 'lecture' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> ${typeLabel('lecture')}</label>
+          <label><input type="radio" name="type" value="bible" ${type === 'bible' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> ${typeLabel('bible')}</label>
         </div>
       </div>
 
@@ -2042,62 +2252,62 @@ function renderGoalForm(root, goal, bookId = null) {
 
       <div class="field-row">
         <div class="field">
-          <label class="field-label" for="f-start">시작일</label>
+          <label class="field-label" for="f-start">${t('시작일')}</label>
           <input id="f-start" type="date" class="input" value="${escapeHtml(v.startDate)}">
         </div>
         <div class="field">
-          <label class="field-label" for="f-due">마감일</label>
+          <label class="field-label" for="f-due">${t('마감일')}</label>
           <input id="f-due" type="date" class="input" value="${escapeHtml(v.dueDate)}">
         </div>
         <div class="field">
-          <span class="field-label">기간</span>
+          <span class="field-label">${t('기간')}</span>
           <span id="f-days" class="field-value">-</span>
         </div>
       </div>
       <div class="quick-due">
-        <span class="field-hint">마감일 빠르게 정하기 (시작일부터)</span>
+        <span class="field-hint">${t('마감일 빠르게 정하기 (시작일부터)')}</span>
         ${[1, 2, 4, 6, 8].map((w) => `<button type="button" class="btn btn-small" data-weeks="${w}"
-          title="시작일부터 ${w}주 뒤를 마감일로 정합니다">${w}주 동안</button>`).join('')}
+          title="${t('시작일부터 {w}주 뒤를 마감일로 정합니다', { w })}">${t('{w}주 동안', { w })}</button>`).join('')}
         <span id="f-daily" class="daily-estimate"></span>
       </div>
 
       <div class="field">
-        <span class="field-label">쉬는 요일 <span class="muted">(선택한 요일에는 분량을 배정하지 않습니다)</span></span>
+        <span class="field-label">${t('쉬는 요일')} <span class="muted">${t('(선택한 요일에는 분량을 배정하지 않습니다)')}</span></span>
         <div class="weekday-picker">
           ${WEEKDAY_ORDER.map((d) => `
             <label class="weekday ${d === 0 ? 'is-sun' : d === 6 ? 'is-sat' : ''}">
               <input type="checkbox" name="rest-weekday" value="${d}"
                 ${normalizeWeekdays(v.restWeekdays).includes(d) ? 'checked' : ''}>
-              <span>${WEEKDAYS_KO[d]}</span>
+              <span>${weekdayName(d)}</span>
             </label>`).join('')}
         </div>
       </div>
 
       <div class="field">
-        <span class="field-label">쉬는 날 <span class="muted">(행사·일정 등으로 빠지는 특정 날짜)</span></span>
+        <span class="field-label">${t('쉬는 날||label')} <span class="muted">${t('(행사·일정 등으로 빠지는 특정 날짜)')}</span></span>
         <div class="rest-date-add">
-          <input id="f-rest-date" type="date" class="input" aria-label="쉬는 날짜">
-          <input id="f-rest-label" type="text" class="input rest-label-input" placeholder="메모 (예: 수련회)" maxlength="30">
-          <button type="button" class="btn btn-small" id="add-rest-date">+ 추가</button>
+          <input id="f-rest-date" type="date" class="input" aria-label="${t('쉬는 날짜')}">
+          <input id="f-rest-label" type="text" class="input rest-label-input" placeholder="${t('메모 (예: 수련회)')}" maxlength="30">
+          <button type="button" class="btn btn-small" id="add-rest-date">${t('+ 추가')}</button>
         </div>
         <div id="rest-date-list" class="rest-date-list"></div>
       </div>
 
       <div class="field">
-        <span class="field-label">여유 있는 날 <span class="muted">(그날은 평소보다 많이 배정)</span></span>
+        <span class="field-label">${t('여유 있는 날')} <span class="muted">${t('(그날은 평소보다 많이 배정)')}</span></span>
         <div class="rest-date-add">
-          <input id="f-extra-date" type="date" class="input" aria-label="여유 있는 날짜">
-          <select id="f-extra-weight" class="input extra-weight-select" aria-label="분량 배수">
-            ${EXTRA_WEIGHTS.map((w) => `<option value="${w}" ${w === 2 ? 'selected' : ''}>평소의 ${w}배</option>`).join('')}
+          <input id="f-extra-date" type="date" class="input" aria-label="${t('여유 있는 날짜')}">
+          <select id="f-extra-weight" class="input extra-weight-select" aria-label="${t('분량 배수')}">
+            ${EXTRA_WEIGHTS.map((w) => `<option value="${w}" ${w === 2 ? 'selected' : ''}>${t('평소의 {w}배', { w })}</option>`).join('')}
           </select>
-          <button type="button" class="btn btn-small" id="add-extra-date">+ 추가</button>
+          <button type="button" class="btn btn-small" id="add-extra-date">${t('+ 추가')}</button>
         </div>
         <div id="extra-date-list" class="rest-date-list"></div>
       </div>
 
       <div data-section="book">
         <div class="field">
-          <label class="field-label" for="f-author">저자 <span class="muted">(선택)</span></label>
+          <label class="field-label" for="f-author">${t('저자')} <span class="muted">${t('(선택)')}</span></label>
           <input id="f-author" type="text" class="input input-wide" value="${escapeHtml(v.author || '')}" ${locked ? 'readonly' : ''}>
         </div>
         ${renderChapterEditorHtml(v.lastPage)}
@@ -2105,7 +2315,7 @@ function renderGoalForm(root, goal, bookId = null) {
 
       <div data-section="lecture">
         <div class="field">
-          <label class="field-label" for="f-lectures">강의 제목 목록 <span class="muted">(한 줄에 하나, 빈 줄은 무시)</span></label>
+          <label class="field-label" for="f-lectures">${t('강의 제목 목록')} <span class="muted">${t('(한 줄에 하나, 빈 줄은 무시)')}</span></label>
           <textarea id="f-lectures" class="input textarea" rows="12">${escapeHtml(v.titles.join('\n'))}</textarea>
           <span id="f-lecture-count" class="field-hint"></span>
         </div>
@@ -2113,19 +2323,19 @@ function renderGoalForm(root, goal, bookId = null) {
 
       <div data-section="bible">
         <div class="field">
-          <span class="field-label">통독 범위</span>
+          <span class="field-label">${t('통독 범위')}</span>
           <div class="bible-presets">
-            ${BIBLE_PRESETS.map(([name, a, b]) => `<button type="button" class="btn btn-small" data-bible-preset="${a},${b}">${name}</button>`).join('')}
+            ${BIBLE_PRESETS.map(([name, a, b]) => `<button type="button" class="btn btn-small" data-bible-preset="${a},${b}">${t(name)}</button>`).join('')}
           </div>
           <div class="bible-range">
             <select id="f-bible-start" class="input bible-select">
-              ${BIBLE_BOOKS.map((b, i) => `<option value="${i}" ${i === Number(v.bibleStart) ? 'selected' : ''}>${b.name}</option>`).join('')}
+              ${BIBLE_BOOKS.map((b, i) => `<option value="${i}" ${i === Number(v.bibleStart) ? 'selected' : ''}>${bibleBookName(b.name)}</option>`).join('')}
             </select>
-            <span>부터</span>
+            <span>${t('부터')}</span>
             <select id="f-bible-end" class="input bible-select">
-              ${BIBLE_BOOKS.map((b, i) => `<option value="${i}" ${i === Number(v.bibleEnd) ? 'selected' : ''}>${b.name}</option>`).join('')}
+              ${BIBLE_BOOKS.map((b, i) => `<option value="${i}" ${i === Number(v.bibleEnd) ? 'selected' : ''}>${bibleBookName(b.name)}</option>`).join('')}
             </select>
-            <span>까지</span>
+            ${t('까지') ? `<span>${t('까지')}</span>` : ''}
           </div>
           <span id="f-bible-summary" class="field-hint"></span>
         </div>
@@ -2134,8 +2344,8 @@ function renderGoalForm(root, goal, bookId = null) {
       <div id="form-errors" class="errors" hidden></div>
 
       <div class="form-actions">
-        <a class="btn" href="${isEdit ? `#/goal/${escapeHtml(goal.id)}` : '#/'}">취소</a>
-        <button type="submit" class="btn btn-primary">${isEdit ? '저장' : '목표 추가'}</button>
+        <a class="btn" href="${isEdit ? `#/goal/${escapeHtml(goal.id)}` : '#/'}">${t('취소')}</a>
+        <button type="submit" class="btn btn-primary">${isEdit ? t('저장') : t('목표 추가')}</button>
       </div>
     </form>
   `;
@@ -2145,6 +2355,8 @@ function renderGoalForm(root, goal, bookId = null) {
   (v.extraDates || []).forEach((x) => addExtraDateChip(x));
 
   const form = root.querySelector('#goal-form');
+  // 언어를 바꿔 다시 그렸으면, 자동으로 붙인 통독 이름도 새 언어로
+  if (langDraft && type === 'bible') syncBibleAutoTitle(form, true);
   form.addEventListener('change', (e) => {
     if (e.target.name === 'type' || e.target.classList.contains('bible-select')) {
       syncBibleAutoTitle(form);
@@ -2211,23 +2423,23 @@ function renderGoalForm(root, goal, bookId = null) {
 function renderChapterEditorHtml(lastPage) {
   return `
     <div class="field">
-      <span class="field-label">챕터 목록</span>
+      <span class="field-label">${t('챕터 목록')}</span>
       <table class="chapter-table">
         <thead>
-          <tr><th class="col-drag"></th><th class="col-no">#</th><th>챕터 이름</th><th class="col-page">시작 페이지</th><th class="col-page">끝 페이지</th><th class="col-del"></th></tr>
+          <tr><th class="col-drag"></th><th class="col-no">#</th><th>${t('챕터 이름')}</th><th class="col-page">${t('시작 페이지')}</th><th class="col-page">${t('끝 페이지')}</th><th class="col-del"></th></tr>
         </thead>
         <tbody id="chapter-rows"></tbody>
       </table>
-      <button type="button" class="btn btn-small" id="add-chapter">+ 챕터 추가</button>
+      <button type="button" class="btn btn-small" id="add-chapter">${t('+ 챕터 추가')}</button>
     </div>
     <div class="field-row">
       <div class="field">
-        <label class="field-label" for="f-last-page">마지막 페이지</label>
+        <label class="field-label" for="f-last-page">${t('마지막 페이지')}</label>
         <input id="f-last-page" type="number" min="1" class="input input-num"
           value="${Number.isFinite(Number(lastPage)) && lastPage !== '' && lastPage !== null ? Number(lastPage) : ''}">
       </div>
       <div class="field">
-        <span class="field-label">합계</span>
+        <span class="field-label">${t('합계')}</span>
         <span id="f-book-summary" class="field-value">-</span>
       </div>
     </div>`;
@@ -2333,7 +2545,7 @@ function refreshChapterEditor() {
   const first = chapters[0] && chapters[0].startPage;
   document.getElementById('f-book-summary').textContent =
     Number.isInteger(first) && Number.isInteger(lastPage) && lastPage >= first
-      ? `${lastPage - first + 1}페이지 · ${chapters.length}개 챕터`
+      ? t('{pages}페이지 · {n}개 챕터', { pages: lastPage - first + 1, n: chapters.length })
       : '-';
 }
 
@@ -2341,14 +2553,14 @@ function refreshChapterEditor() {
 function addChapterRow(ch, before = null) {
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td class="col-drag"><span class="drag-handle" title="끌어서 순서 바꾸기" aria-hidden="true">⠿</span></td>
+    <td class="col-drag"><span class="drag-handle" title="${t('끌어서 순서 바꾸기')}" aria-hidden="true">⠿</span></td>
     <td class="col-no ch-no"></td>
-    <td><input type="text" class="input ch-name" value="${escapeHtml(ch.name)}" placeholder="예: 1장 도입"></td>
+    <td><input type="text" class="input ch-name" value="${escapeHtml(ch.name)}" placeholder="${t('예: 1장 도입')}"></td>
     <td class="col-page"><input type="number" min="1" class="input input-num ch-start" value="${escapeHtml(ch.startPage)}"></td>
     <td class="col-page ch-end muted">-</td>
     <td class="col-del">
-      <button type="button" class="btn-icon ch-insert" title="이 위에 챕터 추가">+</button>
-      <button type="button" class="btn-icon ch-del" title="행 삭제">×</button>
+      <button type="button" class="btn-icon ch-insert" title="${t('이 위에 챕터 추가')}">+</button>
+      <button type="button" class="btn-icon ch-del" title="${t('행 삭제')}">×</button>
     </td>
   `;
   const tbody = document.getElementById('chapter-rows');
@@ -2368,9 +2580,9 @@ function addRestDateChip({ date, label = '' }) {
   chip.dataset.label = label.trim();
   const d = parseDate(date);
   chip.innerHTML = `
-    <span class="rest-chip-date">${d.getMonth() + 1}/${d.getDate()} (${weekdayKo(date)})</span>
+    <span class="rest-chip-date">${d.getMonth() + 1}/${d.getDate()} (${weekdayLabel(date)})</span>
     ${label.trim() ? `<span class="rest-chip-label">${escapeHtml(label.trim())}</span>` : ''}
-    <button type="button" class="rest-chip-del" aria-label="${date} 쉬는 날 삭제">×</button>`;
+    <button type="button" class="rest-chip-del" aria-label="${t('{date} 쉬는 날 삭제', { date })}">×</button>`;
   const after = [...list.children].find((c) => diffDays(date, c.dataset.date) > 0);
   list.insertBefore(chip, after || null);
 }
@@ -2386,9 +2598,9 @@ function addExtraDateChip({ date, weight }) {
   chip.dataset.weight = String(weight);
   const d = parseDate(date);
   chip.innerHTML = `
-    <span class="rest-chip-date">${d.getMonth() + 1}/${d.getDate()} (${weekdayKo(date)})</span>
+    <span class="rest-chip-date">${d.getMonth() + 1}/${d.getDate()} (${weekdayLabel(date)})</span>
     <span class="extra-chip-weight">×${weight}</span>
-    <button type="button" class="rest-chip-del" aria-label="${date} 여유 있는 날 삭제">×</button>`;
+    <button type="button" class="rest-chip-del" aria-label="${t('{date} 여유 있는 날 삭제', { date })}">×</button>`;
   const after = [...list.children].find((c) => diffDays(date, c.dataset.date) > 0);
   list.insertBefore(chip, after || null);
 }
@@ -2411,19 +2623,41 @@ function markRestChipsOutOfRange(startDate, dueDate, restWeekdays = [], restDate
       || diffDays(startDate, c.dataset.date) < 0 || diffDays(c.dataset.date, dueDate) < 0;
     const clash = c.classList.contains('extra-chip') && isRestDate(c.dataset.date, restWeekdays, restList);
     c.classList.toggle('is-out', out || clash);
-    c.title = out ? '기간 밖이라 계획에 영향 없음' : clash ? '쉬는 날과 겹쳐서 적용되지 않음' : '';
+    c.title = out ? t('기간 밖이라 계획에 영향 없음') : clash ? t('쉬는 날과 겹쳐서 적용되지 않음') : '';
   });
 }
 
-/** 성경 통독: 이름이 비어 있거나 자동으로 채운 이름이면 범위에 맞춰 이름을 바꿔 준다 */
-function syncBibleAutoTitle(form) {
+/** 통독 자동 이름: "성경 통독 · 신약" / "Bible Reading · New Testament" */
+function bibleAutoTitle(a, b) {
+  return t('성경 통독 · {range}', { range: bibleRangeLabel(a, b) });
+}
+
+/** 다른 언어로 자동으로 붙였던 이름인지 */
+function isOtherLangAutoTitle(title, a, b) {
+  const saved = currentLang;
+  try {
+    return LANGS.some((lang) => {
+      currentLang = lang;
+      return bibleAutoTitle(a, b) === title;
+    });
+  } finally {
+    currentLang = saved;
+  }
+}
+
+/**
+ * 성경 통독: 이름이 비어 있거나 자동으로 채운 이름이면 범위에 맞춰 이름을 바꿔 준다
+ * langChanged: 언어를 바꿔 다시 그린 경우 — 다른 언어의 자동 이름도 자동 이름으로 본다
+ */
+function syncBibleAutoTitle(form, langChanged = false) {
   if (getFormType() !== 'bible') return;
   const titleEl = form.querySelector('#f-title');
   const a = Number(form.querySelector('#f-bible-start').value);
   const b = Number(form.querySelector('#f-bible-end').value);
   if (a > b) return;
-  const auto = `성경 통독 · ${bibleRangeLabel(a, b)}`;
-  if (!titleEl.value.trim() || titleEl.value === form.dataset.autoTitle) {
+  const auto = bibleAutoTitle(a, b);
+  if (!titleEl.value.trim() || titleEl.value === form.dataset.autoTitle
+    || (langChanged && isOtherLangAutoTitle(titleEl.value, a, b))) {
     titleEl.value = auto;
     form.dataset.autoTitle = auto;
   }
@@ -2460,12 +2694,12 @@ function updateFormView() {
   document.querySelector('[data-section="book"]').hidden = !isBook;
   document.querySelector('[data-section="lecture"]').hidden = input.type !== 'lecture';
   document.querySelector('[data-section="bible"]').hidden = !isBible;
-  document.getElementById('f-title-label').textContent = { book: '책 제목', lecture: '강의 이름', bible: '통독 이름' }[input.type];
+  document.getElementById('f-title-label').textContent = t({ book: '책 제목', lecture: '강의 이름', bible: '통독 이름' }[input.type]);
   const bibleChapters = input.bibleStart <= input.bibleEnd
     ? bibleBooksInRange(input.bibleStart, input.bibleEnd).reduce((sum, b) => sum + b.chapters, 0) : 0;
   document.getElementById('f-bible-summary').textContent = input.bibleStart <= input.bibleEnd
-    ? `${input.bibleEnd - input.bibleStart + 1}권 · ${bibleChapters}장`
-    : '시작 권이 끝 권보다 뒤에 있습니다';
+    ? t('{books}권 · {chapters}장', { books: input.bibleEnd - input.bibleStart + 1, chapters: bibleChapters })
+    : t('시작 권이 끝 권보다 뒤에 있습니다');
 
   const days = isValidDateStr(input.startDate) && isValidDateStr(input.dueDate)
     ? countDaysInclusive(input.startDate, input.dueDate) : null;
@@ -2474,8 +2708,9 @@ function updateFormView() {
     const study = days > 0 ? countStudyDays(input.startDate, input.dueDate, input.restWeekdays, input.restDates) : 0;
     const extraCount = (input.extraDates || []).filter((x) => diffDays(input.startDate, x.date) >= 0
       && diffDays(x.date, input.dueDate) >= 0 && !isRestDate(x.date, input.restWeekdays, restDateList(input.restDates))).length;
-    daysText = days <= 0 ? '마감일이 시작일보다 앞입니다'
-      : (study === days ? `${days}일` : `${days}일 중 공부하는 날 ${study}일`) + (extraCount ? ` · 여유 ${extraCount}일` : '');
+    daysText = days <= 0 ? t('마감일이 시작일보다 앞입니다')
+      : (study === days ? formatDays(days) : t('{days}일 중 공부하는 날 {study}일', { days, study }))
+        + (extraCount ? ` · ${t('여유 {n}일', { n: extraCount })}` : '');
   }
   document.getElementById('f-days').textContent = daysText;
   markRestChipsOutOfRange(input.startDate, input.dueDate, input.restWeekdays, input.restDates);
@@ -2490,14 +2725,15 @@ function updateFormView() {
       : isBible ? bibleChapters : input.titles.length;
     if (study > 0 && total > 0) {
       const avg = total / study;
-      const unit = isBook ? '페이지' : isBible ? '장' : '강';
-      daily = `공부하는 날 하루 약 <b>${avg >= 10 ? Math.round(avg) : Math.round(avg * 10) / 10}${unit}</b>`;
+      const basis = isBook ? 'page' : isBible ? 'bible' : 'lecture';
+      const amount = formatAmount(avg >= 10 ? Math.round(avg) : Math.round(avg * 10) / 10, basis);
+      daily = t('공부하는 날 하루 약 <b>{amount}</b>', { amount });
     }
   }
   document.getElementById('f-daily').innerHTML = daily;
 
   refreshChapterEditor();
-  document.getElementById('f-lecture-count').textContent = `${input.titles.length}개 강의`;
+  document.getElementById('f-lecture-count').textContent = t('{n}개 강의', { n: input.titles.length });
 }
 
 function submitGoalForm(goal, requiredBookId = null) {
@@ -2508,7 +2744,7 @@ function submitGoalForm(goal, requiredBookId = null) {
 
   const box = document.getElementById('form-errors');
   if (errors.length) {
-    box.innerHTML = `<strong>저장할 수 없습니다</strong><ul>${errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`;
+    box.innerHTML = `<strong>${t('저장할 수 없습니다')}</strong><ul>${errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`;
     box.hidden = false;
     box.scrollIntoView({ behavior: 'smooth', block: 'center' });
     return;
@@ -2568,21 +2804,21 @@ function renderGoalDetail(root, goal) {
         <div class="detail-title">
           ${renderCoverThumb(getCoverUrl(goal), 'lg')}
           <div>
-          <a class="back-link" href="#/">← 대시보드</a>
+          <a class="back-link" href="#/">← ${t('대시보드')}</a>
           <h1>${escapeHtml(goal.title)}</h1>
-          ${getBookAuthor(goal) ? `<p class="detail-author">${escapeHtml(getBookAuthor(goal))} 지음</p>` : ''}
+          ${getBookAuthor(goal) ? `<p class="detail-author">${t('{author} 지음', { author: escapeHtml(getBookAuthor(goal)) })}</p>` : ''}
           <p class="muted">
             ${goal.requiredBookId && requiredBooks.some((b) => b.id === goal.requiredBookId)
-              ? '<span class="type-tag type-required">필독서</span>'
-              : `<span class="type-tag type-${goal.type}">${TYPE_LABELS[goal.type]}</span>`}
+              ? `<span class="type-tag type-required">${t('필독서')}</span>`
+              : `<span class="type-tag type-${goal.type}">${typeLabel(goal.type)}</span>`}
             ${goal.startDate} ~ ${goal.dueDate} · ${formatDday(s.dday)}
-            ${getRestWeekdays(goal).length ? ` · 쉬는 요일 ${WEEKDAY_ORDER.filter((d) => getRestWeekdays(goal).includes(d)).map((d) => WEEKDAYS_KO[d]).join('·')}` : ''}
+            ${getRestWeekdays(goal).length ? ` · ${t('쉬는 요일 {days}', { days: weekdayListLabel(getRestWeekdays(goal)) })}` : ''}
           </p>
           </div>
         </div>
         <div class="header-actions">
-          <a class="btn" href="#/edit/${escapeHtml(goal.id)}">수정</a>
-          <button type="button" class="btn btn-danger" data-action="delete">삭제</button>
+          <a class="btn" href="#/edit/${escapeHtml(goal.id)}">${t('수정')}</a>
+          <button type="button" class="btn btn-danger" data-action="delete">${t('삭제')}</button>
         </div>
       </header>
 
@@ -2597,12 +2833,16 @@ function renderGoalDetail(root, goal) {
 function renderBasisTabs(goal, basis) {
   if (goal.type !== 'book') return '';
   return `
-    <div class="tabs" role="tablist" aria-label="계획 기준">
+    <div class="tabs" role="tablist" aria-label="${t('계획 기준')}">
       ${['page', 'chapter'].map((b) => `
         <button type="button" role="tab" class="tab ${b === basis ? 'is-active' : ''}" data-basis="${b}">
-          ${b === 'page' ? '페이지 기준' : '챕터 기준'}
+          ${basisTabLabel(b)}
         </button>`).join('')}
     </div>`;
+}
+
+function basisTabLabel(basis) {
+  return basis === 'page' ? t('페이지 기준') : t('챕터 기준');
 }
 
 function renderPlanPanel(goal, basis) {
@@ -2611,13 +2851,13 @@ function renderPlanPanel(goal, basis) {
   return `
     <section class="panel plan-panel">
       <div class="plan-head">
-        <h2 class="section-title">계획표</h2>
+        <h2 class="section-title">${t('계획표')}</h2>
         <div class="plan-controls">
-          ${canAdjust ? '<button type="button" class="btn btn-small" data-action="adjust-start" title="날짜별 분량을 직접 정합니다">분량 직접 조정</button>' : ''}
-          <button type="button" class="btn btn-small" data-action="export-image">이미지로 내보내기</button>
-          <div class="tabs" role="tablist" aria-label="보기 방식">
+          ${canAdjust ? `<button type="button" class="btn btn-small" data-action="adjust-start" title="${t('날짜별 분량을 직접 정합니다')}">${t('분량 직접 조정')}</button>` : ''}
+          <button type="button" class="btn btn-small" data-action="export-image">${t('이미지로 내보내기')}</button>
+          <div class="tabs" role="tablist" aria-label="${t('보기 방식')}">
             ${[['list', '목록'], ['calendar', '달력']].map(([v, label]) => `
-              <button type="button" role="tab" class="tab ${v === detailState.view ? 'is-active' : ''}" data-view="${v}">${label}</button>`).join('')}
+              <button type="button" role="tab" class="tab ${v === detailState.view ? 'is-active' : ''}" data-view="${v}">${t(label)}</button>`).join('')}
           </div>
           ${renderBasisTabs(goal, basis)}
         </div>
@@ -2629,10 +2869,6 @@ function renderPlanPanel(goal, basis) {
 
 /* ----- 계획 대비 현황 ----- */
 
-function formatAmount(n, basis) {
-  return `${n}${getUnitLabel(basis)}`;
-}
-
 /** 위치 표시: 책(페이지 기준)은 페이지 번호 "p.42", 그 외는 개수 "3강" */
 function formatPosition(goal, basis, units) {
   if (basis === 'page') return units > 0 ? `p.${unitsToPage(goal.book, units)}` : '-';
@@ -2641,31 +2877,33 @@ function formatPosition(goal, basis, units) {
 }
 
 function totalLabel(basis) {
-  return basis === 'page' ? '마지막 페이지' : basis === 'bible' ? '끝' : '전체';
+  return basis === 'page' ? t('마지막 페이지') : basis === 'bible' ? t('끝') : t('전체');
 }
 
 /** 현황 안내 문구와 색 */
 function getCompareMessage(goal, s) {
   const u = (n) => formatAmount(n, s.basis);
-  if (s.isComplete) return { tone: 'done', html: '모두 완료했습니다. 수고하셨어요!' };
+  if (s.isComplete) return { tone: 'done', html: t('모두 완료했습니다. 수고하셨어요!') };
   if (s.isOverdue) {
-    return { tone: 'ended', html: `마감일이 지났습니다. 남은 <b>${u(s.remaining)}</b>${josa(u(s.remaining), '은', '는')} <b>마감일 변경</b>으로 다시 계획할 수 있어요.` };
+    const amount = u(s.remaining);
+    return { tone: 'ended', html: t('마감일이 지났습니다. 남은 <b>{amount}</b>{josa} <b>마감일 변경</b>으로 다시 계획할 수 있어요.', { amount, josa: josa(amount, '은', '는') }) };
   }
   if (s.notStarted) {
-    return { tone: 'neutral', html: `${formatShortDate(goal.startDate)}에 시작합니다. 공부하는 날마다 <b>하루 ${u(s.dailyPlan)}</b>씩 하면 됩니다.` };
+    return { tone: 'neutral', html: t('{date}에 시작합니다. 공부하는 날마다 <b>하루 {amount}</b>씩 하면 됩니다.', { date: formatShortDate(goal.startDate), amount: u(s.dailyPlan) }) };
   }
   if (s.remainingStudyDays === 0) {
-    return { tone: 'behind', html: `마감일까지 공부하는 날이 남아 있지 않습니다. 남은 <b>${u(s.remaining)}</b>${josa(u(s.remaining), '을', '를')} 하려면 마감일을 변경해 주세요.` };
+    const amount = u(s.remaining);
+    return { tone: 'behind', html: t('마감일까지 공부하는 날이 남아 있지 않습니다. 남은 <b>{amount}</b>{josa} 하려면 마감일을 변경해 주세요.', { amount, josa: josa(amount, '을', '를') }) };
   }
-  const rest = `남은 공부일 ${s.remainingStudyDays}일 동안 <b>하루 ${u(s.needPerDay)}</b>씩`;
-  if (s.diff < 0) return { tone: 'behind', html: `계획보다 <b>${u(-s.diff)} 밀렸습니다.</b> ${rest} 하면 기한을 맞출 수 있어요.` };
-  if (s.diff > 0) return { tone: 'ahead', html: `계획보다 <b>${u(s.diff)} 앞서 있어요.</b> ${rest}이면 충분해요.` };
+  const rest = { days: s.remainingStudyDays, need: u(s.needPerDay) };
+  if (s.diff < 0) return { tone: 'behind', html: t('계획보다 <b>{amount} 밀렸습니다.</b> 남은 공부일 {days}일 동안 <b>하루 {need}</b>씩 하면 기한을 맞출 수 있어요.', { ...rest, amount: u(-s.diff) }) };
+  if (s.diff > 0) return { tone: 'ahead', html: t('계획보다 <b>{amount} 앞서 있어요.</b> 남은 공부일 {days}일 동안 <b>하루 {need}</b>씩이면 충분해요.', { ...rest, amount: u(s.diff) }) };
   if (s.todayRow && s.todayRow.isRestDay) {
     const label = getRestDateLabel(goal, s.todayRow.date);
-    return { tone: 'ontrack', html: `오늘은 쉬는 날이에요${label ? ` (${escapeHtml(label)})` : ''}. 계획대로 진행 중입니다.` };
+    return { tone: 'ontrack', html: t('오늘은 쉬는 날이에요{label}. 계획대로 진행 중입니다.', { label: label ? ` (${escapeHtml(label)})` : '' }) };
   }
-  if (s.done >= s.target) return { tone: 'ontrack', html: '오늘 분량을 마쳤어요. 계획대로 진행 중입니다.' };
-  return { tone: 'ontrack', html: `계획대로 진행 중이에요. 오늘 <b>${u(s.target - s.done)}</b> 남았어요.` };
+  if (s.done >= s.target) return { tone: 'ontrack', html: t('오늘 분량을 마쳤어요. 계획대로 진행 중입니다.') };
+  return { tone: 'ontrack', html: t('계획대로 진행 중이에요. 오늘 <b>{amount}</b> 남았어요.', { amount: u(s.target - s.done) }) };
 }
 
 /** 관리자가 필독서 내용을 바꿨으면 반영 안내 */
@@ -2674,8 +2912,8 @@ function renderRequiredBookNotice(goal) {
   if (!book || !isRequiredBookChanged(goal, book) || detailState.preview) return '';
   return `
     <div class="notice notice-row">
-      <span>관리자가 이 필독서의 책 정보(제목·챕터·페이지)를 바꿨습니다. 내 계획에 반영하려면 미리보기를 확인하세요.</span>
-      <button type="button" class="btn btn-small" data-action="sync-required">반영 미리보기</button>
+      <span>${t('관리자가 이 필독서의 책 정보(제목·챕터·페이지)를 바꿨습니다. 내 계획에 반영하려면 미리보기를 확인하세요.')}</span>
+      <button type="button" class="btn btn-small" data-action="sync-required">${t('반영 미리보기')}</button>
     </div>`;
 }
 
@@ -2691,26 +2929,26 @@ function renderSummaryPanel(goal, s) {
       ${renderCompareBlock(goal, s)}
 
       <div class="summary-info">
-        <div><span class="info-label">현재 위치</span>${escapeHtml(describePosition(goal))}</div>
-        <div class="summary-today"><span class="info-label">오늘 할 일</span>${renderTodayAmount(goal, s)}</div>
+        <div><span class="info-label">${t('현재 위치')}</span>${escapeHtml(describePosition(goal))}</div>
+        <div class="summary-today"><span class="info-label">${t('오늘 할 일')}</span>${renderTodayAmount(goal, s)}</div>
       </div>
 
       <div class="summary-actions">
         <form class="progress-form ${isBook ? 'is-two-rows' : ''}" data-action="progress" novalidate>
           ${goal.type === 'bible' ? renderBibleProgressInputs(goal) : `
-          <label for="progress-input" class="field-label">${isBook ? '마지막으로 읽은 페이지' : '완료한 강의 수'}</label>
+          <label for="progress-input" class="field-label">${isBook ? t('마지막으로 읽은 페이지') : t('완료한 강의 수')}</label>
           <div class="progress-control">
             <input id="progress-input" type="number" class="input input-num" min="${min}" max="${max}" value="${cur}">
-            <span class="muted">${isBook ? `(p.${min}~${max})` : `(0~${max}강)`}</span>
+            <span class="muted">${isBook ? `(p.${min}~${max})` : t('(0~{max}강)', { max })}</span>
           </div>
           ${isBook ? renderChapterProgressSelect(goal) : ''}`}
-          <button type="submit" class="btn btn-primary progress-submit">진도 기록</button>
+          <button type="submit" class="btn btn-primary progress-submit">${t('진도 기록')}</button>
           <span class="progress-error" hidden></span>
         </form>
         <div class="plan-actions">
           <button type="button" class="btn" data-action="replan" ${replanBlocker || previewing ? 'disabled' : ''}
-            title="${escapeHtml(replanBlocker || '오늘부터 마감일까지 남은 분량을 다시 균등하게 나눕니다')}">재분배</button>
-          <button type="button" class="btn" data-action="due" ${previewing ? 'disabled' : ''}>마감일 변경</button>
+            title="${escapeHtml(replanBlocker || t('오늘부터 마감일까지 남은 분량을 다시 균등하게 나눕니다'))}">${t('재분배')}</button>
+          <button type="button" class="btn" data-action="due" ${previewing ? 'disabled' : ''}>${t('마감일 변경')}</button>
         </div>
       </div>
     </section>
@@ -2721,9 +2959,9 @@ function renderSummaryPanel(goal, s) {
 function renderChapterProgressSelect(goal) {
   const doneCount = completedChapterCount(goal.book, goal.progress.current);
   return `
-    <label for="progress-chapter-select" class="field-label"><span class="muted progress-or">또는</span> 완료한 챕터</label>
+    <label for="progress-chapter-select" class="field-label"><span class="muted progress-or">${t('또는')}</span> ${t('완료한 챕터')}</label>
     <select id="progress-chapter-select" class="input chapter-select">
-      <option value="0" ${doneCount === 0 ? 'selected' : ''}>없음</option>
+      <option value="0" ${doneCount === 0 ? 'selected' : ''}>${t('없음')}</option>
       ${getChapterRanges(goal.book).map((c, i) => `
         <option value="${i + 1}" ${doneCount === i + 1 ? 'selected' : ''}>${escapeHtml(c.name)} (~p.${c.endPage})</option>`).join('')}
     </select>`;
@@ -2734,13 +2972,13 @@ function renderBibleProgressInputs(goal) {
   const cur = goal.progress.current;
   const pos = cur > 0 ? biblePosition(goal.bible, cur) : null;
   return `
-    <label for="progress-book" class="field-label">마지막으로 읽은 곳</label>
+    <label for="progress-book" class="field-label">${t('마지막으로 읽은 곳')}</label>
     <select id="progress-book" class="input bible-select">
-      <option value="-1" ${pos ? '' : 'selected'}>아직 안 읽음</option>
-      ${goal.bible.books.map((b, i) => `<option value="${i}" ${pos && pos.index === i ? 'selected' : ''}>${b.name}</option>`).join('')}
+      <option value="-1" ${pos ? '' : 'selected'}>${t('아직 안 읽음')}</option>
+      ${goal.bible.books.map((b, i) => `<option value="${i}" ${pos && pos.index === i ? 'selected' : ''}>${bibleBookName(b.name)}</option>`).join('')}
     </select>
-    <input id="progress-chapter" type="number" class="input input-num" min="1" value="${pos ? pos.chapter : ''}" aria-label="장">
-    <span class="muted">장까지</span>`;
+    <input id="progress-chapter" type="number" class="input input-num" min="1" value="${pos ? pos.chapter : ''}" aria-label="${t('장')}">
+    ${t('장까지') ? `<span class="muted">${t('장까지')}</span>` : ''}`;
 }
 
 /** 성경 통독 진도 입력값 → 누적 장 수 (오류면 문자열) */
@@ -2750,7 +2988,7 @@ function readBibleProgressInput(goal, form) {
   const book = goal.bible.books[bookIndex];
   const chapter = Number(form.querySelector('#progress-chapter').value);
   if (!Number.isInteger(chapter) || chapter < 1 || chapter > book.chapters) {
-    return `${book.name}은(는) 1~${book.chapters}장입니다.`;
+    return t('{book}은(는) 1~{n}장입니다.', { book: bibleBookName(book.name), n: book.chapters });
   }
   return bibleUnitsFromPosition(goal.bible, bookIndex, chapter);
 }
@@ -2759,12 +2997,14 @@ function readBibleProgressInput(goal, form) {
 function describePosition(goal) {
   const cur = goal.progress.current;
   if (goal.type === 'book') {
-    return `${cur < bookFirstPage(goal.book) ? '아직 읽지 않음' : `p.${cur}까지 읽음`} · 완료 챕터 ${completedChapterCount(goal.book, cur)}/${goal.book.chapters.length}`;
+    return `${cur < bookFirstPage(goal.book) ? t('아직 읽지 않음') : t('p.{page}까지 읽음', { page: cur })} · ${
+      t('완료 챕터 {done}/{total}', { done: completedChapterCount(goal.book, cur), total: goal.book.chapters.length })}`;
   }
   if (goal.type === 'bible') {
-    return cur === 0 ? '아직 읽지 않음' : `${formatBiblePosition(goal.bible, cur)}까지 읽음 · ${cur}/${bibleTotalChapters(goal.bible)}장`;
+    return cur === 0 ? t('아직 읽지 않음')
+      : `${t('{pos}까지 읽음', { pos: formatBiblePosition(goal.bible, cur) })} · ${formatFraction(cur, bibleTotalChapters(goal.bible), 'bible')}`;
   }
-  return cur === 0 ? '아직 듣지 않음' : `${cur}강까지 완료`;
+  return cur === 0 ? t('아직 듣지 않음') : t('{n}강까지 완료', { n: cur });
 }
 
 /** 계획 대비 현황: 숫자 상자 4개 + 진행 막대 + 안내 문구 (내 화면·관리자 화면 공용) */
@@ -2774,25 +3014,25 @@ function renderCompareBlock(goal, s) {
   const msg = getCompareMessage(goal, s);
   return `
       <div class="summary-top">
-        <h2 class="section-title">계획 대비 현황</h2>
+        <h2 class="section-title">${t('계획 대비 현황')}</h2>
         ${renderStatusBadge(s)}
       </div>
 
       <div class="stat-boxes">
-        <div class="stat-box"><strong>${formatAmount(s.dailyPlan, s.basis)}</strong><span>하루 권장</span></div>
-        <div class="stat-box"><strong>${formatPosition(goal, s.basis, s.target)}</strong><span>오늘까지 권장</span></div>
-        <div class="stat-box"><strong>${formatPosition(goal, s.basis, s.done)}</strong><span>실제 완료</span></div>
+        <div class="stat-box"><strong>${formatAmount(s.dailyPlan, s.basis)}</strong><span>${t('하루 권장')}</span></div>
+        <div class="stat-box"><strong>${formatPosition(goal, s.basis, s.target)}</strong><span>${t('오늘까지 권장')}</span></div>
+        <div class="stat-box"><strong>${formatPosition(goal, s.basis, s.done)}</strong><span>${t('실제 완료')}</span></div>
         <div class="stat-box"><strong>${formatPosition(goal, s.basis, s.total)}</strong><span>${totalLabel(s.basis)}</span></div>
       </div>
 
       <div class="compare-bar" role="img"
-        aria-label="실제 진도 ${s.percent}%, 오늘까지 권장 ${Math.round(targetPercent)}%">
+        aria-label="${t('실제 진도 {done}%, 오늘까지 권장 {target}%', { done: s.percent, target: Math.round(targetPercent) })}">
         <div class="compare-fill" style="width:${donePercent}%"></div>
         <div class="compare-marker" style="left:${targetPercent}%"></div>
       </div>
       <div class="compare-legend">
-        <span><i class="legend-fill"></i>초록 = 실제 진도 ${s.percent}%</span>
-        <span><i class="legend-marker"></i>검정 선 = 오늘까지 권장 ${Math.floor(targetPercent)}%</span>
+        <span><i class="legend-fill"></i>${t('초록 = 실제 진도 {n}%', { n: s.percent })}</span>
+        <span><i class="legend-marker"></i>${t('검정 선 = 오늘까지 권장 {n}%', { n: Math.floor(targetPercent) })}</span>
       </div>
 
       <div class="compare-message tone-${msg.tone}">${msg.html}</div>`;
@@ -2822,19 +3062,19 @@ function buildPreviewGoal(goal, preview, today = todayStr()) {
 /** 수정 미리보기에서 무엇이 바뀌는지 */
 function describeEditChanges(goal, input) {
   const changes = [];
-  if (goal.title !== input.title.trim()) changes.push('이름');
-  if (goal.startDate !== input.startDate) changes.push('시작일');
-  if (goal.dueDate !== input.dueDate) changes.push(`마감일(${goal.dueDate} → ${input.dueDate})`);
-  if (getRestWeekdays(goal).join() !== normalizeWeekdays(input.restWeekdays).join()) changes.push('쉬는 요일');
-  if (isRestDatesChanged(goal, input)) changes.push('쉬는 날');
-  if (isExtraDatesChanged(goal, input)) changes.push('여유 있는 날');
+  if (goal.title !== input.title.trim()) changes.push(t('이름'));
+  if (goal.startDate !== input.startDate) changes.push(t('시작일'));
+  if (goal.dueDate !== input.dueDate) changes.push(t('마감일({from} → {to})', { from: goal.dueDate, to: input.dueDate }));
+  if (getRestWeekdays(goal).join() !== normalizeWeekdays(input.restWeekdays).join()) changes.push(t('쉬는 요일'));
+  if (isRestDatesChanged(goal, input)) changes.push(t('쉬는 날||label'));
+  if (isExtraDatesChanged(goal, input)) changes.push(t('여유 있는 날'));
   if (goal.type === 'book') {
-    if (isBookStructureChanged(goal, input)) changes.push('챕터·페이지');
-    if (getBookAuthor(goal) !== (input.author || '').trim()) changes.push('저자');
+    if (isBookStructureChanged(goal, input)) changes.push(t('챕터·페이지'));
+    if (getBookAuthor(goal) !== (input.author || '').trim()) changes.push(t('저자'));
   } else if (goal.type === 'bible') {
-    if (isBibleRangeChanged(goal, input)) changes.push(`통독 범위(${bibleRangeLabel(Number(input.bibleStart), Number(input.bibleEnd))})`);
+    if (isBibleRangeChanged(goal, input)) changes.push(t('통독 범위({range})', { range: bibleRangeLabel(Number(input.bibleStart), Number(input.bibleEnd)) }));
   } else if (JSON.stringify(goal.lecture.titles) !== JSON.stringify(input.titles)) {
-    changes.push(`강의 목록(${goal.lecture.titles.length}개 → ${input.titles.length}개)`);
+    changes.push(t('강의 목록({from}개 → {to}개)', { from: goal.lecture.titles.length, to: input.titles.length }));
   }
   return changes;
 }
@@ -2846,7 +3086,7 @@ function renderPreviewContent(goal, basis) {
   const result = buildPreviewGoal(goal, preview, today);
   let body;
   if (result.waiting) {
-    body = '<p class="preview-hint">새 마감일을 고르면 바뀐 계획을 여기에 보여드립니다.</p>';
+    body = `<p class="preview-hint">${t('새 마감일을 고르면 바뀐 계획을 여기에 보여드립니다.')}</p>`;
   } else if (result.errors.length) {
     body = `<div class="errors"><ul>${result.errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('')}</ul></div>`;
   } else {
@@ -2858,29 +3098,29 @@ function renderPreviewContent(goal, basis) {
 function renderPreviewPanel(goal, basis) {
   const preview = detailState.preview;
   const today = todayStr();
-  const title = { replan: '재분배 미리보기', due: '마감일 변경 미리보기', edit: '수정 내용 미리보기' }[preview.kind];
+  const title = t({ replan: '재분배 미리보기', due: '마감일 변경 미리보기', edit: '수정 내용 미리보기' }[preview.kind]);
   const { body, canApply } = renderPreviewContent(goal, basis);
 
   return `
     <section class="panel plan-panel is-preview">
       <div class="plan-head">
-        <h2 class="section-title">${title} <span class="badge badge-waiting">적용 전</span></h2>
+        <h2 class="section-title">${title} <span class="badge badge-waiting">${t('적용 전')}</span></h2>
         ${renderBasisTabs(goal, basis)}
       </div>
 
       ${preview.kind === 'due' ? `
         <div class="due-picker">
-          <label class="field-label" for="preview-due">새 마감일</label>
+          <label class="field-label" for="preview-due">${t('새 마감일')}</label>
           <input id="preview-due" type="date" class="input" value="${escapeHtml(preview.dueDate)}" min="${today}">
-          <span class="muted">현재 마감일 ${goal.dueDate}</span>
+          <span class="muted">${t('현재 마감일 {date}', { date: goal.dueDate })}</span>
         </div>` : ''}
 
       <div id="preview-body">${body}</div>
 
       <div class="preview-actions">
-        ${preview.kind === 'edit' ? '<button type="button" class="btn" data-action="preview-back">수정으로 돌아가기</button>' : ''}
-        <button type="button" class="btn" data-action="preview-cancel">취소</button>
-        <button type="button" class="btn btn-primary" data-action="preview-apply" ${canApply ? '' : 'disabled'}>적용</button>
+        ${preview.kind === 'edit' ? `<button type="button" class="btn" data-action="preview-back">${t('수정으로 돌아가기')}</button>` : ''}
+        <button type="button" class="btn" data-action="preview-cancel">${t('취소')}</button>
+        <button type="button" class="btn btn-primary" data-action="preview-apply" ${canApply ? '' : 'disabled'}>${t('적용')}</button>
       </div>
     </section>
   `;
@@ -2889,7 +3129,6 @@ function renderPreviewPanel(goal, basis) {
 function renderPreviewBody(goal, clone, basis, preview, today) {
   const newPlan = getActivePlan(clone, basis);
   const oldPlan = getActivePlan(goal, basis);
-  const unit = getUnitLabel(basis);
   const rows = buildSchedule(newPlan);
   const studyDays = countStudyDays(newPlan.startDate, newPlan.endDate, newPlan.restWeekdays, newPlan.restDates);
   const avg = studyDays > 0 ? (newPlan.to - newPlan.from) / studyDays : 0;
@@ -2900,21 +3139,27 @@ function renderPreviewBody(goal, clone, basis, preview, today) {
   const rebuilt = !clone.plans[basis].current; // 시작 전이라 원래 계획을 새로 만든 경우
 
   const lines = [];
-  if (preview.kind === 'edit') lines.push(`바뀌는 항목: ${describeEditChanges(goal, preview.input).join(', ')}`);
-  if (preview.kind === 'due') lines.push(`마감일 ${goal.dueDate} → <b>${preview.dueDate}</b>`);
-  lines.push(`남은 <b>${newPlan.to - newPlan.from}${unit}</b>${josa(unit, '을', '를')} ${formatShortDate(newPlan.startDate)}부터 ${formatShortDate(newPlan.endDate)}까지 공부하는 날 <b>${studyDays}일</b>에 나눕니다.`);
-  lines.push(`하루 <b>${lo === hi ? lo : `${lo}~${hi}`}${unit}</b> <span class="muted">(지금 계획: 하루 평균 ${oldAvg}${unit})</span>`);
-  lines.push(rebuilt
-    ? '<span class="muted">아직 시작 전이라 원래 계획을 새로 만듭니다.</span>'
-    : '<span class="muted">원래 계획은 그대로 보관되어 계획표에서 비교할 수 있습니다.</span>');
+  if (preview.kind === 'edit') lines.push(t('바뀌는 항목: {items}', { items: describeEditChanges(goal, preview.input).join(', ') }));
+  if (preview.kind === 'due') lines.push(t('마감일 {from} → <b>{to}</b>', { from: goal.dueDate, to: preview.dueDate }));
+  const remainingAmount = formatAmount(newPlan.to - newPlan.from, basis);
+  lines.push(t('남은 <b>{amount}</b>{josa} {from}부터 {to}까지 공부하는 날 <b>{days}일</b>에 나눕니다.', {
+    amount: remainingAmount, josa: josa(remainingAmount, '을', '를'),
+    from: formatShortDate(newPlan.startDate), to: formatShortDate(newPlan.endDate), days: studyDays,
+  }));
+  lines.push(t('하루 <b>{range}</b> <span class="muted">(지금 계획: 하루 평균 {old})</span>', {
+    range: formatAmountRange(lo, hi, basis), old: formatAmount(oldAvg, basis),
+  }));
+  lines.push(`<span class="muted">${rebuilt
+    ? t('아직 시작 전이라 원래 계획을 새로 만듭니다.')
+    : t('원래 계획은 그대로 보관되어 계획표에서 비교할 수 있습니다.')}</span>`);
 
   const body = rows.map((row) => {
     const dayDiff = diffDays(today, row.date);
     const classes = [dayDiff === 0 ? 'is-today' : '', row.isRestDay ? 'is-rest-day' : ''].filter(Boolean).join(' ');
     return `
       <tr class="${classes}">
-        <td class="col-date">${row.date}${dayDiff === 0 ? ' <span class="today-tag">오늘</span>' : ''}</td>
-        <td class="col-weekday">${weekdayKo(row.date)}</td>
+        <td class="col-date">${row.date}${dayDiff === 0 ? ` <span class="today-tag">${t('오늘')}</span>` : ''}</td>
+        <td class="col-weekday">${weekdayLabel(row.date)}</td>
         <td class="col-content">${describeRowContent(clone, basis, row)}</td>
         <td class="col-amount">${renderAmountCell(basis, row)}</td>
         <td class="col-cum"><strong>${formatCumulative(clone, basis, row.cumulative)}</strong></td>
@@ -2927,12 +3172,12 @@ function renderPreviewBody(goal, clone, basis, preview, today) {
     <table class="plan-table">
       <thead>
         <tr>
-          <th class="col-date">날짜</th>
-          <th class="col-weekday">요일</th>
-          <th>${goal.type === 'lecture' ? '들을 강의' : '읽을 내용'}</th>
-          <th class="col-amount">분량</th>
-          <th class="col-cum">새 누적 목표</th>
-          <th class="col-cum">지금 계획 누적</th>
+          <th class="col-date">${t('날짜')}</th>
+          <th class="col-weekday">${t('요일')}</th>
+          <th>${goal.type === 'lecture' ? t('들을 강의') : t('읽을 내용')}</th>
+          <th class="col-amount">${t('분량')}</th>
+          <th class="col-cum">${t('새 누적 목표')}</th>
+          <th class="col-cum">${t('지금 계획 누적')}</th>
         </tr>
       </thead>
       <tbody>${body}</tbody>
@@ -2943,7 +3188,7 @@ function renderPreviewBody(goal, clone, basis, preview, today) {
 /** 계획표의 "오늘 분량" 칸 내용 */
 function describeRowContent(goal, basis, row) {
   if (row.isRestDay) return `<span class="rest">${escapeHtml(restText(goal, row.date))}</span>`;
-  if (row.amount === 0) return '<span class="rest">휴식(분량 없음)</span>';
+  if (row.amount === 0) return `<span class="rest">${t('휴식(분량 없음)')}</span>`;
   const from = row.prevCumulative;
   const to = row.cumulative;
 
@@ -2960,16 +3205,16 @@ function describeRowContent(goal, basis, row) {
       .join('');
   }
   return goal.lecture.titles.slice(from, to)
-    .map((title, i) => `<div><strong>${from + i + 1}강</strong> ${escapeHtml(title)}</div>`)
+    .map((title, i) => `<div><strong>${lectureLabel(from + i + 1)}</strong> ${escapeHtml(title)}</div>`)
     .join('');
 }
 
 /** 누적 값 표시 (페이지는 도달해야 할 페이지 번호로) */
 function formatCumulative(goal, basis, units) {
   if (basis === 'page') return units === 0 ? '-' : `p.${unitsToPage(goal.book, units)}`;
-  if (basis === 'chapter') return `${units}챕터`;
+  if (basis === 'chapter') return formatAmount(units, 'chapter');
   if (basis === 'bible') return formatBiblePosition(goal.bible, units);
-  return `${units}강`;
+  return formatAmount(units, 'lecture');
 }
 
 /** 계획표 행(또는 달력 칸)의 상태: 오늘 강조, 완료 흐리게, 지난 날 미달 경고 */
@@ -2988,11 +3233,11 @@ function getRowState(row, done, today, replanned) {
 
 /** 그날 분량 칸: 예) 35페이지 */
 function renderAmountCell(basis, row) {
-  const tags = `${row.weight > 1 ? `<span class="amount-tag tag-extra">여유 ×${row.weight}</span>` : ''}${
-    row.isFixed ? '<span class="amount-tag tag-fixed">직접</span>' : ''}`;
+  const tags = `${row.weight > 1 ? `<span class="amount-tag tag-extra">${t('여유 ×{w}', { w: row.weight })}</span>` : ''}${
+    row.isFixed ? `<span class="amount-tag tag-fixed">${t('직접')}</span>` : ''}`;
   return row.amount === 0
     ? `<span class="muted">-</span>${tags}`
-    : `<strong>${row.amount}${getUnitLabel(basis)}</strong>${tags}`;
+    : `<strong>${formatAmount(row.amount, basis)}</strong>${tags}`;
 }
 
 /* ----- 분량 직접 조정 (계획표에서 날짜별 분량을 고침) ----- */
@@ -3014,18 +3259,19 @@ function computeAdjustedPlan(goal, basis, edits, today = todayStr()) {
   Object.entries(edits).forEach(([date, raw]) => {
     if (raw === '' || raw === null) { delete fixed[date]; return; }
     const n = Number(raw);
-    if (!Number.isInteger(n) || n < 0) errors.push(`${formatShortDate(date)}: 0 이상의 정수를 입력하세요.`);
+    if (!Number.isInteger(n) || n < 0) errors.push(t('{date}: 0 이상의 정수를 입력하세요.', { date: formatShortDate(date) }));
     else fixed[date] = n;
   });
-  const unit = getUnitLabel(basis);
   const N = active.to - active.from;
   const studyRows = rows.filter((r) => !r.isRestDay);
   const fixedSum = studyRows.reduce((sum, r) => sum + (fixed[r.date] || 0), 0);
   const autoCount = studyRows.filter((r) => fixed[r.date] === undefined).length;
   if (!errors.length && fixedSum > N) {
-    errors.push(`직접 정한 분량의 합(${fixedSum}${unit})이 이 계획의 전체 분량(${N}${unit})보다 많습니다.`);
+    errors.push(t('직접 정한 분량의 합({sum})이 이 계획의 전체 분량({total})보다 많습니다.',
+      { sum: formatAmount(fixedSum, basis), total: formatAmount(N, basis) }));
   } else if (!errors.length && autoCount === 0 && fixedSum !== N) {
-    errors.push(`모든 날을 직접 정했다면 합이 ${N}${unit}이어야 합니다. (지금 ${fixedSum}${unit})`);
+    errors.push(t('모든 날을 직접 정했다면 합이 {total}이어야 합니다. (지금 {sum})',
+      { sum: formatAmount(fixedSum, basis), total: formatAmount(N, basis) }));
   }
   return { plan: { ...active, fixed, createdAt: new Date().toISOString() }, errors };
 }
@@ -3049,16 +3295,16 @@ function renderAdjustPanel(goal, basis) {
       .filter(Boolean).join(' ');
     return `
       <tr class="${classes}">
-        <td class="col-date">${row.date}${dayDiff === 0 ? ' <span class="today-tag">오늘</span>' : ''}</td>
-        <td class="col-weekday">${weekdayKo(row.date)}</td>
+        <td class="col-date">${row.date}${dayDiff === 0 ? ` <span class="today-tag">${t('오늘')}</span>` : ''}</td>
+        <td class="col-weekday">${weekdayLabel(row.date)}</td>
         <td class="col-content">${describeRowContent(shown, basis, row)}</td>
         <td class="col-adjust">
           ${editable ? `
             <input type="number" min="0" class="input adjust-input ${row.isFixed ? 'is-fixed' : ''}" data-date="${row.date}"
-              value="${edited ? escapeHtml(adjust.edits[row.date]) : row.amount}" aria-label="${row.date} 분량">
+              value="${edited ? escapeHtml(adjust.edits[row.date]) : row.amount}" aria-label="${t('{date} 분량', { date: row.date })}">
             <span class="muted">${unit}</span>
-            ${row.isFixed ? `<button type="button" class="btn-icon adjust-reset" data-reset-date="${row.date}" title="자동으로 되돌리기">↺</button>` : ''}
-            ${row.weight > 1 && !row.isFixed ? `<span class="amount-tag tag-extra">여유 ×${row.weight}</span>` : ''}`
+            ${row.isFixed ? `<button type="button" class="btn-icon adjust-reset" data-reset-date="${row.date}" title="${t('자동으로 되돌리기')}">↺</button>` : ''}
+            ${row.weight > 1 && !row.isFixed ? `<span class="amount-tag tag-extra">${t('여유 ×{w}', { w: row.weight })}</span>` : ''}`
             : renderAmountCell(basis, row)}
         </td>
         <td class="col-cum">${formatCumulative(shown, basis, row.cumulative)}</td>
@@ -3068,27 +3314,27 @@ function renderAdjustPanel(goal, basis) {
   return `
     <section class="panel plan-panel is-preview">
       <div class="plan-head">
-        <h2 class="section-title">분량 직접 조정 <span class="badge badge-waiting">적용 전</span></h2>
+        <h2 class="section-title">${t('분량 직접 조정')} <span class="badge badge-waiting">${t('적용 전')}</span></h2>
         ${renderBasisTabs(goal, basis)}
       </div>
       <div class="preview-summary">
-        <p>오늘부터 날짜별 <b>분량</b> 칸의 숫자를 바꾸면, 나머지 날에 남은 분량이 자동으로 다시 나뉩니다.</p>
-        <p class="muted">직접 정한 날은 <span class="amount-tag tag-fixed">직접</span>으로 표시되고, ↺를 누르면 자동으로 돌아갑니다. 지난 날은 바뀌지 않습니다.</p>
+        <p>${t('오늘부터 날짜별 <b>분량</b> 칸의 숫자를 바꾸면, 나머지 날에 남은 분량이 자동으로 다시 나뉩니다.')}</p>
+        <p class="muted">${t('직접 정한 날은 <span class="amount-tag tag-fixed">직접</span>으로 표시되고, ↺를 누르면 자동으로 돌아갑니다. 지난 날은 바뀌지 않습니다.')}</p>
       </div>
       ${errors.length ? `<div class="errors"><ul>${errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('')}</ul></div>` : ''}
       <table class="plan-table">
         <thead>
           <tr>
-            <th class="col-date">날짜</th><th class="col-weekday">요일</th>
-            <th>${goal.type === 'lecture' ? '들을 강의' : '읽을 내용'}</th>
-            <th class="col-adjust">분량</th><th class="col-cum">누적 목표</th>
+            <th class="col-date">${t('날짜')}</th><th class="col-weekday">${t('요일')}</th>
+            <th>${goal.type === 'lecture' ? t('들을 강의') : t('읽을 내용')}</th>
+            <th class="col-adjust">${t('분량')}</th><th class="col-cum">${t('누적 목표')}</th>
           </tr>
         </thead>
         <tbody>${body}</tbody>
       </table>
       <div class="preview-actions">
-        <button type="button" class="btn" data-action="adjust-cancel">취소</button>
-        <button type="button" class="btn btn-primary" data-action="adjust-apply" ${errors.length ? 'disabled' : ''}>적용</button>
+        <button type="button" class="btn" data-action="adjust-cancel">${t('취소')}</button>
+        <button type="button" class="btn btn-primary" data-action="adjust-apply" ${errors.length ? 'disabled' : ''}>${t('적용')}</button>
       </div>
     </section>`;
 }
@@ -3104,8 +3350,8 @@ function renderPlanTable(goal, basis, readOnly = false) {
 
     return `
       <tr class="${classes}">
-        <td class="col-date">${row.date}${dayDiff === 0 ? ' <span class="today-tag">오늘</span>' : ''}</td>
-        <td class="col-weekday">${weekdayKo(row.date)}</td>
+        <td class="col-date">${row.date}${dayDiff === 0 ? ` <span class="today-tag">${t('오늘')}</span>` : ''}</td>
+        <td class="col-weekday">${weekdayLabel(row.date)}</td>
         <td class="col-content">${describeRowContent(goal, basis, row)}</td>
         <td class="col-amount">${renderAmountCell(basis, row)}</td>
         <td class="col-cum">${formatCumulative(goal, basis, row.cumulative)}</td>
@@ -3113,7 +3359,7 @@ function renderPlanTable(goal, basis, readOnly = false) {
           ${row.amount === 0 ? '<span class="muted">-</span>'
             : readOnly ? (checked ? '<span class="check-mark">✓</span>' : '')
             : `<input type="checkbox" class="row-check" data-date="${row.date}" ${checked ? 'checked' : ''}
-                aria-label="${row.date} 완료">`}
+                aria-label="${t('{date} 완료', { date: row.date })}">`}
         </td>
       </tr>`;
   }).join('');
@@ -3122,12 +3368,12 @@ function renderPlanTable(goal, basis, readOnly = false) {
     <table class="plan-table">
       <thead>
         <tr>
-          <th class="col-date">날짜</th>
-          <th class="col-weekday">요일</th>
-          <th>${goal.type === 'lecture' ? '들을 강의' : '읽을 내용'}</th>
-          <th class="col-amount">분량</th>
-          <th class="col-cum">누적 목표</th>
-          <th class="col-check">완료</th>
+          <th class="col-date">${t('날짜')}</th>
+          <th class="col-weekday">${t('요일')}</th>
+          <th>${goal.type === 'lecture' ? t('들을 강의') : t('읽을 내용')}</th>
+          <th class="col-amount">${t('분량')}</th>
+          <th class="col-cum">${t('누적 목표')}</th>
+          <th class="col-check">${t('완료')}</th>
         </tr>
       </thead>
       <tbody>${body}</tbody>
@@ -3138,7 +3384,7 @@ function renderPlanTable(goal, basis, readOnly = false) {
 /** 달력 칸에 들어갈 짧은 내용 */
 function describeCellContent(goal, basis, row) {
   if (row.isRestDay) return `<span class="rest">${escapeHtml(restText(goal, row.date))}</span>`;
-  if (row.amount === 0) return '<span class="rest">휴식</span>';
+  if (row.amount === 0) return `<span class="rest">${t('휴식')}</span>`;
   const from = row.prevCumulative;
   const to = row.cumulative;
   if (basis === 'page') {
@@ -3149,13 +3395,13 @@ function describeCellContent(goal, basis, row) {
   }
   if (basis === 'bible') {
     return `<strong>${escapeHtml(describeBibleRange(goal.bible, from, to))}</strong>
-      <span class="cell-sub">${row.amount}장${row.weight > 1 ? ` · 여유 ×${row.weight}` : ''}${row.isFixed ? ' · 직접' : ''}</span>`;
+      <span class="cell-sub">${formatAmount(row.amount, 'bible')}${row.weight > 1 ? ` · ${t('여유 ×{w}', { w: row.weight })}` : ''}${row.isFixed ? ` · ${t('직접')}` : ''}</span>`;
   }
   const items = basis === 'chapter'
     ? getChapterRanges(goal.book).slice(from, to).map((c) => escapeHtml(c.name))
-    : goal.lecture.titles.slice(from, to).map((t, i) => `<strong>${from + i + 1}강</strong> ${escapeHtml(t)}`);
+    : goal.lecture.titles.slice(from, to).map((title, i) => `<strong>${lectureLabel(from + i + 1)}</strong> ${escapeHtml(title)}`);
   const shown = items.slice(0, 3).map((x) => `<span class="cell-line">${x}</span>`).join('');
-  return items.length > 3 ? `${shown}<span class="cell-sub">외 ${items.length - 3}개</span>` : shown;
+  return items.length > 3 ? `${shown}<span class="cell-sub">${t('외 {n}개', { n: items.length - 3 })}</span>` : shown;
 }
 
 function monthKey(date) {
@@ -3179,8 +3425,8 @@ function renderPlanCalendar(goal, basis) {
   const firstMonth = monthKey(rows[0].date);
   const lastMonth = monthKey(rows.at(-1).date);
   if (!detailState.month || detailState.month < firstMonth || detailState.month > lastMonth) {
-    const t = monthKey(today);
-    detailState.month = t < firstMonth ? firstMonth : t > lastMonth ? lastMonth : t;
+    const tm = monthKey(today);
+    detailState.month = tm < firstMonth ? firstMonth : tm > lastMonth ? lastMonth : tm;
   }
   const month = detailState.month;
   const [y, m] = month.split('-').map(Number);
@@ -3204,9 +3450,9 @@ function renderPlanCalendar(goal, basis) {
     cells.push(`
       <div class="cal-cell ${classes}">
         <div class="cal-cell-head">
-          <span class="cal-day ${dowClass}">${d}${dayDiff === 0 ? ' <span class="today-tag">오늘</span>' : ''}</span>
+          <span class="cal-day ${dowClass}">${d}${dayDiff === 0 ? ` <span class="today-tag">${t('오늘')}</span>` : ''}</span>
           ${row.amount === 0 ? ''
-            : `<input type="checkbox" class="row-check" data-date="${date}" ${checked ? 'checked' : ''} aria-label="${date} 완료">`}
+            : `<input type="checkbox" class="row-check" data-date="${date}" ${checked ? 'checked' : ''} aria-label="${t('{date} 완료', { date })}">`}
         </div>
         <div class="cal-content">${describeCellContent(goal, basis, row)}</div>
       </div>`);
@@ -3216,12 +3462,12 @@ function renderPlanCalendar(goal, basis) {
   return `
     <div class="calendar">
       <div class="cal-nav">
-        <button type="button" class="btn btn-small" data-month="-1" ${month <= firstMonth ? 'disabled' : ''} aria-label="이전 달">◀</button>
-        <strong class="cal-title">${y}년 ${m}월</strong>
-        <button type="button" class="btn btn-small" data-month="1" ${month >= lastMonth ? 'disabled' : ''} aria-label="다음 달">▶</button>
+        <button type="button" class="btn btn-small" data-month="-1" ${month <= firstMonth ? 'disabled' : ''} aria-label="${t('이전 달')}">◀</button>
+        <strong class="cal-title">${t('{y}년 {m}월', { y, m })}</strong>
+        <button type="button" class="btn btn-small" data-month="1" ${month >= lastMonth ? 'disabled' : ''} aria-label="${t('다음 달')}">▶</button>
       </div>
       <div class="cal-grid">
-        ${WEEKDAY_ORDER.map((d) => `<div class="cal-weekday ${d === 0 ? 'is-sun' : d === 6 ? 'is-sat' : ''}">${WEEKDAYS_KO[d]}</div>`).join('')}
+        ${WEEKDAY_ORDER.map((d) => `<div class="cal-weekday ${d === 0 ? 'is-sun' : d === 6 ? 'is-sat' : ''}">${weekdayName(d)}</div>`).join('')}
         ${cells.join('')}
       </div>
     </div>
@@ -3332,7 +3578,7 @@ function bindDetailEvents(container, goal) {
       return;
     }
     if (e.target.closest('[data-action="delete"]')) {
-      if (confirm(`'${goal.title}' 목표를 삭제할까요?\n진도 기록과 계획이 모두 지워지며 되돌릴 수 없습니다.`)) {
+      if (confirm(t("'{title}' 목표를 삭제할까요?\n진도 기록과 계획이 모두 지워지며 되돌릴 수 없습니다.", { title: goal.title }))) {
         removeGoal(appData, goal.id);
         commit();
         navigate('#/');
@@ -3401,7 +3647,7 @@ function bindDetailEvents(container, goal) {
     const { min, max } = getProgressBounds(goal);
     const value = Number(input.value);
     if (input.value === '' || !Number.isInteger(value) || value < min || value > max) {
-      errorBox.textContent = `${min}~${max} 사이의 정수를 입력하세요.`;
+      errorBox.textContent = t('{min}~{max} 사이의 정수를 입력하세요.', { min, max });
       errorBox.hidden = false;
       input.focus();
       return;
@@ -3463,12 +3709,12 @@ function profileName(p) {
 }
 
 function renderAdmin(root, tab, route = {}) {
-  if (tab !== 'member' && !ADMIN_TABS.some(([t]) => t === tab)) tab = 'progress';
+  if (tab !== 'member' && !ADMIN_TABS.some(([key]) => key === tab)) tab = 'progress';
   let body;
   if (adminState.error) {
-    body = `<div class="errors">불러오지 못했습니다: ${escapeHtml(adminState.error)}</div>`;
+    body = `<div class="errors">${t('불러오지 못했습니다: {message}', { message: escapeHtml(adminState.error) })}</div>`;
   } else if (!adminState.loaded) {
-    body = '<div class="empty">불러오는 중…</div>';
+    body = `<div class="empty">${t('불러오는 중…')}</div>`;
     if (!adminState.loading) loadAdminData();
   } else if (tab === 'books') {
     body = renderAdminBooks();
@@ -3486,15 +3732,15 @@ function renderAdmin(root, tab, route = {}) {
     <div id="admin">
       <header class="page-header">
         <div>
-          <a class="back-link" href="#/">← 내 계획</a>
-          <h1>관리자</h1>
+          <a class="back-link" href="#/">← ${t('내 계획')}</a>
+          <h1>${t('관리자')}</h1>
         </div>
         <div class="header-actions">
-          <button type="button" class="btn" data-action="admin-refresh" ${adminState.loading ? 'disabled' : ''}>새로고침</button>
+          <button type="button" class="btn" data-action="admin-refresh" ${adminState.loading ? 'disabled' : ''}>${t('새로고침')}</button>
         </div>
       </header>
-      <nav class="tabs admin-tabs" aria-label="관리자 메뉴">
-        ${ADMIN_TABS.map(([t, label]) => `<a class="tab ${t === tab || (tab === 'member' && t === 'plans') ? 'is-active' : ''}" href="#/admin/${t}">${label}</a>`).join('')}
+      <nav class="tabs admin-tabs" aria-label="${t('관리자 메뉴')}">
+        ${ADMIN_TABS.map(([key, label]) => `<a class="tab ${key === tab || (tab === 'member' && key === 'plans') ? 'is-active' : ''}" href="#/admin/${key}">${t(label)}</a>`).join('')}
       </nav>
       ${body}
     </div>`;
@@ -3510,8 +3756,8 @@ function renderAdmin(root, tab, route = {}) {
 
 function renderAdminProgress() {
   const team = adminState.profiles.filter((p) => p.in_team);
-  if (!requiredBooks.length) return '<div class="empty">아직 필독서가 없습니다. <a href="#/admin/books">사역자 필독서</a>에서 추가하세요.</div>';
-  if (!team.length) return '<div class="empty">우리 팀으로 지정된 사람이 없습니다. <a href="#/admin/members">회원 관리</a>에서 지정하세요.</div>';
+  if (!requiredBooks.length) return `<div class="empty">${t('아직 필독서가 없습니다. <a href="#/admin/books">사역자 필독서</a>에서 추가하세요.')}</div>`;
+  if (!team.length) return `<div class="empty">${t('우리 팀으로 지정된 사람이 없습니다. <a href="#/admin/members">회원 관리</a>에서 지정하세요.')}</div>`;
   const today = todayStr();
 
   return requiredBooks.map((book) => {
@@ -3535,16 +3781,16 @@ function renderAdminProgress() {
               ${book.author ? `<span class="muted">${escapeHtml(book.author)}</span>` : ''}
             </div>
           </div>
-          <span class="muted">계획 세운 사람 ${planned}/${team.length}명${behind ? ` · <b class="text-danger">밀림 ${behind}명</b>` : ''}</span>
+          <span class="muted">${t('계획 세운 사람 {planned}/{total}명', { planned, total: team.length })}${behind ? ` · <b class="text-danger">${t('밀림 {n}명', { n: behind })}</b>` : ''}</span>
         </div>
         <table class="admin-table">
           <thead>
-            <tr><th>이름</th><th>기간</th><th class="num">오늘까지 권장</th><th class="num">실제 완료</th><th class="num">끝</th><th class="col-bar">진도</th><th>상태</th></tr>
+            <tr><th>${t('이름')}</th><th>${t('기간')}</th><th class="num">${t('오늘까지 권장')}</th><th class="num">${t('실제 완료')}</th><th class="num">${t('끝')}</th><th class="col-bar">${t('진도')}</th><th>${t('상태')}</th></tr>
           </thead>
           <tbody>
             ${rows.map(({ p, goal, s }) => {
               if (!goal) {
-                return `<tr class="is-empty"><td>${escapeHtml(profileName(p))}</td><td colspan="5" class="muted">아직 계획을 세우지 않았습니다</td><td><span class="badge badge-waiting">계획 없음</span></td></tr>`;
+                return `<tr class="is-empty"><td>${escapeHtml(profileName(p))}</td><td colspan="5" class="muted">${t('아직 계획을 세우지 않았습니다')}</td><td><span class="badge badge-waiting">${t('계획 없음')}</span></td></tr>`;
               }
               const targetPct = s.total ? Math.min(100, (s.target / s.total) * 100) : 0;
               const donePct = s.total ? Math.min(100, (s.done / s.total) * 100) : 0;
@@ -3565,7 +3811,7 @@ function renderAdminProgress() {
           </tbody>
         </table>
       </section>`;
-  }).join('') + '<p class="muted admin-legend">진도 막대: 초록 = 실제 진도, 검정 선 = 오늘까지 권장 · 각자 정한 기간 기준입니다.</p>';
+  }).join('') + `<p class="muted admin-legend">${t('진도 막대: 초록 = 실제 진도, 검정 선 = 오늘까지 권장 · 각자 정한 기간 기준입니다.')}</p>`;
 }
 
 /* ----- 회원 계획 (개인 목표 포함, 읽기 전용) ----- */
@@ -3579,7 +3825,7 @@ function renderAdminPlans() {
   });
   const withGoals = adminState.profiles.filter((p) => byUser.has(p.user_id));
   const withoutGoals = adminState.profiles.filter((p) => !byUser.has(p.user_id));
-  if (!withGoals.length) return '<div class="empty">아직 목표를 만든 회원이 없습니다.</div>';
+  if (!withGoals.length) return `<div class="empty">${t('아직 목표를 만든 회원이 없습니다.')}</div>`;
 
   const sections = withGoals.map((p) => {
     const items = byUser.get(p.user_id)
@@ -3589,14 +3835,14 @@ function renderAdminPlans() {
       <section class="panel admin-book">
         <div class="admin-book-head">
           <div>
-            <h2 class="section-title">${escapeHtml(profileName(p))} ${p.in_team ? '<span class="type-tag type-required">우리 팀</span>' : ''}</h2>
+            <h2 class="section-title">${escapeHtml(profileName(p))} ${p.in_team ? `<span class="type-tag type-required">${t('우리 팀')}</span>` : ''}</h2>
             <span class="muted">${escapeHtml(p.email)}</span>
           </div>
-          <span class="muted">목표 ${items.length}개 · 진행 중 ${items.filter((x) => x.s.isActive).length}개</span>
+          <span class="muted">${t('목표 {n}개 · 진행 중 {active}개', { n: items.length, active: items.filter((x) => x.s.isActive).length })}</span>
         </div>
         <table class="admin-table">
           <thead>
-            <tr><th>목표</th><th>기간</th><th class="num">오늘까지 권장</th><th class="num">실제 완료</th><th class="num">끝</th><th class="col-bar">진도</th><th>상태</th></tr>
+            <tr><th>${t('목표')}</th><th>${t('기간')}</th><th class="num">${t('오늘까지 권장')}</th><th class="num">${t('실제 완료')}</th><th class="num">${t('끝')}</th><th class="col-bar">${t('진도')}</th><th>${t('상태')}</th></tr>
           </thead>
           <tbody>
             ${items.map(({ goal, s }) => renderAdminGoalRow(p, goal, s)).join('')}
@@ -3606,9 +3852,9 @@ function renderAdminPlans() {
   }).join('');
 
   return `
-    <p class="muted admin-intro">회원들이 만든 모든 목표입니다. 목표를 누르면 날짜별 계획표를 볼 수 있습니다. (읽기 전용)</p>
+    <p class="muted admin-intro">${t('회원들이 만든 모든 목표입니다. 목표를 누르면 날짜별 계획표를 볼 수 있습니다. (읽기 전용)')}</p>
     ${sections}
-    ${withoutGoals.length ? `<p class="muted admin-legend">목표가 없는 회원: ${withoutGoals.map((p) => escapeHtml(profileName(p))).join(', ')}</p>` : ''}`;
+    ${withoutGoals.length ? `<p class="muted admin-legend">${t('목표가 없는 회원: {names}', { names: withoutGoals.map((p) => escapeHtml(profileName(p))).join(', ') })}</p>` : ''}`;
 }
 
 function renderAdminGoalRow(p, goal, s) {
@@ -3619,7 +3865,7 @@ function renderAdminGoalRow(p, goal, s) {
     <tr class="${s.isActive ? '' : 'is-finished-row'}">
       <td>
         <a class="member-link" href="#/admin/member/${escapeHtml(p.user_id)}/${escapeHtml(goal.id)}">${escapeHtml(goal.title)}</a>
-        <div class="muted small">${book ? '필독서' : TYPE_LABELS[goal.type]}${getBookAuthor(goal) ? ` · ${escapeHtml(getBookAuthor(goal))}` : ''}</div>
+        <div class="muted small">${book ? t('필독서') : typeLabel(goal.type)}${getBookAuthor(goal) ? ` · ${escapeHtml(getBookAuthor(goal))}` : ''}</div>
       </td>
       <td class="muted">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
       <td class="num">${formatPosition(goal, s.basis, s.target)}</td>
@@ -3637,7 +3883,7 @@ function renderAdminGoalRow(p, goal, s) {
 function renderAdminMemberGoal(userId, goalId) {
   const entry = adminState.goals.find((x) => x.userId === userId && x.goal.id === goalId);
   const p = adminState.profiles.find((x) => x.user_id === userId);
-  if (!entry || !p) return '<div class="empty">목표를 찾을 수 없습니다. <a href="#/admin/plans">회원 계획</a>으로 돌아가세요.</div>';
+  if (!entry || !p) return `<div class="empty">${t('목표를 찾을 수 없습니다. <a href="#/admin/plans">회원 계획</a>으로 돌아가세요.')}</div>`;
   const goal = entry.goal;
   const bases = getBases(goal);
   if (!bases.includes(adminState.viewBasis)) adminState.viewBasis = getPrimaryBasis(goal);
@@ -3646,31 +3892,31 @@ function renderAdminMemberGoal(userId, goalId) {
   const rest = getRestWeekdays(goal);
 
   return `
-    <a class="back-link" href="#/admin/plans">← 회원 계획</a>
+    <a class="back-link" href="#/admin/plans">← ${t('회원 계획')}</a>
     <div class="member-goal-head">
       ${renderCoverThumb(getCoverUrl(goal), 'lg')}
       <div>
-        <p class="muted">${escapeHtml(profileName(p))}님의 계획</p>
+        <p class="muted">${t('{name}님의 계획', { name: escapeHtml(profileName(p)) })}</p>
         <h2 class="member-goal-title">${escapeHtml(goal.title)}</h2>
-        ${getBookAuthor(goal) ? `<p class="detail-author">${escapeHtml(getBookAuthor(goal))} 지음</p>` : ''}
-        <p class="muted">${goal.startDate} ~ ${goal.dueDate} · ${formatDday(s.dday)}${rest.length ? ` · 쉬는 요일 ${WEEKDAY_ORDER.filter((d) => rest.includes(d)).map((d) => WEEKDAYS_KO[d]).join('·')}` : ''}</p>
+        ${getBookAuthor(goal) ? `<p class="detail-author">${t('{author} 지음', { author: escapeHtml(getBookAuthor(goal)) })}</p>` : ''}
+        <p class="muted">${goal.startDate} ~ ${goal.dueDate} · ${formatDday(s.dday)}${rest.length ? ` · ${t('쉬는 요일 {days}', { days: weekdayListLabel(rest) })}` : ''}</p>
       </div>
     </div>
 
     <section class="panel summary-panel">
       ${renderCompareBlock(goal, s)}
       <div class="summary-info">
-        <div><span class="info-label">현재 위치</span>${escapeHtml(describePosition(goal))}</div>
-        <div class="summary-today"><span class="info-label">오늘 할 일</span>${renderTodayAmount(goal, s)}</div>
+        <div><span class="info-label">${t('현재 위치')}</span>${escapeHtml(describePosition(goal))}</div>
+        <div class="summary-today"><span class="info-label">${t('오늘 할 일')}</span>${renderTodayAmount(goal, s)}</div>
       </div>
     </section>
 
     <section class="panel plan-panel">
       <div class="plan-head">
-        <h2 class="section-title">계획표 <span class="badge badge-waiting">읽기 전용</span></h2>
+        <h2 class="section-title">${t('계획표')} <span class="badge badge-waiting">${t('읽기 전용')}</span></h2>
         ${bases.length > 1 ? `
           <div class="tabs" role="tablist">
-            ${bases.map((b) => `<button type="button" role="tab" class="tab ${b === basis ? 'is-active' : ''}" data-action="admin-basis" data-basis="${b}">${b === 'page' ? '페이지 기준' : '챕터 기준'}</button>`).join('')}
+            ${bases.map((b) => `<button type="button" role="tab" class="tab ${b === basis ? 'is-active' : ''}" data-action="admin-basis" data-basis="${b}">${basisTabLabel(b)}</button>`).join('')}
           </div>` : ''}
       </div>
       ${renderPlanTable(goal, basis, true)}
@@ -3686,25 +3932,24 @@ function renderAdminBooks() {
 
   const editor = editing ? `
     <form id="book-form" class="panel admin-editor" novalidate>
-      <h2 class="section-title">${book ? '필독서 수정' : '필독서 추가'}</h2>
-      ${book ? `<p class="notice">저장하면 이미 계획을 세운 팀원에게 "내용 변경됨"이 표시되고,
-        각자 미리보기를 확인한 뒤 자기 계획에 반영합니다.</p>` : ''}
+      <h2 class="section-title">${book ? t('필독서 수정') : t('필독서 추가')}</h2>
+      ${book ? `<p class="notice">${t('저장하면 이미 계획을 세운 팀원에게 "내용 변경됨"이 표시되고, 각자 미리보기를 확인한 뒤 자기 계획에 반영합니다.')}</p>` : ''}
       <div class="book-form-top">
         <div class="cover-picker">
           <div class="cover-preview" id="cover-preview">${renderCoverPreview(book)}</div>
-          <label class="btn btn-small">표지 이미지 선택
+          <label class="btn btn-small">${t('표지 이미지 선택')}
             <input type="file" id="cover-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
           </label>
-          <button type="button" class="btn btn-small" data-action="cover-remove">표지 빼기</button>
-          <span class="field-hint">JPG·PNG·WEBP, 3MB 이하</span>
+          <button type="button" class="btn btn-small" data-action="cover-remove">${t('표지 빼기')}</button>
+          <span class="field-hint">${t('JPG·PNG·WEBP, 3MB 이하')}</span>
         </div>
         <div class="book-form-fields">
           <div class="field">
-            <label class="field-label" for="f-title">책 제목</label>
+            <label class="field-label" for="f-title">${t('책 제목')}</label>
             <input id="f-title" type="text" class="input input-wide" value="${escapeHtml(book ? book.title : '')}">
           </div>
           <div class="field">
-            <label class="field-label" for="f-author">저자 <span class="muted">(선택)</span></label>
+            <label class="field-label" for="f-author">${t('저자')} <span class="muted">${t('(선택)')}</span></label>
             <input id="f-author" type="text" class="input input-wide" value="${escapeHtml(book ? book.author : '')}">
           </div>
         </div>
@@ -3712,14 +3957,14 @@ function renderAdminBooks() {
       ${renderChapterEditorHtml(book ? book.lastPage : '')}
       <div id="form-errors" class="errors" hidden></div>
       <div class="form-actions">
-        <button type="button" class="btn" data-action="book-cancel">취소</button>
-        <button type="submit" class="btn btn-primary">저장</button>
+        <button type="button" class="btn" data-action="book-cancel">${t('취소')}</button>
+        <button type="submit" class="btn btn-primary">${t('저장')}</button>
       </div>
     </form>` : '';
 
   const list = requiredBooks.length ? `
     <table class="admin-table panel-table">
-      <thead><tr><th>책 제목</th><th class="num">챕터</th><th class="num">페이지</th><th class="num">계획 세운 팀원</th><th></th></tr></thead>
+      <thead><tr><th>${t('책 제목')}</th><th class="num">${t('챕터')}</th><th class="num">${t('페이지')}</th><th class="num">${t('계획 세운 팀원')}</th><th></th></tr></thead>
       <tbody>
         ${requiredBooks.map((b) => {
           const planned = team.filter((p) => adminState.goals.some((x) => x.userId === p.user_id && x.goal.requiredBookId === b.id)).length;
@@ -3731,28 +3976,28 @@ function renderAdminBooks() {
                   <div><strong>${escapeHtml(b.title)}</strong>${b.author ? `<div class="muted">${escapeHtml(b.author)}</div>` : ''}</div>
                 </div>
               </td>
-              <td class="num">${b.chapters.length}개</td>
-              <td class="num">${b.lastPage - b.chapters[0].startPage + 1}페이지</td>
-              <td class="num">${planned}/${team.length}명</td>
+              <td class="num">${t('{n}개', { n: b.chapters.length })}</td>
+              <td class="num">${formatAmount(b.lastPage - b.chapters[0].startPage + 1, 'page')}</td>
+              <td class="num">${t('{planned}/{total}명', { planned, total: team.length })}</td>
               <td class="row-actions">
                 ${(() => {
                   const mine = findGoalForBook(appData.goals, b.id);
                   return mine
-                    ? `<a class="btn btn-small" href="#/goal/${escapeHtml(mine.id)}">내 계획 보기</a>`
-                    : `<a class="btn btn-small btn-primary" href="#/new/book/${escapeHtml(b.id)}">내 계획 세우기</a>`;
+                    ? `<a class="btn btn-small" href="#/goal/${escapeHtml(mine.id)}">${t('내 계획 보기')}</a>`
+                    : `<a class="btn btn-small btn-primary" href="#/new/book/${escapeHtml(b.id)}">${t('내 계획 세우기')}</a>`;
                 })()}
-                <button type="button" class="btn btn-small" data-action="book-edit" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>수정</button>
-                <button type="button" class="btn btn-small btn-danger" data-action="book-delete" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>삭제</button>
+                <button type="button" class="btn btn-small" data-action="book-edit" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>${t('수정')}</button>
+                <button type="button" class="btn btn-small btn-danger" data-action="book-delete" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>${t('삭제')}</button>
               </td>
             </tr>`;
         }).join('')}
       </tbody>
-    </table>` : '<div class="empty">아직 필독서가 없습니다.</div>';
+    </table>` : `<div class="empty">${t('아직 필독서가 없습니다.')}</div>`;
 
   return `
     <div class="admin-toolbar">
-      <p class="muted">여기서 정한 책 정보(제목·챕터·페이지)가 우리 팀 모두에게 공유됩니다. 기간은 각자 정합니다.</p>
-      <button type="button" class="btn btn-primary" data-action="book-new" ${editing ? 'disabled' : ''}>+ 필독서 추가</button>
+      <p class="muted">${t('여기서 정한 책 정보(제목·챕터·페이지)가 우리 팀 모두에게 공유됩니다. 기간은 각자 정합니다.')}</p>
+      <button type="button" class="btn btn-primary" data-action="book-new" ${editing ? 'disabled' : ''}>${t('+ 필독서 추가')}</button>
     </div>
     ${editor}
     ${list}`;
@@ -3762,7 +4007,7 @@ function renderAdminBooks() {
 function renderCoverPreview(book) {
   const c = adminState.cover;
   const url = c ? (c.removed ? null : c.previewUrl) : (book && book.coverUrl);
-  return url ? `<img src="${escapeHtml(url)}" alt="표지 미리보기">` : '<span class="cover-empty">표지 없음</span>';
+  return url ? `<img src="${escapeHtml(url)}" alt="${t('표지 미리보기')}">` : `<span class="cover-empty">${t('표지 없음')}</span>`;
 }
 
 function resetCoverDraft() {
@@ -3777,11 +4022,11 @@ async function submitBookForm(form) {
     ...readChapterEditor(),
   };
   const errors = [];
-  if (!input.title.trim()) errors.push('책 제목을 입력하세요.');
+  if (!input.title.trim()) errors.push(t('책 제목을 입력하세요.'));
   errors.push(...validateBookStructure(input));
   const box = form.querySelector('#form-errors');
   if (errors.length) {
-    box.innerHTML = `<strong>저장할 수 없습니다</strong><ul>${errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`;
+    box.innerHTML = `<strong>${t('저장할 수 없습니다')}</strong><ul>${errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`;
     box.hidden = false;
     return;
   }
@@ -3803,7 +4048,7 @@ async function submitBookForm(form) {
     resetCoverDraft();
     render();
   } catch (err) {
-    box.innerHTML = `<strong>저장하지 못했습니다</strong><ul><li>${escapeHtml(err.message || String(err))}</li></ul>`;
+    box.innerHTML = `<strong>${t('저장하지 못했습니다')}</strong><ul><li>${escapeHtml(err.message || String(err))}</li></ul>`;
     box.hidden = false;
     form.querySelector('button[type="submit"]').disabled = false;
   }
@@ -3813,25 +4058,25 @@ async function submitBookForm(form) {
 
 function renderAdminMembers() {
   const profiles = adminState.profiles;
-  if (!profiles.length) return '<div class="empty">아직 로그인한 사람이 없습니다.</div>';
+  if (!profiles.length) return `<div class="empty">${t('아직 로그인한 사람이 없습니다.')}</div>`;
   const teamCount = profiles.filter((p) => p.in_team).length;
   return `
     <div class="admin-toolbar">
-      <p class="muted">앱에 한 번이라도 로그인한 사람들입니다. <b>우리 팀</b>으로 지정하면 사역자 필독서가 보입니다. (우리 팀 ${teamCount}명)</p>
+      <p class="muted">${t('앱에 한 번이라도 로그인한 사람들입니다. <b>우리 팀</b>으로 지정하면 사역자 필독서가 보입니다. (우리 팀 {n}명)', { n: teamCount })}</p>
     </div>
     <table class="admin-table panel-table">
-      <thead><tr><th>이름</th><th>이메일</th><th>처음 로그인</th><th>마지막 접속</th><th class="center">우리 팀</th></tr></thead>
+      <thead><tr><th>${t('이름')}</th><th>${t('이메일')}</th><th>${t('처음 로그인')}</th><th>${t('마지막 접속')}</th><th class="center">${t('우리 팀')}</th></tr></thead>
       <tbody>
         ${profiles.map((p) => `
           <tr class="${p.in_team ? 'is-team' : ''}">
-            <td><strong>${escapeHtml(p.name || '-')}</strong>${p.user_id === currentUser.id ? ' <span class="muted">(나)</span>' : ''}</td>
+            <td><strong>${escapeHtml(p.name || '-')}</strong>${p.user_id === currentUser.id ? ` <span class="muted">${t('(나)')}</span>` : ''}</td>
             <td>${escapeHtml(p.email)}</td>
             <td class="muted">${timestampToDate(p.created_at)}</td>
             <td class="muted">${timestampToDate(p.last_seen_at)}</td>
             <td class="center">
               <label class="switch">
                 <input type="checkbox" data-action="team-toggle" data-id="${escapeHtml(p.user_id)}" ${p.in_team ? 'checked' : ''}
-                  aria-label="${escapeHtml(profileName(p))} 우리 팀 지정">
+                  aria-label="${t('{name} 우리 팀 지정', { name: escapeHtml(profileName(p)) })}">
                 <span></span>
               </label>
             </td>
@@ -3872,7 +4117,7 @@ function bindAdminEvents(container, tab) {
       container.querySelector('#cover-preview').innerHTML = renderCoverPreview(null);
     } else if (action === 'book-delete') {
       const book = requiredBooks.find((b) => b.id === btn.dataset.id);
-      if (!confirm(`'${book.title}' 필독서를 삭제할까요?\n팀원들이 이미 세운 계획은 지워지지 않고 일반 목표로 남습니다.`)) return;
+      if (!confirm(t("'{title}' 필독서를 삭제할까요?\n팀원들이 이미 세운 계획은 지워지지 않고 일반 목표로 남습니다.", { title: book.title }))) return;
       btn.disabled = true;
       try {
         await adminDeleteRequiredBook(book.id);
@@ -3880,7 +4125,7 @@ function bindAdminEvents(container, tab) {
         requiredBooks = requiredBooks.filter((b) => b.id !== book.id);
         render();
       } catch (err) {
-        alert(`삭제하지 못했습니다: ${err.message}`);
+        alert(t('삭제하지 못했습니다: {message}', { message: err.message }));
         btn.disabled = false;
       }
     }
@@ -3891,7 +4136,7 @@ function bindAdminEvents(container, tab) {
       const file = e.target.files[0];
       if (!file) return;
       if (file.size > 3 * 1024 * 1024) {
-        alert('표지 이미지는 3MB 이하로 올려 주세요.');
+        alert(t('표지 이미지는 3MB 이하로 올려 주세요.'));
         e.target.value = '';
         return;
       }
@@ -3910,7 +4155,7 @@ function bindAdminEvents(container, tab) {
       if (profile.user_id === currentUser.id) account.inTeam = el.checked;
       render();
     } catch (err) {
-      alert(`변경하지 못했습니다: ${err.message}`);
+      alert(t('변경하지 못했습니다: {message}', { message: err.message }));
       el.checked = !el.checked;
       el.disabled = false;
     }
@@ -3945,24 +4190,34 @@ const EXPORT_COLORS = {
 /** 이미지용 행 내용 (HTML 없이 글자만) */
 function rowTextForExport(goal, basis, row) {
   if (row.isRestDay) return { main: restText(goal, row.date), subs: [], rest: true };
-  if (row.amount === 0) return { main: '휴식 (분량 없음)', subs: [], rest: true };
+  if (row.amount === 0) return { main: t('휴식 (분량 없음)'), subs: [], rest: true };
   const from = row.prevCumulative;
   const to = row.cumulative;
   if (basis === 'page') {
     const a = unitsToPage(goal.book, from + 1);
     const b = unitsToPage(goal.book, to);
     return {
-      main: `${a === b ? `p.${a}` : `p.${a}~${b}`}  (${row.amount}페이지)`,
+      main: `${a === b ? `p.${a}` : `p.${a}~${b}`}  (${formatAmount(row.amount, 'page')})`,
       subs: [describeChaptersForPages(goal.book, a, b)],
     };
   }
   if (basis === 'bible') return { main: describeBibleRange(goal.bible, from, to), subs: [] };
   if (basis === 'chapter') {
     const chs = getChapterRanges(goal.book).slice(from, to);
-    return { main: `${chs.length}개 챕터`, subs: chs.map((c) => `${c.name} (p.${c.startPage}~${c.endPage})`) };
+    return { main: t('{n}개 챕터', { n: chs.length }), subs: chs.map((c) => `${c.name} (p.${c.startPage}~${c.endPage})`) };
   }
   const titles = goal.lecture.titles.slice(from, to);
-  return { main: `${from + 1}${to - from > 1 ? `~${to}` : ''}강  (${row.amount}강)`, subs: titles.map((t, i) => `${from + i + 1}강 ${t}`) };
+  const range = to - from > 1 ? t('{from}~{to}강', { from: from + 1, to }) : lectureLabel(from + 1);
+  return {
+    main: `${range}  (${formatAmount(row.amount, 'lecture')})`,
+    subs: titles.map((title, i) => `${lectureLabel(from + i + 1)} ${title}`),
+  };
+}
+
+/** 좁은 칸용 짧은 분량: "11쪽" / "11p", 영어는 "3 ch" · "2 lec" */
+function compactAmount(n, basis) {
+  if (currentLang === 'en') return basis === 'page' ? `${n}p` : `${n} ${basis === 'lecture' ? 'lec' : 'ch'}`;
+  return basis === 'page' ? `${n}쪽` : formatAmount(n, basis);
 }
 
 function stripTags(html) {
@@ -4082,10 +4337,11 @@ async function drawPlanImage(goal, options) {
   let ty = y;
   if (isRequired) {
     ctx.font = font(22, 700);
-    const tw = ctx.measureText('사역자 필독서').width + 26;
+    const tagText = t('사역자 필독서');
+    const tw = ctx.measureText(tagText).width + 26;
     roundRect(ctx, tx, ty, tw, 38, 8, C.requiredSoft);
     ctx.fillStyle = C.required;
-    ctx.fillText('사역자 필독서', tx + 13, ty + 27);
+    ctx.fillText(tagText, tx + 13, ty + 27);
     ty += 52;
   }
   ctx.font = font(46, 800);
@@ -4097,14 +4353,14 @@ async function drawPlanImage(goal, options) {
   ctx.fillStyle = C.muted;
   if (getBookAuthor(goal)) {
     ty += 42;
-    ctx.fillText(fit(ctx, `${getBookAuthor(goal)} 지음`, titleW), tx, ty);
+    ctx.fillText(fit(ctx, t('{author} 지음', { author: getBookAuthor(goal) }), titleW), tx, ty);
   }
   const rest = getRestWeekdays(goal);
   ty += 38;
   ctx.fillText(fit(ctx, [
     `${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)}`,
     formatDday(s.dday),
-    rest.length ? `${WEEKDAY_ORDER.filter((d) => rest.includes(d)).map((d) => WEEKDAYS_KO[d]).join('·')} 쉼` : '',
+    rest.length ? t('{days} 쉼', { days: weekdayListLabel(rest) }) : '',
   ].filter(Boolean).join('  ·  '), titleW), tx, ty);
 
   // 현황 카드
@@ -4117,14 +4373,14 @@ async function drawPlanImage(goal, options) {
 
   ctx.font = font(24, 600);
   ctx.fillStyle = C.muted;
-  ctx.fillText('현재 진도', cx, cy);
+  ctx.fillText(t('현재 진도'), cx, cy);
   // 상태 배지
-  const badge = s.isComplete ? ['완료', C.successSoft, C.success]
-    : s.isOverdue ? ['종료 · 미완료', '#fff4e0', '#9a5b00']
-    : s.notStarted ? ['시작 전', C.neutralSoft, C.muted]
-    : s.diff < 0 ? [`${-s.diff}${getUnitLabel(s.basis)} 밀림`, C.dangerSoft, C.danger]
-    : s.diff > 0 ? [`${s.diff}${getUnitLabel(s.basis)} 앞섬`, C.successSoft, C.success]
-    : ['계획대로', C.primarySoft, C.primary];
+  const badge = s.isComplete ? [t('완료'), C.successSoft, C.success]
+    : s.isOverdue ? [t('종료 · 미완료'), '#fff4e0', '#9a5b00']
+    : s.notStarted ? [t('시작 전'), C.neutralSoft, C.muted]
+    : s.diff < 0 ? [t('{amount} 밀림', { amount: formatAmount(-s.diff, s.basis) }), C.dangerSoft, C.danger]
+    : s.diff > 0 ? [t('{amount} 앞섬', { amount: formatAmount(s.diff, s.basis) }), C.successSoft, C.success]
+    : [t('계획대로'), C.primarySoft, C.primary];
   ctx.font = font(24, 700);
   const bw = ctx.measureText(badge[0]).width + 36;
   roundRect(ctx, cx + cw - bw, cy - 32, bw, 46, 23, badge[1]);
@@ -4156,14 +4412,14 @@ async function drawPlanImage(goal, options) {
   ctx.fillRect(cx + cw * targetPct - 2, cy - 8, 4, 36);
   ctx.font = font(20);
   ctx.fillStyle = C.muted;
-  ctx.fillText('초록 = 실제 진도   |   검정 선 = 오늘까지 권장', cx, cy + 56);
+  ctx.fillText(t('초록 = 실제 진도   |   검정 선 = 오늘까지 권장'), cx, cy + 56);
 
   // 핵심 숫자 (세로 목록)
   cy += 104;
   const facts = [
-    ['하루 권장', formatAmount(s.dailyPlan, s.basis)],
-    ['오늘까지 권장', formatPosition(goal, s.basis, s.target)],
-    ['남은 공부일', s.isOverdue || s.isComplete ? '-' : `${s.remainingStudyDays}일`],
+    [t('하루 권장'), formatAmount(s.dailyPlan, s.basis)],
+    [t('오늘까지 권장'), formatPosition(goal, s.basis, s.target)],
+    [t('남은 공부일'), s.isOverdue || s.isComplete ? '-' : formatDays(s.remainingStudyDays)],
   ];
   facts.forEach(([label, value]) => {
     ctx.fillStyle = C.border;
@@ -4193,7 +4449,7 @@ async function drawPlanImage(goal, options) {
   // 바닥글
   ctx.font = font(20);
   ctx.fillStyle = C.muted;
-  ctx.fillText(`학습 진도 계획표 · ${today} (${weekdayKo(today)}) 기준`, P, H - P + 16);
+  ctx.fillText(t('학습 진도 계획표 · {date} ({weekday}) 기준', { date: today, weekday: weekdayLabel(today) }), P, H - P + 16);
 
   /* ===== 오른쪽: 날짜별 계획 ===== */
   const RX = P + LW + 40;
@@ -4203,12 +4459,12 @@ async function drawPlanImage(goal, options) {
   roundRect(ctx, RX, RY, RW, RH, 24, C.surface);
   ctx.font = font(30, 800);
   ctx.fillStyle = C.text;
-  ctx.fillText(goal.type === 'lecture' ? '매일 들을 분량' : '매일 읽을 분량', RX + 36, RY + 56);
+  ctx.fillText(goal.type === 'lecture' ? t('매일 들을 분량') : t('매일 읽을 분량'), RX + 36, RY + 56);
   ctx.font = font(21);
   ctx.fillStyle = C.muted;
   ctx.textAlign = 'right';
-  const basisLabel = { page: '페이지 기준', chapter: '챕터 기준', lecture: '강의', bible: '장 단위' }[basis];
-  ctx.fillText(`${basisLabel} · ${options.range === 'upcoming' ? '오늘부터' : '전체 기간'}   ✓ 완료`, RX + RW - 36, RY + 54);
+  const basisLabel = t({ page: '페이지 기준', chapter: '챕터 기준', lecture: '강의', bible: '장 단위' }[basis]);
+  ctx.fillText(`${basisLabel} · ${options.range === 'upcoming' ? t('오늘부터') : t('전체 기간')}   ✓ ${t('완료')}`, RX + RW - 36, RY + 54);
   ctx.textAlign = 'left';
 
   const listTop = RY + 88;
@@ -4228,10 +4484,10 @@ async function drawPlanImage(goal, options) {
     const col = Math.floor(i / perCol);
     const rx = RX + 36 + col * (colW + colGap);
     const ry = listTop + (i - col * perCol) * rowH;
-    const t = rowTextForExport(goal, basis, row);
+    const txt = rowTextForExport(goal, basis, row);
     const dayDiff = diffDays(today, row.date);
-    const checked = !t.rest && done >= row.cumulative;
-    const behind = dayDiff < 0 && !checked && !t.rest;
+    const checked = !txt.rest && done >= row.cumulative;
+    const behind = dayDiff < 0 && !checked && !txt.rest;
 
     if (dayDiff === 0) roundRect(ctx, rx - 10, ry + 3, colW + 20, rowH - 6, 10, C.primarySoft);
     else if (behind) roundRect(ctx, rx - 10, ry + 3, colW + 20, rowH - 6, 10, C.dangerSoft);
@@ -4245,35 +4501,36 @@ async function drawPlanImage(goal, options) {
     ctx.fillText(`${d.getMonth() + 1}/${d.getDate()}`, rx, base);
     ctx.font = font(fs - 2, 600);
     ctx.fillStyle = dow === 0 ? C.danger : dow === 6 ? C.primary : C.muted;
-    ctx.fillText(WEEKDAYS_KO[dow], rx + fs * 3, base);
+    ctx.fillText(weekdayName(dow), rx + fs * 3, base);
 
-    const rangeX = rx + fs * 4.3;
+    const en = currentLang === 'en';
+    const rangeX = rx + fs * (en ? 5.2 : 4.3); // 영어 요일(Wed)은 한 글자보다 넓다
     const checkW = fs * 1.4;
-    const compact = cols > 1; // 여러 칸이면 분량을 짧게 (11쪽)
-    const amountW = compact ? fs * 3.2 : fs * 4.6;
+    const compact = cols > 1; // 여러 칸이면 분량을 짧게 (11쪽 / 11p)
+    const amountW = compact ? fs * (en ? 3.6 : 3.2) : fs * (en ? 6 : 4.6);
     const rangeMaxW = colW - (rangeX - rx) - amountW - checkW;
-    if (t.rest) {
+    if (txt.rest) {
       ctx.font = font(fs - 2);
       ctx.fillStyle = C.muted;
-      ctx.fillText(t.main, rangeX, base);
+      ctx.fillText(fit(ctx, txt.main, colW - (rangeX - rx) - checkW), rangeX, base);
     } else {
       const range = basis === 'chapter'
         ? getChapterRanges(goal.book).slice(row.prevCumulative, row.cumulative).map((c) => c.name).join(', ')
-        : t.main.replace(/\s*\(.*\)$/, '');
+        : txt.main.replace(/\s*\(.*\)$/, '');
       ctx.font = font(fs, 700);
       ctx.fillStyle = C.text;
       const rangeText = fit(ctx, range, basis === 'page' && cols === 1 ? Math.min(rangeMaxW, fs * 8) : rangeMaxW);
       ctx.fillText(rangeText, rangeX, base);
-      if (cols === 1 && basis === 'page' && t.subs[0]) {
+      if (cols === 1 && basis === 'page' && txt.subs[0]) {
         const subX = rangeX + ctx.measureText(rangeText).width + 18;
         ctx.font = font(fs - 3);
         ctx.fillStyle = C.muted;
-        ctx.fillText(fit(ctx, t.subs[0], rangeX + rangeMaxW - subX), subX, base);
+        ctx.fillText(fit(ctx, txt.subs[0], rangeX + rangeMaxW - subX), subX, base);
       }
       ctx.textAlign = 'right';
       ctx.font = font(fs - 2, 700);
       ctx.fillStyle = C.text;
-      ctx.fillText(compact && basis === 'page' ? `${row.amount}쪽` : formatAmount(row.amount, basis), rx + colW - checkW, base);
+      ctx.fillText(compact ? compactAmount(row.amount, basis) : formatAmount(row.amount, basis), rx + colW - checkW, base);
       ctx.textAlign = 'left';
     }
     if (checked) {
@@ -4293,9 +4550,9 @@ async function drawPlanImage(goal, options) {
 
 const exportState = { goal: null, options: null, canvas: null };
 
-async function openExportDialog(goal) {
+async function openExportDialog(goal, options = null) {
   exportState.goal = goal;
-  exportState.options = { basis: detailState.basis, range: 'all' };
+  exportState.options = options || { basis: detailState.basis, range: 'all' };
   let dialog = document.getElementById('export-dialog');
   if (!dialog) {
     dialog = document.createElement('div');
@@ -4310,24 +4567,24 @@ async function openExportDialog(goal) {
   dialog.innerHTML = `
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="export-title">
       <div class="modal-head">
-        <h2 id="export-title" class="section-title">이미지로 내보내기</h2>
-        <button type="button" class="btn-icon" data-action="export-close" aria-label="닫기">×</button>
+        <h2 id="export-title" class="section-title">${t('이미지로 내보내기')}</h2>
+        <button type="button" class="btn-icon" data-action="export-close" aria-label="${t('닫기')}">×</button>
       </div>
       <div class="export-options">
         ${bases.length > 1 ? `
           <div class="segmented">
-            ${bases.map((b) => `<label><input type="radio" name="export-basis" value="${b}" ${b === exportState.options.basis ? 'checked' : ''}> ${b === 'page' ? '페이지 기준' : '챕터 기준'}</label>`).join('')}
+            ${bases.map((b) => `<label><input type="radio" name="export-basis" value="${b}" ${b === exportState.options.basis ? 'checked' : ''}> ${basisTabLabel(b)}</label>`).join('')}
           </div>` : ''}
         <div class="segmented">
-          <label><input type="radio" name="export-range" value="all" checked> 전체 기간</label>
-          <label><input type="radio" name="export-range" value="upcoming"> 오늘부터</label>
+          <label><input type="radio" name="export-range" value="all" ${exportState.options.range === 'all' ? 'checked' : ''}> ${t('전체 기간')}</label>
+          <label><input type="radio" name="export-range" value="upcoming" ${exportState.options.range === 'upcoming' ? 'checked' : ''}> ${t('오늘부터')}</label>
         </div>
       </div>
-      <div class="export-preview" id="export-preview"><span class="muted">그리는 중…</span></div>
+      <div class="export-preview" id="export-preview"><span class="muted">${t('그리는 중…')}</span></div>
       <div class="modal-actions">
         <span id="export-status" class="muted"></span>
-        <button type="button" class="btn" data-action="export-copy">이미지 복사</button>
-        <button type="button" class="btn btn-primary" data-action="export-download">PNG 저장</button>
+        <button type="button" class="btn" data-action="export-copy">${t('이미지 복사')}</button>
+        <button type="button" class="btn btn-primary" data-action="export-download">${t('PNG 저장')}</button>
       </div>
     </div>`;
   dialog.hidden = false;
@@ -4341,7 +4598,7 @@ async function redrawExport() {
   const box = document.getElementById('export-preview');
   box.innerHTML = '';
   const img = document.createElement('img');
-  img.alt = '내보낼 이미지 미리보기';
+  img.alt = t('내보낼 이미지 미리보기');
   img.src = canvas.toDataURL('image/png');
   box.appendChild(img);
 }
@@ -4354,8 +4611,8 @@ function closeExportDialog() {
 }
 
 function exportFileName() {
-  const safe = exportState.goal.title.replace(/[\\/:*?"<>|]/g, '').trim() || '계획표';
-  return `${safe}-계획표-${todayStr()}.png`;
+  const safe = exportState.goal.title.replace(/[\\/:*?"<>|]/g, '').trim() || t('계획표');
+  return t('{title}-계획표-{date}.png', { title: safe, date: todayStr() });
 }
 
 function canvasToBlob(canvas) {
@@ -4377,16 +4634,16 @@ async function onExportDialogClick(e) {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    status.textContent = '저장했습니다.';
+    status.textContent = t('저장했습니다.');
   }
   if (action === 'export-copy') {
     try {
       const blob = await canvasToBlob(exportState.canvas);
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      status.textContent = '복사했습니다. 카톡 등에 붙여넣기 하세요.';
+      status.textContent = t('복사했습니다. 카톡 등에 붙여넣기 하세요.');
     } catch (err) {
       console.warn('[export] 복사 실패:', err);
-      status.textContent = '이 브라우저에서는 복사할 수 없습니다. PNG 저장을 이용하세요.';
+      status.textContent = t('이 브라우저에서는 복사할 수 없습니다. PNG 저장을 이용하세요.');
     }
   }
 }
@@ -4398,6 +4655,406 @@ async function onExportDialogChange(e) {
 }
 
 /* =========================================================================
+ * 13. 영어 번역 — 키는 한국어 원문 (t() 참고)
+ *     값이 함수면 매개변수로 문장을 만든다 (단수/복수 등).
+ * ========================================================================= */
+
+const EN = {
+  // 공통 · 상단 바 · 로그인
+  '학습 진도 계획표': 'Study Planner',
+  '언어': 'Language',
+  '저장 중…': 'Saving…',
+  '저장됨': 'Saved',
+  '저장 실패': 'Save failed',
+  '다시 시도': 'Retry',
+  '관리자': 'Admin',
+  '로그아웃': 'Log out',
+  '책·강의의 마감일까지 매일 할 분량을 계획하고 진도를 기록합니다.': 'Plan how much to do each day to finish your books and lectures by the due date, and track your progress.',
+  '구글 계정으로 로그인하면 어느 기기에서든 같은 계획을 볼 수 있습니다.': 'Sign in with your Google account to see the same plans on any device.',
+  '파일을 직접 연 상태에서는 로그인할 수 없습니다. 배포된 인터넷 주소(https://…)로 열어 주세요.': "You can't sign in when the file is opened directly. Please open the app from its web address (https://…).",
+  'Google 계정으로 로그인': 'Sign in with Google',
+  '로그인을 시작하지 못했습니다: {message}': 'Could not start sign-in: {message}',
+  '불러오는 중…': 'Loading…',
+  '계정에 저장된 목표를 불러오고 있습니다.': 'Loading the goals saved in your account.',
+  '불러오지 못했습니다': 'Could not load',
+  '불러오지 못했습니다: {message}': 'Could not load: {message}',
+  '이 브라우저에 로그인 전에 만든 목표 {n}개가 있습니다.\n계정으로 옮길까요?\n\n(취소를 누르면 옮기지 않고, 다시 묻지 않습니다. 브라우저의 데이터는 지워지지 않습니다.)':
+    (p) => `This browser has ${plural(p.n, 'goal')} created before you signed in.\nMove them to your account?\n\n(If you press Cancel, they won't be moved and you won't be asked again. The data in this browser won't be deleted.)`,
+  '연결할 수 없습니다': 'Cannot connect',
+  '로그인 기능을 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 새로고침해 주세요.': "Couldn't load sign-in. Check your internet connection and refresh the page.",
+  '아직 저장 중입니다. 그래도 로그아웃할까요?': 'Still saving. Log out anyway?',
+
+  // 종류 · 단위 · 날짜
+  '책': 'Book',
+  '강의': 'Lecture',
+  '성경 통독': 'Bible Reading',
+  '{n}강': 'Lecture {n}',
+  '{from}~{to}강': 'Lectures {from}–{to}',
+  '{n}일': (p) => plural(p.n, 'day'),
+  '{from}~{to}': '{from}–{to}',
+  '{y}년 {m}월': (p) => `${MONTHS_EN[p.m - 1]} ${p.y}`,
+  '{name} 일부': '{name} (part)',
+  '{author} 지음': 'by {author}',
+
+  // 성경
+  '{book} {n}장': '{book} {n}',
+  '{book} {from}~{to}장': '{book} {from}–{to}',
+  '{book1} {ch1}장 ~ {book2} {ch2}장': '{book1} {ch1} – {book2} {ch2}',
+  '성경 전체': 'Whole Bible',
+  '구약': 'Old Testament',
+  '신약': 'New Testament',
+  '모세오경': 'Pentateuch',
+  '역사서': 'History',
+  '시가서': 'Poetry & Wisdom',
+  '선지서': 'Prophets',
+  '복음서': 'Gospels',
+  '서신서': 'Epistles',
+  '성경 통독 · {range}': 'Bible Reading · {range}',
+  '{books}권 · {chapters}장': (p) => `${plural(p.books, 'book')} · ${plural(p.chapters, 'chapter')}`,
+  '{book}은(는) 1~{n}장입니다.': (p) => (p.n === 1 ? `${p.book} has only 1 chapter.` : `${p.book} has chapters 1–${p.n}.`),
+
+  // 쉬는 날 · 여유 있는 날
+  '쉬는 날': 'Rest day',
+  '쉬는 날 · {label}': 'Rest day · {label}',
+  '쉬는 날||label': 'Rest days',
+  '쉬는 요일': 'Rest weekdays',
+  '쉬는 요일 {days}': 'Rest: {days}',
+  '{days} 쉼': 'Rest: {days}',
+  '여유 있는 날': 'Extra days',
+  '여유 {n}일': (p) => plural(p.n, 'extra day'),
+  '여유 ×{w}': 'Extra ×{w}',
+  '직접': 'Manual',
+  '휴식': 'Break',
+  '휴식(분량 없음)': 'Break (nothing scheduled)',
+  '휴식 (분량 없음)': 'Break (nothing scheduled)',
+
+  // 검증 · 오류
+  '이름을 입력하세요.': 'Enter a name.',
+  '시작일이 올바르지 않습니다.': 'The start date is invalid.',
+  '마감일이 올바르지 않습니다.': 'The due date is invalid.',
+  '쉬는 요일을 모두 선택할 수는 없습니다.': "You can't make every weekday a rest day.",
+  '마감일은 시작일과 같거나 뒤여야 합니다.': 'The due date must be on or after the start date.',
+  '기간 안에 공부하는 날이 없습니다. 기간이나 쉬는 요일을 바꾸세요.': 'There are no study days in this period. Change the dates or rest weekdays.',
+  '마지막 페이지를 1 이상의 정수로 입력하세요.': 'Enter the last page as a whole number (1 or more).',
+  '챕터를 한 개 이상 입력하세요.': 'Enter at least one chapter.',
+  '{n}번째 챕터': 'Chapter {n}',
+  '시작 페이지를 1 이상의 정수로 입력하세요.': 'Enter the start page as a whole number (1 or more).',
+  '시작 페이지가 앞 챕터보다 커야 합니다 (오름차순).': "The start page must be greater than the previous chapter's (ascending order).",
+  '시작 페이지가 마지막 페이지({last})보다 큽니다.': 'The start page is greater than the last page ({last}).',
+  '통독 범위를 선택하세요.': 'Choose a reading range.',
+  '통독 범위의 시작 권이 끝 권보다 뒤에 있습니다.': 'The first book of the range comes after the last book.',
+  '강의 제목을 한 줄 이상 입력하세요.': 'Enter at least one lecture title.',
+  '진행 중인 목표는 마감일을 오늘 이후로 정해야 합니다.': 'For a goal in progress, the due date must be today or later.',
+  '오늘부터 마감일까지 공부하는 날이 없습니다. 마감일이나 쉬는 요일을 바꾸세요.': 'There are no study days from today to the due date. Change the due date or rest weekdays.',
+  '이미 완료한 목표입니다.': 'This goal is already complete.',
+  '마감일이 지났습니다. 마감일을 변경해 주세요.': 'The due date has passed. Please change the due date.',
+  '아직 시작 전이라 재분배할 필요가 없습니다.': "This goal hasn't started yet, so there's nothing to redistribute.",
+  '오늘부터 마감일까지 공부하는 날이 없습니다. 마감일을 변경해 주세요.': 'There are no study days from today to the due date. Please change the due date.',
+  '{date}: 0 이상의 정수를 입력하세요.': '{date}: Enter a whole number (0 or more).',
+  '직접 정한 분량의 합({sum})이 이 계획의 전체 분량({total})보다 많습니다.': "The manual amounts add up to {sum}, which is more than this plan's total ({total}).",
+  '모든 날을 직접 정했다면 합이 {total}이어야 합니다. (지금 {sum})': 'If you set every day manually, they must add up to {total}. (Currently {sum})',
+  '{min}~{max} 사이의 정수를 입력하세요.': 'Enter a whole number between {min} and {max}.',
+  '책 제목을 입력하세요.': 'Enter a book title.',
+  '저장할 수 없습니다': "Can't save",
+  '저장하지 못했습니다': 'Could not save',
+
+  // 백업 (JSON)
+  '올바른 데이터 형식이 아닙니다.': 'The data format is not valid.',
+  '이 앱보다 새로운 버전({version})의 데이터입니다.': 'This data is from a newer version ({version}) of the app.',
+  '학습계획표-백업-{date}.json': 'study-planner-backup-{date}.json',
+  'JSON 파일을 읽을 수 없습니다. 파일이 손상되었거나 JSON 형식이 아닙니다.': "Can't read the JSON file. It may be damaged or not in JSON format.",
+  '같은 id를 가진 목표가 여러 개 있습니다.': 'Several goals have the same id.',
+  '{n}번째 목표': 'Goal {n}',
+  '형식이 올바르지 않습니다.': 'Invalid format.',
+  'id 또는 이름이 올바르지 않습니다.': 'Invalid id or name.',
+  '종류(type)가 올바르지 않습니다.': 'Invalid type.',
+  '날짜가 올바르지 않습니다.': 'Invalid dates.',
+  '저자 정보가 올바르지 않습니다.': 'Invalid author.',
+  '필독서 연결 정보가 올바르지 않습니다.': 'Invalid required-book link.',
+  '여유 있는 날 정보가 올바르지 않습니다.': 'Invalid extra days.',
+  '쉬는 날 정보가 올바르지 않습니다.': 'Invalid rest days.',
+  '쉬는 요일 정보가 올바르지 않습니다.': 'Invalid rest weekdays.',
+  '챕터 정보가 올바르지 않습니다.': 'Invalid chapters.',
+  '통독 범위가 올바르지 않습니다.': 'Invalid reading range.',
+  '강의 목록이 올바르지 않습니다.': 'Invalid lecture list.',
+  '진도 정보가 올바르지 않습니다.': 'Invalid progress data.',
+  '계획 정보가 올바르지 않습니다.': 'Invalid plan data.',
+  '모든 목표와 진도 기록을 JSON 파일로 저장합니다': 'Save all goals and progress to a JSON file',
+  'JSON 내보내기': 'Export JSON',
+  '백업한 JSON 파일로 전체 데이터를 바꿉니다': 'Replace all data with a backed-up JSON file',
+  'JSON 불러오기': 'Import JSON',
+  '파일을 읽지 못했습니다.': 'Could not read the file.',
+  '불러올 수 없습니다.\n\n{message}': "Can't import.\n\n{message}",
+  "'{file}'에서 목표 {n}개를 불러옵니다.\n\n지금 있는 목표 {current}개는 모두 지워지고 파일 내용으로 바뀝니다.\n계속할까요? (필요하면 먼저 \"JSON 내보내기\"로 백업하세요)":
+    (p) => `Import ${plural(p.n, 'goal')} from '${p.file}'.\n\nAll ${plural(p.current, 'current goal')} will be deleted and replaced with the file's contents.\nContinue? (If needed, back up first with "Export JSON".)`,
+
+  // 대시보드 · 카드
+  '+ 새 목표 추가': '+ New goal',
+  '진행 중': 'In progress',
+  '진행 중인 목표가 없습니다. <a href="#/new">새 목표를 추가</a>해 보세요.': 'No goals in progress. <a href="#/new">Add a new goal</a> to get started.',
+  '완료 / 종료': 'Completed / Ended',
+  '필독서': 'Required',
+  '사역자 필독서': 'Required Reading',
+  '계획 없음': 'No plan',
+  '계획 세우기': 'Make a plan',
+  '{pages}페이지 · {n}개 챕터': (p) => `${plural(p.pages, 'page')} · ${plural(p.n, 'chapter')}`,
+  '내용 변경됨': 'Updated',
+  '마감 {date}': 'Due {date}',
+  '오늘 할 분량': "Today's amount",
+  '완료': 'Done',
+  '종료 · 미완료': 'Ended · Incomplete',
+  '시작 전': 'Not started',
+  '{amount} 밀림': '{amount} behind',
+  '{amount} 앞섬': '{amount} ahead',
+  '계획대로': 'On track',
+  '모두 완료했습니다': 'All done',
+  '마감일이 지났습니다': 'The due date has passed',
+  '{date} 시작': 'Starts {date}',
+  '오늘은 {rest}': 'Today: {rest}',
+
+  // 목표 추가 · 수정
+  '목표 상세': 'Goal details',
+  '대시보드': 'Dashboard',
+  '목표 수정': 'Edit goal',
+  '필독서 계획 세우기': 'Plan required reading',
+  '새 목표 추가': 'New goal',
+  '사역자 필독서입니다. 책 제목과 챕터는 관리자가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.':
+    'This is required reading. The admin sets the book title and chapters; here you only choose the dates and rest days.',
+  '진행 중인 목표입니다. 날짜·쉬는 요일·챕터·강의 목록을 바꾸면 원래 계획은 보관하고, 오늘부터 마감일까지 남은 분량을 다시 나눕니다. 저장하면 새 계획을 먼저 미리보기로 보여드립니다.':
+    "This goal is in progress. If you change the dates, rest days, chapters or lecture list, the original plan is kept and the remaining amount is redistributed from today to the due date. When you save, you'll see a preview of the new plan first.",
+  '종류': 'Type',
+  '시작일': 'Start date',
+  '마감일': 'Due date',
+  '기간': 'Period',
+  '마감일 빠르게 정하기 (시작일부터)': 'Quick due date (from the start date)',
+  '시작일부터 {w}주 뒤를 마감일로 정합니다': (p) => `Set the due date ${plural(p.w, 'week')} after the start date`,
+  '{w}주 동안': (p) => plural(p.w, 'week'),
+  '(선택한 요일에는 분량을 배정하지 않습니다)': '(nothing is scheduled on these weekdays)',
+  '(행사·일정 등으로 빠지는 특정 날짜)': "(specific dates you'll miss, e.g. for events)",
+  '쉬는 날짜': 'Rest date',
+  '메모 (예: 수련회)': 'Note (e.g. retreat)',
+  '+ 추가': '+ Add',
+  '(그날은 평소보다 많이 배정)': '(more than usual is scheduled on these days)',
+  '여유 있는 날짜': 'Extra date',
+  '분량 배수': 'Amount multiplier',
+  '평소의 {w}배': '{w}× usual',
+  '{date} 쉬는 날 삭제': 'Remove rest day {date}',
+  '{date} 여유 있는 날 삭제': 'Remove extra day {date}',
+  '기간 밖이라 계획에 영향 없음': 'Outside the period, so it has no effect on the plan',
+  '쉬는 날과 겹쳐서 적용되지 않음': 'Overlaps a rest day, so it is not applied',
+  '저자': 'Author',
+  '(선택)': '(optional)',
+  '강의 제목 목록': 'Lecture titles',
+  '(한 줄에 하나, 빈 줄은 무시)': '(one per line; blank lines are ignored)',
+  '{n}개 강의': (p) => plural(p.n, 'lecture'),
+  '통독 범위': 'Reading range',
+  '부터': 'to',
+  '까지': '',
+  '시작 권이 끝 권보다 뒤에 있습니다': 'The first book comes after the last book',
+  '책 제목': 'Book title',
+  '강의 이름': 'Lecture name',
+  '통독 이름': 'Reading plan name',
+  '마감일이 시작일보다 앞입니다': 'The due date is before the start date',
+  '{days}일 중 공부하는 날 {study}일': (p) => `${plural(p.study, 'study day')} out of ${plural(p.days, 'day')}`,
+  '공부하는 날 하루 약 <b>{amount}</b>': 'About <b>{amount}</b> per study day',
+  '취소': 'Cancel',
+  '저장': 'Save',
+  '목표 추가': 'Add goal',
+  '챕터 목록': 'Chapters',
+  '챕터 이름': 'Chapter name',
+  '시작 페이지': 'Start page',
+  '끝 페이지': 'End page',
+  '+ 챕터 추가': '+ Add chapter',
+  '마지막 페이지': 'Last page',
+  '합계': 'Total',
+  '끌어서 순서 바꾸기': 'Drag to reorder',
+  '예: 1장 도입': 'e.g. Ch. 1 Introduction',
+  '이 위에 챕터 추가': 'Add a chapter above',
+  '행 삭제': 'Delete row',
+
+  // 목표 상세
+  '수정': 'Edit',
+  '삭제': 'Delete',
+  '계획 기준': 'Plan basis',
+  '페이지 기준': 'By page',
+  '챕터 기준': 'By chapter',
+  '장 단위': 'By chapter',
+  '계획표': 'Plan',
+  '날짜별 분량을 직접 정합니다': 'Set the amount for each date yourself',
+  '분량 직접 조정': 'Adjust amounts',
+  '이미지로 내보내기': 'Export as image',
+  '보기 방식': 'View',
+  '목록': 'List',
+  '달력': 'Calendar',
+  '끝': 'End',
+  '전체': 'Total',
+  '모두 완료했습니다. 수고하셨어요!': 'All done. Great work!',
+  '마감일이 지났습니다. 남은 <b>{amount}</b>{josa} <b>마감일 변경</b>으로 다시 계획할 수 있어요.':
+    'The due date has passed. You can re-plan the remaining <b>{amount}</b> with <b>Change due date</b>.',
+  '{date}에 시작합니다. 공부하는 날마다 <b>하루 {amount}</b>씩 하면 됩니다.': 'Starts on {date}. Just do <b>{amount} a day</b> on each study day.',
+  '마감일까지 공부하는 날이 남아 있지 않습니다. 남은 <b>{amount}</b>{josa} 하려면 마감일을 변경해 주세요.':
+    'There are no study days left before the due date. Change the due date to finish the remaining <b>{amount}</b>.',
+  '계획보다 <b>{amount} 밀렸습니다.</b> 남은 공부일 {days}일 동안 <b>하루 {need}</b>씩 하면 기한을 맞출 수 있어요.':
+    (p) => `You're <b>${p.amount} behind plan.</b> Do <b>${p.need} a day</b> for the ${p.days === 1 ? 'remaining study day' : `remaining ${p.days} study days`} to finish on time.`,
+  '계획보다 <b>{amount} 앞서 있어요.</b> 남은 공부일 {days}일 동안 <b>하루 {need}</b>씩이면 충분해요.':
+    (p) => `You're <b>${p.amount} ahead of plan.</b> <b>${p.need} a day</b> for the ${p.days === 1 ? 'remaining study day' : `remaining ${p.days} study days`} is enough.`,
+  '오늘은 쉬는 날이에요{label}. 계획대로 진행 중입니다.': "Today is a rest day{label}. You're on track.",
+  '오늘 분량을 마쳤어요. 계획대로 진행 중입니다.': "You've finished today's amount. You're on track.",
+  '계획대로 진행 중이에요. 오늘 <b>{amount}</b> 남았어요.': "You're on track. <b>{amount}</b> left for today.",
+  '관리자가 이 필독서의 책 정보(제목·챕터·페이지)를 바꿨습니다. 내 계획에 반영하려면 미리보기를 확인하세요.':
+    'The admin changed this book (title, chapters or pages). Check the preview to apply the changes to your plan.',
+  '반영 미리보기': 'Preview changes',
+  '현재 위치': 'Current position',
+  '오늘 할 일': 'Today',
+  '마지막으로 읽은 페이지': 'Last page read',
+  '완료한 강의 수': 'Lectures completed',
+  '(0~{max}강)': '(0–{max})',
+  '진도 기록': 'Log progress',
+  '오늘부터 마감일까지 남은 분량을 다시 균등하게 나눕니다': 'Spread the remaining amount evenly again from today to the due date',
+  '재분배': 'Redistribute',
+  '마감일 변경': 'Change due date',
+  '또는': 'or',
+  '완료한 챕터': 'last chapter finished',
+  '없음': 'None',
+  '마지막으로 읽은 곳': 'Last read',
+  '아직 안 읽음': 'Not yet',
+  '장': 'Chapter',
+  '장까지': '',
+  '아직 읽지 않음': 'Not started yet',
+  '아직 듣지 않음': 'Not started yet',
+  'p.{page}까지 읽음': 'Read through p.{page}',
+  '완료 챕터 {done}/{total}': 'Chapters done {done}/{total}',
+  '{pos}까지 읽음': 'Read through {pos}',
+  '{n}강까지 완료': (p) => `${plural(p.n, 'lecture')} completed`,
+  '계획 대비 현황': 'Progress vs. plan',
+  '하루 권장': 'Daily target',
+  '오늘까지 권장': 'Target by today',
+  '실제 완료': 'Actually done',
+  '실제 진도 {done}%, 오늘까지 권장 {target}%': 'Actual progress {done}%, target by today {target}%',
+  '초록 = 실제 진도 {n}%': 'Green = actual progress {n}%',
+  '검정 선 = 오늘까지 권장 {n}%': 'Black line = target by today {n}%',
+
+  // 미리보기 · 계획표
+  '이름': 'Name',
+  '마감일({from} → {to})': 'Due date ({from} → {to})',
+  '챕터·페이지': 'Chapters/pages',
+  '통독 범위({range})': 'Reading range ({range})',
+  '강의 목록({from}개 → {to}개)': 'Lecture list ({from} → {to})',
+  '새 마감일을 고르면 바뀐 계획을 여기에 보여드립니다.': 'Pick a new due date to see the updated plan here.',
+  '재분배 미리보기': 'Redistribution preview',
+  '마감일 변경 미리보기': 'Due date change preview',
+  '수정 내용 미리보기': 'Edit preview',
+  '적용 전': 'Not applied',
+  '새 마감일': 'New due date',
+  '현재 마감일 {date}': 'Current due date {date}',
+  '수정으로 돌아가기': 'Back to edit',
+  '적용': 'Apply',
+  '바뀌는 항목: {items}': 'Changes: {items}',
+  '마감일 {from} → <b>{to}</b>': 'Due date {from} → <b>{to}</b>',
+  '남은 <b>{amount}</b>{josa} {from}부터 {to}까지 공부하는 날 <b>{days}일</b>에 나눕니다.':
+    (p) => `The remaining <b>${p.amount}</b> will be split over <b>${plural(p.days, 'study day')}</b> from ${p.from} to ${p.to}.`,
+  '하루 <b>{range}</b> <span class="muted">(지금 계획: 하루 평균 {old})</span>': '<b>{range}</b> a day <span class="muted">(current plan: {old} a day on average)</span>',
+  '아직 시작 전이라 원래 계획을 새로 만듭니다.': "It hasn't started yet, so the original plan will be recreated.",
+  '원래 계획은 그대로 보관되어 계획표에서 비교할 수 있습니다.': 'The original plan is kept, so you can compare it in the plan table.',
+  '오늘': 'Today',
+  '날짜': 'Date',
+  '요일': 'Day',
+  '들을 강의': 'Lectures',
+  '읽을 내용': 'Reading',
+  '분량': 'Amount',
+  '새 누적 목표': 'New cumulative target',
+  '지금 계획 누적': 'Current plan cumulative',
+  '누적 목표': 'Cumulative target',
+  '{date} 분량': 'Amount for {date}',
+  '{date} 완료': 'Mark {date} done',
+  '자동으로 되돌리기': 'Reset to automatic',
+  '오늘부터 날짜별 <b>분량</b> 칸의 숫자를 바꾸면, 나머지 날에 남은 분량이 자동으로 다시 나뉩니다.':
+    'Change the numbers in the <b>Amount</b> column from today on, and the rest is automatically redistributed over the other days.',
+  '직접 정한 날은 <span class="amount-tag tag-fixed">직접</span>으로 표시되고, ↺를 누르면 자동으로 돌아갑니다. 지난 날은 바뀌지 않습니다.':
+    "Days you set are marked <span class=\"amount-tag tag-fixed\">Manual</span>; press ↺ to make them automatic again. Past days don't change.",
+  '외 {n}개': '+{n} more',
+  '이전 달': 'Previous month',
+  '다음 달': 'Next month',
+  "'{title}' 목표를 삭제할까요?\n진도 기록과 계획이 모두 지워지며 되돌릴 수 없습니다.": "Delete the goal '{title}'?\nAll progress and plans will be erased. This can't be undone.",
+
+  // 관리자
+  '내 계획': 'My plans',
+  '새로고침': 'Refresh',
+  '관리자 메뉴': 'Admin menu',
+  '진도 현황': 'Progress',
+  '회원 계획': 'Member plans',
+  '회원 관리': 'Members',
+  '아직 필독서가 없습니다. <a href="#/admin/books">사역자 필독서</a>에서 추가하세요.': 'No required books yet. Add them in <a href="#/admin/books">Required Reading</a>.',
+  '우리 팀으로 지정된 사람이 없습니다. <a href="#/admin/members">회원 관리</a>에서 지정하세요.': 'No one is on the team yet. Add people in <a href="#/admin/members">Members</a>.',
+  '계획 세운 사람 {planned}/{total}명': 'Planned: {planned}/{total}',
+  '밀림 {n}명': '{n} behind',
+  '진도': 'Progress',
+  '상태': 'Status',
+  '아직 계획을 세우지 않았습니다': 'No plan yet',
+  '진도 막대: 초록 = 실제 진도, 검정 선 = 오늘까지 권장 · 각자 정한 기간 기준입니다.': "Progress bar: green = actual progress, black line = target by today · Based on each person's own period.",
+  '아직 목표를 만든 회원이 없습니다.': 'No members have created goals yet.',
+  '우리 팀': 'Team',
+  '목표 {n}개 · 진행 중 {active}개': (p) => `${plural(p.n, 'goal')} · ${p.active} in progress`,
+  '목표': 'Goal',
+  '회원들이 만든 모든 목표입니다. 목표를 누르면 날짜별 계획표를 볼 수 있습니다. (읽기 전용)': 'All goals created by members. Click a goal to see its daily plan. (Read-only)',
+  '목표가 없는 회원: {names}': 'Members without goals: {names}',
+  '목표를 찾을 수 없습니다. <a href="#/admin/plans">회원 계획</a>으로 돌아가세요.': 'Goal not found. Go back to <a href="#/admin/plans">Member plans</a>.',
+  '{name}님의 계획': "{name}'s plan",
+  '읽기 전용': 'Read-only',
+  '필독서 수정': 'Edit required book',
+  '필독서 추가': 'Add required book',
+  '저장하면 이미 계획을 세운 팀원에게 "내용 변경됨"이 표시되고, 각자 미리보기를 확인한 뒤 자기 계획에 반영합니다.':
+    'When you save, team members who already have a plan will see "Updated" and can apply the changes to their own plan after checking a preview.',
+  '표지 이미지 선택': 'Choose cover image',
+  '표지 빼기': 'Remove cover',
+  'JPG·PNG·WEBP, 3MB 이하': 'JPG, PNG or WEBP, up to 3MB',
+  '챕터': 'Chapters',
+  '페이지': 'Pages',
+  '계획 세운 팀원': 'Members planned',
+  '{n}개': '{n}',
+  '{planned}/{total}명': '{planned}/{total}',
+  '내 계획 보기': 'View my plan',
+  '내 계획 세우기': 'Make my plan',
+  '아직 필독서가 없습니다.': 'No required books yet.',
+  '여기서 정한 책 정보(제목·챕터·페이지)가 우리 팀 모두에게 공유됩니다. 기간은 각자 정합니다.': 'The book details set here (title, chapters, pages) are shared with the whole team. Everyone sets their own period.',
+  '+ 필독서 추가': '+ Add required book',
+  '표지 미리보기': 'Cover preview',
+  '표지 없음': 'No cover',
+  '아직 로그인한 사람이 없습니다.': 'No one has signed in yet.',
+  '앱에 한 번이라도 로그인한 사람들입니다. <b>우리 팀</b>으로 지정하면 사역자 필독서가 보입니다. (우리 팀 {n}명)':
+    'Everyone who has signed in to the app at least once. People added to the <b>Team</b> can see the required reading. (Team: {n})',
+  '이메일': 'Email',
+  '처음 로그인': 'First sign-in',
+  '마지막 접속': 'Last seen',
+  '(나)': '(me)',
+  '{name} 우리 팀 지정': 'Add {name} to the team',
+  "'{title}' 필독서를 삭제할까요?\n팀원들이 이미 세운 계획은 지워지지 않고 일반 목표로 남습니다.": "Delete the required book '{title}'?\nPlans team members already made won't be deleted; they'll stay as regular goals.",
+  '삭제하지 못했습니다: {message}': 'Could not delete: {message}',
+  '표지 이미지는 3MB 이하로 올려 주세요.': 'Please upload a cover image of 3MB or less.',
+  '변경하지 못했습니다: {message}': 'Could not change: {message}',
+
+  // 이미지로 내보내기
+  '{n}개 챕터': (p) => plural(p.n, 'chapter'),
+  '현재 진도': 'Current progress',
+  '초록 = 실제 진도   |   검정 선 = 오늘까지 권장': 'Green = actual progress   |   Black line = target by today',
+  '남은 공부일': 'Study days left',
+  '학습 진도 계획표 · {date} ({weekday}) 기준': 'Study Planner · as of {date} ({weekday})',
+  '매일 들을 분량': 'Daily listening plan',
+  '매일 읽을 분량': 'Daily reading plan',
+  '오늘부터': 'From today',
+  '전체 기간': 'Whole period',
+  '닫기': 'Close',
+  '그리는 중…': 'Drawing…',
+  '이미지 복사': 'Copy image',
+  'PNG 저장': 'Save PNG',
+  '내보낼 이미지 미리보기': 'Preview of the image to export',
+  '{title}-계획표-{date}.png': '{title}-plan-{date}.png',
+  '저장했습니다.': 'Saved.',
+  '복사했습니다. 카톡 등에 붙여넣기 하세요.': 'Copied. Paste it into a chat or message.',
+  '이 브라우저에서는 복사할 수 없습니다. PNG 저장을 이용하세요.': "This browser can't copy images. Use Save PNG instead.",
+};
+
+/* =========================================================================
  * 시작
  * ========================================================================= */
 
@@ -4405,10 +5062,16 @@ async function boot() {
   const root = document.getElementById('app');
   // 주소 끝에 ?selftest 를 붙이면 계산 검증 결과를 콘솔에 출력
   if (location.search.includes('selftest')) runPlanSelfTests();
+  applyLanguage(detectInitialLang());
+  // 언어 전환 버튼 (상단 바 · 로그인 화면)
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-lang]');
+    if (btn) changeLanguage(btn.dataset.lang);
+  });
 
   if (!window.supabase) {
-    renderMessageScreen(root, '연결할 수 없습니다',
-      '<p class="errors">로그인 기능을 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 새로고침해 주세요.</p>');
+    renderMessageScreen(root, t('연결할 수 없습니다'),
+      `<p class="errors">${t('로그인 기능을 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 새로고침해 주세요.')}</p>`);
     return;
   }
   window.addEventListener('hashchange', render);
@@ -4416,7 +5079,7 @@ async function boot() {
     const action = e.target.closest('[data-action]')?.dataset.action;
     if (action === 'retry-save') retrySave();
     if (action === 'sign-out') {
-      if (pendingSaves > 0 && !confirm('아직 저장 중입니다. 그래도 로그아웃할까요?')) return;
+      if (pendingSaves > 0 && !confirm(t('아직 저장 중입니다. 그래도 로그아웃할까요?'))) return;
       await signOut();
     }
   });

@@ -607,6 +607,11 @@ input[type="date"].input { width: 180px; }
   font-weight: 600;
 }
 
+/* ===== 언어 전환 (한국어 | English) ===== */
+.lang-toggle { padding: 2px; border-radius: 7px; flex-shrink: 0; }
+.lang-toggle .tab { padding: 3px 10px; font-size: 12px; line-height: 1.4; border-radius: 5px; }
+.login-lang { position: fixed; top: 14px; right: 16px; z-index: 5; }
+
 /* ===== 우리 팀 · 사역자 필독서 ===== */
 .topbar-nav { display: flex; align-items: center; gap: 20px; }
 .nav-link { font-size: 14px; font-weight: 600; color: var(--muted); text-decoration: none; }
