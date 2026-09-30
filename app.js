@@ -2229,6 +2229,8 @@ function runPlanSelfTests() {
   check('목차 맞추기: 이름이 조금 달라도 순서대로', JSON.stringify(mt) === JSON.stringify([{ index: 0, startPage: 7 }, { index: 1, startPage: 29 }, { index: 2, startPage: 51 }]));
   check('목차 맞추기: 없는 이름은 건너뜀', !mt.some((m) => m.index === 3));
 
+  check('강의 목록 합치기: 겹친 제목은 한 번만', JSON.stringify(mergeLectureTitles([['1강 a', '2강 b', '3강 c'], ['3강 c', '4강 d']])) === JSON.stringify(['1강 a', '2강 b', '3강 c', '4강 d']));
+
   console.group('■ 검사 결과');
   console.table(results);
   console.groupEnd();
@@ -2893,6 +2895,23 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
       <div data-section="lecture">
         <div class="field">
           <label class="field-label" for="f-lectures">${t('강의 제목 목록')} <span class="muted">${t('(한 줄에 하나, 빈 줄은 무시)')}</span></label>
+          ${locked ? '' : `
+          <div class="ai-toc ai-lecture">
+            <div class="ai-toc-icon" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>
+            </div>
+            <div class="ai-toc-text">
+              <strong>${t('AI 강의 목록 인식')}<span class="ai-badge">AI</span></strong>
+              <span>${t('강의 사이트의 차시 목록을 캡처하거나 사진으로 올리면 AI가 강의 제목을 순서대로 채워요. 여러 장이면 함께 고르세요.')}</span>
+              <span class="ai-toc-drop">${t('사진을 이 상자에 끌어다 놓아도 돼요.')}</span>
+            </div>
+            <label class="btn btn-ai" id="lecture-photo-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+              <span class="toc-photo-text">${t('강의 목록 사진 올리기')}</span>
+              <input type="file" id="lecture-photo" accept="image/*" multiple hidden>
+            </label>
+          </div>
+          <p id="lecture-ai-result" class="toc-result" hidden></p>`}
           <textarea id="f-lectures" class="input textarea" rows="12">${escapeHtml(v.titles.join('\n'))}</textarea>
           <span id="f-lecture-count" class="field-hint"></span>
         </div>
@@ -2969,6 +2988,7 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
   });
   form.addEventListener('input', updateFormView);
   bindChapterEditor(form, updateFormView);
+  bindLectureAi(form, updateFormView);
   bindLibraryPicker(form);
   form.addEventListener('click', (e) => {
     if (e.target.id === 'add-rest-date') {
@@ -3333,6 +3353,92 @@ function fillPagesFromToc(container, before, read, lastPage, failed, resultEl, o
   resultEl.textContent = parts.join(' ');
   resultEl.hidden = false;
   return true;
+}
+
+/* ----- 강의 목록 사진 → 강의 제목 (서버 함수 study-planner-toc, mode: lectures) ----- */
+
+/** 여러 장에서 읽은 제목을 순서대로 합친다 (사진이 겹쳐 같은 제목이 이어지면 한 번만) */
+function mergeLectureTitles(results) {
+  const titles = [];
+  results.forEach((list) => list.forEach((title) => {
+    if (titles.slice(-5).includes(title)) return;
+    titles.push(title);
+  }));
+  return titles;
+}
+
+async function readLecturesFromImage(file) {
+  const base64 = await imageFileToJpegBase64(file);
+  const data = await invokeFunction('study-planner-toc', { base64, mediaType: 'image/jpeg', mode: 'lectures' });
+  return (data && Array.isArray(data.titles) ? data.titles : []).filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim());
+}
+
+function bindLectureAi(form, onChange) {
+  const card = form.querySelector('.ai-lecture');
+  const photo = form.querySelector('#lecture-photo');
+  if (!card || !photo) return;
+  const label = form.querySelector('#lecture-photo-label');
+  const textEl = label.querySelector('.toc-photo-text');
+  const resultEl = form.querySelector('#lecture-ai-result');
+  const area = form.querySelector('#f-lectures');
+
+  async function read(picked) {
+    const files = [...picked].filter((f) => f.type.startsWith('image/'))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    if (!files.length) return;
+    if (area.value.trim() && !confirm(t('지금 입력한 강의 목록을 사진 내용으로 바꿀까요?'))) return;
+    const original = textEl.textContent;
+    label.classList.add('is-loading');
+    photo.disabled = true;
+    resultEl.hidden = true;
+    try {
+      const results = [];
+      const failed = [];
+      for (let i = 0; i < files.length; i++) {
+        textEl.textContent = files.length > 1 ? t('강의 목록 읽는 중… ({i}/{n})', { i: i + 1, n: files.length }) : t('강의 목록 읽는 중…');
+        try {
+          results.push(await readLecturesFromImage(files[i]));
+        } catch (err) {
+          console.warn('[lecture] 사진 읽기 실패:', files[i].name, err);
+          failed.push(files[i].name);
+          if (files.length === 1) throw err;
+        }
+      }
+      const titles = mergeLectureTitles(results);
+      if (!titles.length) throw new Error(t('사진에서 강의 목록을 찾지 못했습니다. 목록이 잘 보이게 다시 올려 주세요.'));
+      area.value = titles.join('\n');
+      onChange();
+      const parts = [t('강의 {n}개를 채웠습니다.', { n: titles.length })];
+      if (failed.length) parts.push(t('사진 {n}장은 읽지 못했습니다.', { n: failed.length }));
+      parts.push(t('저장하기 전에 빠지거나 잘못 읽은 제목이 없는지 확인하세요.'));
+      resultEl.textContent = parts.join(' ');
+      resultEl.hidden = false;
+    } catch (err) {
+      showChapterEditorError(form, t('강의 목록을 읽지 못했습니다'), err.message || String(err));
+    } finally {
+      textEl.textContent = original;
+      label.classList.remove('is-loading');
+      photo.disabled = false;
+    }
+  }
+
+  photo.addEventListener('change', () => {
+    const files = [...photo.files];
+    photo.value = '';
+    read(files);
+  });
+  const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+  let depth = 0;
+  card.addEventListener('dragenter', (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth++; card.classList.add('is-dragover'); });
+  card.addEventListener('dragover', (e) => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  card.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (!depth) card.classList.remove('is-dragover'); });
+  card.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth = 0;
+    card.classList.remove('is-dragover');
+    if (!photo.disabled) read(e.dataTransfer.files);
+  });
 }
 
 /* ----- 책 검색 (국립중앙도서관 ISBN 서지정보, 서버 함수 study-planner-books) ----- */
@@ -7953,6 +8059,17 @@ const EN = {
   '지금 챕터 이름과 사진의 목차가 잘 맞지 않아요.\n챕터 목록을 사진 내용으로 바꿀까요?': "The chapter names don't match the photo well.\nReplace the chapter list with the photo's contents?",
   '챕터 이름은 그대로 두고, 시작 페이지 {n}개를 채웠습니다.': (p) => `Kept the chapter names and filled in ${p.n} start pages.`,
   '남은 {n}개는 노란 칸에 직접 넣어 주세요. (Enter를 누르면 다음 빈칸으로 넘어가요)': (p) => `Fill in the remaining ${p.n} in the yellow boxes. (Press Enter to jump to the next empty box.)`,
+  // 강의 목록 AI
+  'AI 강의 목록 인식': 'AI lecture list reader',
+  '강의 사이트의 차시 목록을 캡처하거나 사진으로 올리면 AI가 강의 제목을 순서대로 채워요. 여러 장이면 함께 고르세요.': 'Upload a screenshot or photo of the course lesson list and AI fills in the lecture titles in order. Select several images for long lists.',
+  '강의 목록 사진 올리기': 'Upload lesson list',
+  '지금 입력한 강의 목록을 사진 내용으로 바꿀까요?': 'Replace the current lecture list with the image contents?',
+  '강의 목록 읽는 중… ({i}/{n})': (p) => `Reading lessons… (${p.i}/${p.n})`,
+  '강의 목록 읽는 중…': 'Reading lessons…',
+  '사진에서 강의 목록을 찾지 못했습니다. 목록이 잘 보이게 다시 올려 주세요.': 'No lesson list found in the image. Please upload a clearer one.',
+  '강의 {n}개를 채웠습니다.': (p) => `Added ${p.n} lectures.`,
+  '저장하기 전에 빠지거나 잘못 읽은 제목이 없는지 확인하세요.': 'Check for missing or misread titles before saving.',
+  '강의 목록을 읽지 못했습니다': 'Could not read the lesson list',
 };
 
 /* =========================================================================
