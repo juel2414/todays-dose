@@ -1144,3 +1144,19 @@ body.modal-open { overflow: hidden; }
 .section-head .section-title { margin: 0; }
 .share-picker { margin-bottom: 16px; }
 .join-actions { display: flex; gap: 8px; justify-content: center; margin-top: 16px; }
+.admin-group { margin-bottom: 12px; padding: 0; }
+.admin-group > summary { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 16px 20px; cursor: pointer; list-style: none; }
+.admin-group > summary::-webkit-details-marker { display: none; }
+.admin-group > summary::before { content: '▸'; color: var(--muted); transition: transform 0.15s; }
+.admin-group[open] > summary::before { transform: rotate(90deg); }
+.admin-group-name { font-weight: 700; font-size: 16px; }
+.admin-group-body { padding: 0 20px 20px; border-top: 1px solid var(--border); }
+.admin-group-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; margin: 14px 0 4px; }
+.admin-group-actions .muted { margin-right: auto; }
+.invite-code-small { letter-spacing: 0.12em; color: var(--text); }
+.admin-group-sub { font-size: 14px; margin: 18px 0 8px; }
+.admin-group-add { margin-bottom: 8px; }
+.admin-group .group-share { box-shadow: none; }
+.check-line-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.group-checks { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.group-check { display: inline-flex; align-items: center; gap: 6px; }

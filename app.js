@@ -1406,12 +1406,12 @@ async function saveData(data) {
   }
 }
 
-/* ----- 계정 · 우리 팀 · 사역자 필독서 ----- */
+/* ----- 계정 · 사역자 필독서 ----- */
 
 const PROFILES_TABLE = 'study_planner_profiles';
 const REQUIRED_BOOKS_TABLE = 'study_planner_required_books';
 
-/** 로그인할 때마다 프로필 갱신 + 관리자/팀 여부 확인 → { isAdmin, inTeam, language } */
+/** 로그인할 때마다 프로필 갱신 + 관리자 여부 확인 → { isAdmin, language } */
 async function loadAccount(user) {
   const sb = getSupabase();
   const meta = user.user_metadata || {};
@@ -1423,7 +1423,6 @@ async function loadAccount(user) {
   if (admin.error) throw admin.error;
   return {
     isAdmin: admin.data === true,
-    inTeam: !!(profile.data && profile.data.in_team),
     language: profile.data && isLang(profile.data.language) ? profile.data.language : null,
   };
 }
@@ -1547,10 +1546,10 @@ function findSubmissionForGoal(goalId) {
   return mySubmissions.find((b) => b.submittedGoalId === goalId) || null;
 }
 
-/** 책이 나에게 어떤 책인지: 'required'(팀 필독서) | 'assigned'(배정) | null */
+/** 책이 나에게 어떤 책인지: 'required'(내 그룹의 필독서) | 'assigned'(배정) | null */
 function bookTagKind(book) {
   if (!book) return null;
-  if (book.teamRequired && (account.inTeam || account.isAdmin)) return 'required';
+  if (bookGroupLinks.some((l) => l.bookId === book.id && myGroups.some((g) => g.id === l.groupId))) return 'required';
   if (myAssignedBookIds.has(book.id)) return 'assigned';
   return null;
 }
@@ -1618,14 +1617,64 @@ function parseTocText(text) {
 
 async function adminLoadProfiles() {
   const { data, error } = await getSupabase().from(PROFILES_TABLE)
-    .select('user_id, email, name, in_team, created_at, last_seen_at').order('created_at');
+    .select('user_id, email, name, created_at, last_seen_at').order('created_at');
   if (error) throw error;
   return data;
 }
 
-async function adminSetTeam(userId, inTeam) {
-  const { error } = await getSupabase().rpc('study_planner_set_team', { p_user_id: userId, p_in_team: inTeam });
-  if (error) throw error;
+/** 모든 그룹 · 멤버 · 공유 목표 · 그룹 필독서 → adminState */
+async function adminLoadGroups() {
+  const sb = getSupabase();
+  const [groups, members, items, bookGroups] = await Promise.all([
+    sb.from(GROUPS_TABLE).select('id, name, leader_id, invite_code, created_at').order('created_at'),
+    sb.from(GROUP_MEMBERS_TABLE).select('group_id, user_id, joined_at').order('joined_at'),
+    sb.from(GROUP_ITEMS_TABLE).select('id, group_id, type, title, content, cover_url, source_goal_id, updated_at').order('created_at'),
+    sb.from(BOOK_GROUPS_TABLE).select('book_id, group_id'),
+  ]);
+  for (const res of [groups, members, items, bookGroups]) if (res.error) throw res.error;
+  adminState.groups = groups.data;
+  adminState.groupMembers = members.data;
+  adminState.groupItems = items.data.map(rowToGroupItem).filter((i) => isValidShareContent(i.type, i.content));
+  adminState.bookGroups = bookGroups.data;
+}
+
+/** 책의 그룹 필독서를 groupIds로 맞춘다 */
+async function adminSyncBookGroups(bookId, groupIds) {
+  const before = adminState.bookGroups.filter((x) => x.book_id === bookId).map((x) => x.group_id);
+  const add = groupIds.filter((id) => !before.includes(id));
+  const remove = before.filter((id) => !groupIds.includes(id));
+  const sb = getSupabase();
+  if (add.length) {
+    const { error } = await sb.from(BOOK_GROUPS_TABLE).insert(add.map((group_id) => ({ book_id: bookId, group_id })));
+    if (error) throw error;
+  }
+  if (remove.length) {
+    const { error } = await sb.from(BOOK_GROUPS_TABLE).delete().eq('book_id', bookId).in('group_id', remove);
+    if (error) throw error;
+  }
+  adminState.bookGroups = adminState.bookGroups.filter((x) => x.book_id !== bookId)
+    .concat(groupIds.map((group_id) => ({ book_id: bookId, group_id })));
+}
+
+/** 관리자: 그룹 한 곳의 사람들 (리더 포함 여부 선택) → 프로필 목록 */
+function adminGroupPeople(groupId, withLeader = false) {
+  const g = adminState.groups.find((x) => x.id === groupId);
+  const ids = adminState.groupMembers.filter((m) => m.group_id === groupId).map((m) => m.user_id);
+  if (withLeader && g) ids.unshift(g.leader_id);
+  return [...new Set(ids)].map((id) => adminState.profiles.find((p) => p.user_id === id)
+    || { user_id: id, name: '', email: t('알 수 없음') });
+}
+
+/** 관리자: 사람이 속한 그룹 이름들 (리더 포함) */
+function adminGroupsOf(userId) {
+  return adminState.groups.filter((g) => g.leader_id === userId
+    || adminState.groupMembers.some((m) => m.group_id === g.id && m.user_id === userId));
+}
+
+/** 관리자: 책이 필독서로 지정된 그룹들 */
+function adminBookGroupsOf(bookId) {
+  const ids = adminState.bookGroups.filter((x) => x.book_id === bookId).map((x) => x.group_id);
+  return adminState.groups.filter((g) => ids.includes(g.id));
 }
 
 /** 도서관 책 저장 (id가 없으면 새로 만들기) → 저장된 책. status를 주면 상태도 바꾼다 (검토 승인) */
@@ -1636,7 +1685,6 @@ async function adminSaveRequiredBook(book) {
     cover_url: book.coverUrl || null,
     chapters: book.chapters.map((c) => ({ name: c.name.trim(), startPage: Number(c.startPage) })),
     last_page: Number(book.lastPage),
-    team_required: !!book.teamRequired,
     is_public: !!book.isPublic,
     updated_at: new Date().toISOString(),
   };
@@ -2178,8 +2226,8 @@ function getGoal(id) {
 /* ----- 저장 (순서대로 한 번에 하나씩) ----- */
 
 let currentUser = null;
-/** 관리자 / 우리 팀 여부 (로그인 때 서버에서 확인) */
-let account = { isAdmin: false, inTeam: false };
+/** 관리자 여부 (로그인 때 서버에서 확인) */
+let account = { isAdmin: false };
 /** 도서관 — 볼 수 있는 모든 행 (관리자는 검토 대기 포함 전부) */
 let libraryRows = [];
 /** 승인된 도서관 책 (필독서 · 공개 · 배정 · 내가 제출해 승인된 책) */
@@ -2319,7 +2367,7 @@ async function startApp(user) {
     syncAccountLanguage(account.language);
   } catch (err) {
     console.warn('[account] 팀 정보를 불러오지 못했습니다:', err);
-    account = { isAdmin: false, inTeam: false };
+    account = { isAdmin: false };
   }
   try {
     await loadLibrary();
@@ -2334,6 +2382,7 @@ async function startApp(user) {
     console.warn('[group] 그룹을 불러오지 못했습니다:', err);
     myGroups = [];
     groupItems = [];
+    bookGroupLinks = [];
   }
   renderTopbar();
 
@@ -2557,7 +2606,7 @@ function renderRequiredSection(today, books) {
   }).join('');
   return `
     <section class="required-section">
-      <h2 class="section-title">${books.some((b) => bookTagKind(b) === 'assigned') ? t('필독서 · 배정된 책') : t('사역자 필독서')} <span class="count">${books.length}</span></h2>
+      <h2 class="section-title">${books.some((b) => bookTagKind(b) === 'assigned') ? t('필독서 · 배정된 책') : t('필독서')} <span class="count">${books.length}</span></h2>
       <div class="card-grid">${cards}</div>
     </section>`;
 }
@@ -4657,6 +4706,11 @@ const adminState = {
   assignments: [], // [{ book_id, user_id }] 모든 배정
   libraryFilter: 'all', // 'all' | 'pending' | 'required' | 'public' | 'assigned'
   mergingId: null, // "기존 책과 연결"을 고르는 중인 제출 id
+  groups: [], // 모든 그룹 [{ id, name, leader_id, invite_code, created_at }]
+  groupMembers: [], // [{ group_id, user_id, joined_at }]
+  groupItems: [], // 모든 공유 목표 (rowToGroupItem)
+  bookGroups: [], // [{ book_id, group_id }] 도서관 책 ↔ 그룹 필독서
+  openGroups: new Set(), // 회원 관리에서 펼친 그룹
 };
 
 const ADMIN_TABS = [
@@ -4671,7 +4725,7 @@ async function loadAdminData() {
   adminState.error = null;
   try {
     const [profiles, rows, goals, assignments] = await Promise.all([
-      adminLoadProfiles(), loadLibraryRows(), adminLoadAllGoals(), adminLoadAssignments(),
+      adminLoadProfiles(), loadLibraryRows(), adminLoadAllGoals(), adminLoadAssignments(), adminLoadGroups(),
     ]);
     adminState.profiles = profiles;
     adminState.goals = goals.filter((x) => checkGoalShape(x.goal, 0) === null);
@@ -4749,14 +4803,15 @@ function renderAdmin(root, tab, route = {}) {
 
 /* ----- 진도 현황 ----- */
 
-/** 책을 받아야 하는 사람: 팀 필독서면 우리 팀 + 배정된 사람 */
+/** 책을 받아야 하는 사람: 필독서로 지정된 그룹의 사람(리더 포함) + 배정된 사람 */
 function bookAudience(book) {
   const ids = new Set(adminState.assignments.filter((a) => a.book_id === book.id).map((a) => a.user_id));
-  return adminState.profiles.filter((p) => (book.teamRequired && p.in_team) || ids.has(p.user_id));
+  adminBookGroupsOf(book.id).forEach((g) => adminGroupPeople(g.id, true).forEach((p) => ids.add(p.user_id)));
+  return adminState.profiles.filter((p) => ids.has(p.user_id));
 }
 
 function renderAdminProgress() {
-  const books = requiredBooks.filter((b) => b.teamRequired || adminState.assignments.some((a) => a.book_id === b.id));
+  const books = requiredBooks.filter((b) => adminBookGroupsOf(b.id).length || adminState.assignments.some((a) => a.book_id === b.id));
   if (!books.length) return `<div class="empty">${t('아직 필독서나 배정된 책이 없습니다. <a href="#/admin/books">도서관</a>에서 정하세요.')}</div>`;
   const today = todayStr();
 
@@ -4789,7 +4844,7 @@ function renderAdminProgress() {
             <tr><th>${t('이름')}</th><th>${t('기간')}</th><th class="num">${t('오늘까지 권장')}</th><th class="num">${t('실제 완료')}</th><th class="num">${t('끝')}</th><th class="col-bar">${t('진도')}</th><th>${t('상태')}</th></tr>
           </thead>
           <tbody>
-            ${!rows.length ? `<tr class="is-empty"><td colspan="7" class="muted">${t('아직 이 책을 받을 사람이 없습니다. (우리 팀 지정은 <a href="#/admin/members">회원 관리</a>에서)')}</td></tr>` : ''}
+            ${!rows.length ? `<tr class="is-empty"><td colspan="7" class="muted">${t('아직 이 책을 받을 사람이 없습니다. (그룹 멤버는 <a href="#/admin/members">회원 관리</a>에서)')}</td></tr>` : ''}
             ${rows.map(({ p, goal, s }) => {
               if (!goal) {
                 return `<tr class="is-empty"><td>${escapeHtml(profileName(p))}</td><td colspan="5" class="muted">${t('아직 계획을 세우지 않았습니다')}</td><td><span class="badge badge-waiting">${t('계획 없음')}</span></td></tr>`;
@@ -4837,7 +4892,7 @@ function renderAdminPlans() {
       <section class="panel admin-book">
         <div class="admin-book-head">
           <div>
-            <h2 class="section-title">${escapeHtml(profileName(p))} ${p.in_team ? `<span class="type-tag type-required">${t('우리 팀')}</span>` : ''}</h2>
+            <h2 class="section-title">${escapeHtml(profileName(p))} ${renderAdminGroupTags(p.user_id)}</h2>
             <span class="muted">${escapeHtml(p.email)}</span>
           </div>
           <span class="muted">${t('목표 {n}개 · 진행 중 {active}개', { n: items.length, active: items.filter((x) => x.s.isActive).length })}</span>
@@ -4943,7 +4998,7 @@ function bookAssignees(bookId) {
 function renderLibraryBadges(book) {
   const n = bookAssignees(book.id).length;
   return [
-    book.teamRequired ? `<span class="type-tag type-required">${t('필독서')}</span>` : '',
+    ...adminBookGroupsOf(book.id).map((g) => `<span class="type-tag type-required">${t('필독서 · {group}', { group: escapeHtml(g.name) })}</span>`),
     book.isPublic ? `<span class="type-tag type-public">${t('공개')}</span>` : '',
     n ? `<span class="type-tag type-assigned">${t('배정 {n}명', { n })}</span>` : '',
   ].filter(Boolean).join(' ');
@@ -4991,8 +5046,14 @@ function renderAdminBooks() {
       ${renderChapterEditorHtml(book ? book.lastPage : '')}
       <fieldset class="field distribution">
         <legend class="field-label">${t('누구에게 보일까요?')} <span class="muted">${t('(아무것도 고르지 않으면 도서관에 보관만 합니다)')}</span></legend>
-        <label class="check-line"><input type="checkbox" id="f-team-required" ${book && book.teamRequired ? 'checked' : ''}>
-          <span><b>${t('팀 필독서')}</b> <span class="muted">${t('우리 팀 모두의 대시보드에 필독서로 보입니다')}</span></span></label>
+        <div class="check-line-group">
+          <span class="check-line-title"><b>${t('그룹 필독서')}</b> <span class="muted">${t('고른 그룹의 모든 사람(리더 포함) 대시보드에 필독서로 보입니다')}</span></span>
+          ${adminState.groups.length ? `<div class="group-checks">
+            ${adminState.groups.map((g) => `<label class="group-check"><input type="checkbox" name="book-group" value="${escapeHtml(g.id)}"
+              ${book && adminState.bookGroups.some((x) => x.book_id === book.id && x.group_id === g.id) ? 'checked' : ''}>
+              ${escapeHtml(g.name)} <span class="muted small">${t('{n}명', { n: adminGroupPeople(g.id, true).length })}</span></label>`).join('')}
+          </div>` : `<span class="muted small">${t('아직 그룹이 없습니다.')}</span>`}
+        </div>
         <label class="check-line"><input type="checkbox" id="f-public" ${book && book.isPublic ? 'checked' : ''}>
           <span><b>${t('공개')}</b> <span class="muted">${t('누구나 새 목표에서 "도서관에서 고르기"로 고를 수 있습니다')}</span></span></label>
         <div class="assign-picker">
@@ -5002,7 +5063,7 @@ function renderAdminBooks() {
             ${adminState.profiles.map((p) => `
               <label class="assign-item" data-search="${escapeHtml(`${p.name || ''} ${p.email || ''}`.toLowerCase())}">
                 <input type="checkbox" name="assign" value="${escapeHtml(p.user_id)}" ${assigned.includes(p.user_id) ? 'checked' : ''}>
-                <span>${escapeHtml(p.name || '-')}${p.in_team ? ` <span class="type-tag type-required">${t('우리 팀')}</span>` : ''}</span>
+                <span>${escapeHtml(p.name || '-')}</span>
                 <span class="muted small">${escapeHtml(p.email || '')}</span>
               </label>`).join('')}
           </div>
@@ -5041,7 +5102,7 @@ function renderAdminBooks() {
 
 /** 승인된 책 중 필터에 맞는 것 */
 function filterLibrary(filter) {
-  return requiredBooks.filter((b) => filter === 'required' ? b.teamRequired
+  return requiredBooks.filter((b) => filter === 'required' ? adminBookGroupsOf(b.id).length > 0
     : filter === 'public' ? b.isPublic
     : filter === 'assigned' ? bookAssignees(b.id).length > 0
     : true);
@@ -5150,10 +5211,10 @@ async function submitBookForm(form) {
     title: document.getElementById('f-title').value,
     author: document.getElementById('f-author').value,
     ...readChapterEditor(),
-    teamRequired: form.querySelector('#f-team-required').checked,
     isPublic: form.querySelector('#f-public').checked,
   };
   const assignees = [...form.querySelectorAll('input[name="assign"]:checked')].map((el) => el.value);
+  const bookGroupIds = [...form.querySelectorAll('input[name="book-group"]:checked')].map((el) => el.value);
   const errors = [];
   if (!input.title.trim()) errors.push(t('책 제목을 입력하세요.'));
   errors.push(...validateBookStructure(input));
@@ -5177,6 +5238,8 @@ async function submitBookForm(form) {
     if (oldCover && oldCover !== coverUrl) adminRemoveCoverFile(oldCover);
     replaceLibraryRow(saved);
     await adminSyncAssignments(saved.id, assignees);
+    await adminSyncBookGroups(saved.id, bookGroupIds);
+    bookGroupLinks = adminState.bookGroups.map((x) => ({ bookId: x.book_id, groupId: x.group_id }));
     myAssignedBookIds = new Set(adminState.assignments.filter((a) => a.user_id === currentUser.id).map((a) => a.book_id));
     adminState.editingBookId = null;
     resetCoverDraft();
@@ -5225,30 +5288,142 @@ async function adminReviewAction(action, id, btn) {
 function renderAdminMembers() {
   const profiles = adminState.profiles;
   if (!profiles.length) return `<div class="empty">${t('아직 로그인한 사람이 없습니다.')}</div>`;
-  const teamCount = profiles.filter((p) => p.in_team).length;
   return `
-    <div class="admin-toolbar">
-      <p class="muted">${t('앱에 한 번이라도 로그인한 사람들입니다. <b>우리 팀</b>으로 지정하면 사역자 필독서가 보입니다. (우리 팀 {n}명)', { n: teamCount })}</p>
+    <div class="section-head">
+      <h2 class="section-title">${t('그룹')} <span class="count">${adminState.groups.length}</span></h2>
+      <span class="muted small">${t('그룹을 누르면 멤버·공유 목표·진도를 펼쳐 볼 수 있어요. 새 그룹은 상단 [그룹] 메뉴에서 만듭니다.')}</span>
+    </div>
+    ${adminState.groups.length ? adminState.groups.map(renderAdminGroup).join('') : `<div class="empty">${t('아직 그룹이 없습니다.')}</div>`}
+
+    <div class="section-head">
+      <h2 class="section-title">${t('전체 회원')} <span class="count">${profiles.length}</span></h2>
+      <span class="muted small">${t('앱에 한 번이라도 로그인한 사람들입니다.')}</span>
     </div>
     <table class="admin-table panel-table">
-      <thead><tr><th>${t('이름')}</th><th>${t('이메일')}</th><th>${t('처음 로그인')}</th><th>${t('마지막 접속')}</th><th class="center">${t('우리 팀')}</th></tr></thead>
+      <thead><tr><th>${t('이름')}</th><th>${t('이메일')}</th><th>${t('그룹')}</th><th>${t('처음 로그인')}</th><th>${t('마지막 접속')}</th></tr></thead>
       <tbody>
         ${profiles.map((p) => `
-          <tr class="${p.in_team ? 'is-team' : ''}">
+          <tr>
             <td><strong>${escapeHtml(p.name || '-')}</strong>${p.user_id === currentUser.id ? ` <span class="muted">${t('(나)')}</span>` : ''}</td>
             <td>${escapeHtml(p.email)}</td>
+            <td>${renderAdminGroupTags(p.user_id) || '<span class="muted">-</span>'}</td>
             <td class="muted nowrap">${timestampToDateTime(p.created_at)}</td>
             <td class="muted nowrap">${timestampToDateTime(p.last_seen_at)}</td>
-            <td class="center">
-              <label class="switch">
-                <input type="checkbox" data-action="team-toggle" data-id="${escapeHtml(p.user_id)}" ${p.in_team ? 'checked' : ''}
-                  aria-label="${t('{name} 우리 팀 지정', { name: escapeHtml(profileName(p)) })}">
-                <span></span>
-              </label>
-            </td>
           </tr>`).join('')}
       </tbody>
     </table>`;
+}
+
+/** 사람이 속한 그룹 태그 (리더면 "리더" 표시) */
+function renderAdminGroupTags(userId) {
+  return adminGroupsOf(userId).map((g) => `<span class="type-tag ${g.leader_id === userId ? 'type-leader' : 'type-group'}">${escapeHtml(g.name)}${
+    g.leader_id === userId ? ` · ${t('리더')}` : ''}</span>`).join(' ');
+}
+
+/** 관리자: 그룹 하나 (접고 펼치기) — 멤버 관리 · 공유 목표별 진도 · 그룹 필독서 */
+function renderAdminGroup(g) {
+  const leader = adminState.profiles.find((p) => p.user_id === g.leader_id);
+  const members = adminGroupPeople(g.id);
+  const memberIds = new Set(members.map((m) => m.user_id));
+  const items = adminState.groupItems.filter((i) => i.groupId === g.id);
+  const books = requiredBooks.filter((b) => adminState.bookGroups.some((x) => x.book_id === b.id && x.group_id === g.id));
+  const memberGoals = adminState.goals.filter((x) => x.goal.groupId === g.id && memberIds.has(x.userId));
+  const candidates = adminState.profiles.filter((p) => !memberIds.has(p.user_id) && p.user_id !== g.leader_id);
+  const open = adminState.openGroups.has(g.id);
+
+  return `
+    <details class="panel admin-group" data-group="${escapeHtml(g.id)}" ${open ? 'open' : ''}>
+      <summary>
+        <span class="admin-group-name">${escapeHtml(g.name)}</span>
+        <span class="muted">${t('리더 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })}</span>
+        <span class="muted">${t('멤버 {n}명', { n: members.length })}</span>
+        <span class="muted">${t('공유 목표 {n}개', { n: items.length })}</span>
+        ${books.length ? `<span class="type-tag type-required">${t('필독서 {n}권', { n: books.length })}</span>` : ''}
+      </summary>
+      ${open ? `
+      <div class="admin-group-body">
+        <div class="admin-group-actions">
+          <span class="muted small">${t('초대 코드')} <b class="invite-code-small">${escapeHtml(g.invite_code)}</b></span>
+          <button type="button" class="btn btn-small" data-action="ag-rename" data-group="${escapeHtml(g.id)}">${t('이름 바꾸기')}</button>
+          <button type="button" class="btn btn-small btn-danger" data-action="ag-delete" data-group="${escapeHtml(g.id)}">${t('그룹 삭제')}</button>
+        </div>
+
+        <h3 class="admin-group-sub">${t('멤버')}</h3>
+        <div class="group-form-row admin-group-add">
+          <select class="input" data-add-member="${escapeHtml(g.id)}">
+            <option value="">${t('회원을 골라 이 그룹에 추가')}</option>
+            ${candidates.map((p) => `<option value="${escapeHtml(p.user_id)}">${escapeHtml(p.name || '-')} (${escapeHtml(p.email)})</option>`).join('')}
+          </select>
+          <button type="button" class="btn btn-small" data-action="ag-add-member" data-group="${escapeHtml(g.id)}">${t('추가')}</button>
+        </div>
+        ${members.length ? `
+        <table class="admin-table">
+          <thead><tr><th>${t('이름')}</th><th>${t('이메일')}</th><th>${t('참여일')}</th><th></th></tr></thead>
+          <tbody>
+            ${members.map((m) => {
+              const row = adminState.groupMembers.find((x) => x.group_id === g.id && x.user_id === m.user_id);
+              return `<tr>
+                <td>${escapeHtml(m.name || '-')}</td>
+                <td class="muted">${escapeHtml(m.email)}</td>
+                <td class="muted nowrap">${timestampToDate(row && row.joined_at)}</td>
+                <td class="num"><button type="button" class="btn btn-small btn-danger" data-action="ag-remove-member" data-group="${escapeHtml(g.id)}"
+                  data-user="${escapeHtml(m.user_id)}" data-name="${escapeHtml(profileName(m))}">${t('내보내기||member')}</button></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>` : `<p class="muted small">${t('아직 참여한 멤버가 없습니다.')}</p>`}
+
+        ${books.length ? `
+        <h3 class="admin-group-sub">${t('그룹 필독서')}</h3>
+        <p class="small">${books.map((b) => escapeHtml(b.title)).join(', ')} <a class="muted" href="#/admin/books">${t('도서관에서 바꾸기')}</a></p>` : ''}
+
+        <h3 class="admin-group-sub">${t('공유한 목표')}</h3>
+        ${items.length ? items.map((item) => renderGroupItemProgress(item, members, memberGoals,
+          `<button type="button" class="btn btn-small btn-danger" data-action="ag-item-delete" data-item="${escapeHtml(item.id)}">${t('공유 취소')}</button>`,
+          (m, goal) => `#/admin/member/${m.user_id}/${goal.id}`)).join('')
+          : `<p class="muted small">${t('리더가 아직 공유한 목표가 없습니다.')}</p>`}
+      </div>` : ''}
+    </details>`;
+}
+
+/** 관리자: 그룹 관리 버튼 처리 → 처리했으면 true */
+async function handleAdminGroupAction(action, btn, container) {
+  if (!action.startsWith('ag-')) return false;
+  const sb = getSupabase();
+  const g = adminState.groups.find((x) => x.id === btn.dataset.group);
+  const check = ({ error }) => { if (error) throw error; };
+  let job = null;
+  if (action === 'ag-rename' && g) {
+    const name = prompt(t('새 그룹 이름'), g.name);
+    if (name === null || !name.trim() || name.trim() === g.name) return true;
+    job = async () => check(await sb.from(GROUPS_TABLE).update({ name: name.trim().slice(0, 40) }).eq('id', g.id));
+  } else if (action === 'ag-delete' && g) {
+    if (!confirm(t("'{name}' 그룹을 삭제할까요?\n공유한 목표와 멤버 목록이 사라집니다. 멤버들이 이미 만든 계획은 각자에게 개인 목표로 남습니다.", { name: g.name }))) return true;
+    job = async () => check(await sb.from(GROUPS_TABLE).delete().eq('id', g.id));
+  } else if (action === 'ag-add-member' && g) {
+    const userId = container.querySelector(`[data-add-member="${g.id}"]`).value;
+    if (!userId) return true;
+    job = async () => check(await sb.from(GROUP_MEMBERS_TABLE).insert({ group_id: g.id, user_id: userId }));
+  } else if (action === 'ag-remove-member' && g) {
+    if (!confirm(t('{name}님을 그룹에서 내보낼까요?\n그 멤버의 계획은 개인 목표로 남고, 더 이상 볼 수 없습니다.', { name: btn.dataset.name }))) return true;
+    job = async () => check(await sb.from(GROUP_MEMBERS_TABLE).delete().eq('group_id', g.id).eq('user_id', btn.dataset.user));
+  } else if (action === 'ag-item-delete') {
+    const item = adminState.groupItems.find((i) => i.id === btn.dataset.item);
+    if (!item || !confirm(t("'{title}' 공유를 취소할까요?\n멤버들이 이미 만든 계획은 각자에게 개인 목표로 남지만, 리더는 더 이상 진도를 볼 수 없습니다.", { title: item.title }))) return true;
+    job = async () => check(await sb.from(GROUP_ITEMS_TABLE).delete().eq('id', item.id));
+  }
+  if (!job) return true;
+  btn.disabled = true;
+  try {
+    await job();
+    await Promise.all([adminLoadGroups(), loadGroups()]);
+    renderTopbar();
+    render();
+  } catch (err) {
+    alert(t('처리하지 못했습니다.\n\n{message}', { message: err.message || String(err) }));
+    btn.disabled = false;
+  }
+  return true;
 }
 
 /** 표지로 쓸 이미지 파일을 고른다 (파일 선택·끌어다 놓기 공통) */
@@ -5304,10 +5479,21 @@ function bindCoverDrop(container) {
 
 function bindAdminEvents(container, tab) {
   bindCoverDrop(container);
+  // 회원 관리: 그룹 펼치기/접기 (펼칠 때 내용을 그린다)
+  container.addEventListener('toggle', (e) => {
+    const el = e.target;
+    if (!el.classList || !el.classList.contains('admin-group')) return;
+    const id = el.dataset.group;
+    if (el.open === adminState.openGroups.has(id)) return;
+    if (el.open) adminState.openGroups.add(id);
+    else adminState.openGroups.delete(id);
+    if (el.open) render();
+  }, true);
   container.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
     const action = btn.dataset.action;
+    if (await handleAdminGroupAction(action, btn, container)) return;
     if (action === 'admin-basis') {
       adminState.viewBasis = btn.dataset.basis;
       render();
@@ -5368,20 +5554,6 @@ function bindAdminEvents(container, tab) {
       e.target.value = '';
       if (file) setCoverDraftFile(container, file);
       return;
-    }
-    if (e.target.dataset.action !== 'team-toggle') return;
-    const el = e.target;
-    const profile = adminState.profiles.find((p) => p.user_id === el.dataset.id);
-    el.disabled = true;
-    try {
-      await adminSetTeam(profile.user_id, el.checked);
-      profile.in_team = el.checked;
-      if (profile.user_id === currentUser.id) account.inTeam = el.checked;
-      render();
-    } catch (err) {
-      alert(t('변경하지 못했습니다: {message}', { message: err.message }));
-      el.checked = !el.checked;
-      el.disabled = false;
     }
   });
 
@@ -5912,12 +6084,15 @@ async function onExportDialogChange(e) {
 const GROUPS_TABLE = 'study_planner_groups';
 const GROUP_MEMBERS_TABLE = 'study_planner_group_members';
 const GROUP_ITEMS_TABLE = 'study_planner_group_items';
+const BOOK_GROUPS_TABLE = 'study_planner_book_groups';
 const PENDING_JOIN_KEY = 'study-planner:pending-join';
 
 /** 내 그룹 [{ id, name, leaderId, leaderName, inviteCode(리더만), memberCount, isLeader }] */
 let myGroups = [];
 /** 내 그룹들에 공유된 목표 [{ id, groupId, type, title, content, coverUrl, sourceGoalId, updatedAt }] */
 let groupItems = [];
+/** 도서관 책 ↔ 그룹 필독서 [{ bookId, groupId }] (회원: 내 그룹 것만, 관리자: 전부) */
+let bookGroupLinks = [];
 
 /** 그룹 상세 화면 상태 (리더: 멤버 목록 · 멤버들의 공유 목표) */
 const groupState = {
@@ -6069,6 +6244,9 @@ async function loadGroups() {
     memberCount: r.member_count,
     isLeader: r.is_leader,
   }));
+  const links = await sb.from(BOOK_GROUPS_TABLE).select('book_id, group_id');
+  if (links.error) throw links.error;
+  bookGroupLinks = links.data.map((r) => ({ bookId: r.book_id, groupId: r.group_id }));
   if (!myGroups.length) {
     groupItems = [];
     return;
@@ -6294,6 +6472,52 @@ function renderMemberGroup(group) {
     </section>`;
 }
 
+/**
+ * 공유 목표 하나 + 멤버별 진도 표 (리더 화면 · 관리자 회원 관리 공용)
+ *  members: [{ user_id, name, email }] (null이면 불러오는 중) / memberGoals: [{ userId, goal }]
+ */
+function renderGroupItemProgress(item, members, memberGoals, actionsHtml, linkFor) {
+  const today = todayStr();
+  const entries = memberGoals.filter((x) => x.goal.groupItemId === item.id);
+  const memberRows = (members || []).map((m) => {
+    const entry = entries.find((x) => x.userId === m.user_id);
+    if (!entry) return `<tr><td>${escapeHtml(profileName(m))}</td><td colspan="4" class="muted">${t('아직 계획 없음')}</td></tr>`;
+    const goal = entry.goal;
+    const s = getGoalSummary(goal, undefined, today);
+    const targetPct = s.total ? Math.min(100, (s.target / s.total) * 100) : 0;
+    const donePct = s.total ? Math.min(100, (s.done / s.total) * 100) : 0;
+    const last = goal.progress.history.length ? goal.progress.history[0].date : null;
+    return `
+      <tr class="${s.isActive ? '' : 'is-finished-row'}">
+        <td><a class="member-link" href="${escapeHtml(linkFor(m, goal))}">${escapeHtml(profileName(m))}</a></td>
+        <td class="muted">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
+        <td class="col-bar">
+          <div class="mini-bar"><div class="compare-fill" style="width:${donePct}%"></div><div class="compare-marker" style="left:${targetPct}%"></div></div>
+          <span class="mini-pct">${s.percent}%</span>
+        </td>
+        <td>${renderStatusBadge(s)}</td>
+        <td class="muted">${last ? formatShortDate(last) : '-'}</td>
+      </tr>`;
+  }).join('');
+  const plannedCount = members ? members.filter((m) => entries.some((x) => x.userId === m.user_id)).length : 0;
+  return `
+    <section class="panel group-share">
+      <div class="group-item">
+        ${renderCoverThumb(item.coverUrl, 'sm')}
+        <div class="group-item-main">
+          <div><span class="type-tag type-${item.type}">${typeLabel(item.type)}</span> <strong>${escapeHtml(item.title)}</strong></div>
+          <div class="muted small">${escapeHtml(describeShareContent(item))}${members ? ` · ${t('계획 세운 멤버 {n}/{total}명', { n: plannedCount, total: members.length })}` : ''}</div>
+        </div>
+        <div class="group-item-side">${actionsHtml}</div>
+      </div>
+      ${!members ? '' : members.length ? `
+      <table class="admin-table">
+        <thead><tr><th>${t('멤버')}</th><th>${t('기간')}</th><th class="col-bar">${t('진도')}</th><th>${t('상태')}</th><th>${t('마지막 기록')}</th></tr></thead>
+        <tbody>${memberRows}</tbody>
+      </table>` : `<p class="muted small">${t('아직 참여한 멤버가 없습니다. 초대 링크를 보내 주세요.')}</p>`}
+    </section>`;
+}
+
 /** 리더 화면: 초대 · 공유한 목표(멤버 진도) · 멤버 */
 function renderLeaderGroup(group) {
   const today = todayStr();
@@ -6305,50 +6529,12 @@ function renderLeaderGroup(group) {
 
   const itemsHtml = items.map((item) => {
     const source = item.sourceGoalId ? getGoal(item.sourceGoalId) : null;
-    const entries = groupState.memberGoals.filter((x) => x.goal.groupItemId === item.id);
-    const memberRows = groupState.members.map((m) => {
-      const entry = entries.find((x) => x.userId === m.user_id);
-      if (!entry) {
-        return `<tr><td>${escapeHtml(profileName(m))}</td><td colspan="4" class="muted">${t('아직 계획 없음')}</td></tr>`;
-      }
-      const goal = entry.goal;
-      const s = getGoalSummary(goal, undefined, today);
-      const targetPct = s.total ? Math.min(100, (s.target / s.total) * 100) : 0;
-      const donePct = s.total ? Math.min(100, (s.done / s.total) * 100) : 0;
-      const last = goal.progress.history.length ? goal.progress.history[0].date : null;
-      return `
-        <tr class="${s.isActive ? '' : 'is-finished-row'}">
-          <td><a class="member-link" href="#/group/${escapeHtml(group.id)}/member/${escapeHtml(m.user_id)}/${escapeHtml(goal.id)}">${escapeHtml(profileName(m))}</a></td>
-          <td class="muted">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
-          <td class="col-bar">
-            <div class="mini-bar"><div class="compare-fill" style="width:${donePct}%"></div><div class="compare-marker" style="left:${targetPct}%"></div></div>
-            <span class="mini-pct">${s.percent}%</span>
-          </td>
-          <td>${renderStatusBadge(s)}</td>
-          <td class="muted">${last ? formatShortDate(last) : '-'}</td>
-        </tr>`;
-    }).join('');
-    const plannedCount = new Set(entries.map((x) => x.userId)).size;
-    return `
-      <section class="panel group-share">
-        <div class="group-item">
-          ${renderCoverThumb(item.coverUrl, 'sm')}
-          <div class="group-item-main">
-            <div><span class="type-tag type-${item.type}">${typeLabel(item.type)}</span> <strong>${escapeHtml(item.title)}</strong></div>
-            <div class="muted small">${escapeHtml(describeShareContent(item))} · ${loading ? '' : t('계획 세운 멤버 {n}/{total}명', { n: plannedCount, total: groupState.members.length })}</div>
-          </div>
-          <div class="group-item-side">
-            ${isSourceGoalChanged(item, source) ? `<button type="button" class="btn btn-small" data-action="share-update" data-item="${escapeHtml(item.id)}"
-              title="${t('내 목표에서 바꾼 이름·내용을 멤버들에게 다시 공유합니다')}">${t('바뀐 내용 공유')}</button>` : ''}
-            <button type="button" class="btn btn-small btn-danger" data-action="share-delete" data-item="${escapeHtml(item.id)}">${t('공유 취소')}</button>
-          </div>
-        </div>
-        ${loading ? '' : groupState.members.length ? `
-        <table class="admin-table">
-          <thead><tr><th>${t('멤버')}</th><th>${t('기간')}</th><th class="col-bar">${t('진도')}</th><th>${t('상태')}</th><th>${t('마지막 기록')}</th></tr></thead>
-          <tbody>${memberRows}</tbody>
-        </table>` : `<p class="muted small">${t('아직 참여한 멤버가 없습니다. 초대 링크를 보내 주세요.')}</p>`}
-      </section>`;
+    const actions = `
+      ${isSourceGoalChanged(item, source) ? `<button type="button" class="btn btn-small" data-action="share-update" data-item="${escapeHtml(item.id)}"
+        title="${t('내 목표에서 바꾼 이름·내용을 멤버들에게 다시 공유합니다')}">${t('바뀐 내용 공유')}</button>` : ''}
+      <button type="button" class="btn btn-small btn-danger" data-action="share-delete" data-item="${escapeHtml(item.id)}">${t('공유 취소')}</button>`;
+    return renderGroupItemProgress(item, loading ? null : groupState.members, groupState.memberGoals, actions,
+      (m, goal) => `#/group/${group.id}/member/${m.user_id}/${goal.id}`);
   }).join('');
 
   const membersHtml = groupState.members.map((m) => `
@@ -7181,6 +7367,22 @@ const EN = {
   "'{title}' 공유를 취소할까요?\n멤버들이 이미 만든 계획은 각자에게 개인 목표로 남지만, 리더는 더 이상 진도를 볼 수 없습니다.": (p) => `Unshare '${p.title}'?\nPlans members already made stay as personal goals, but you will no longer see their progress.`,
   '그룹에서 공유된 목표': 'Shared in your groups',
   '그룹 리더가 공유 내용(이름·목차·목록)을 수정했습니다. 내 계획에 적용할까요?': 'The group leader updated the shared contents (name, table of contents, list). Apply to your plan?',
+  // 그룹 (관리자)
+  '아직 이 책을 받을 사람이 없습니다. (그룹 멤버는 <a href="#/admin/members">회원 관리</a>에서)': 'Nobody receives this book yet. (Manage group members in <a href="#/admin/members">Members</a>.)',
+  '필독서 · {group}': (p) => `Required · ${p.group}`,
+  '그룹 필독서': 'Required for groups',
+  '고른 그룹의 모든 사람(리더 포함) 대시보드에 필독서로 보입니다': "Shown as required reading on the dashboard of everyone in the selected groups (leaders included)",
+  '아직 그룹이 없습니다.': 'No groups yet.',
+  '그룹을 누르면 멤버·공유 목표·진도를 펼쳐 볼 수 있어요. 새 그룹은 상단 [그룹] 메뉴에서 만듭니다.': 'Click a group to see its members, shared goals and progress. Create new groups from the [Groups] menu at the top.',
+  '전체 회원': 'All members',
+  '앱에 한 번이라도 로그인한 사람들입니다.': 'Everyone who has signed in at least once.',
+  '공유 목표 {n}개': (p) => `${p.n} shared ${p.n === 1 ? 'goal' : 'goals'}`,
+  '필독서 {n}권': (p) => `${p.n} required ${p.n === 1 ? 'book' : 'books'}`,
+  '초대 코드': 'Invite code',
+  '회원을 골라 이 그룹에 추가': 'Pick a member to add to this group',
+  '추가': 'Add',
+  '아직 참여한 멤버가 없습니다.': 'No members yet.',
+  '도서관에서 바꾸기': 'Change in Library',
 };
 
 /* =========================================================================
@@ -7248,11 +7450,12 @@ async function boot() {
       currentUser = null;
       appData = null;
       syncedSnapshot = new Map();
-      account = { isAdmin: false, inTeam: false };
+      account = { isAdmin: false };
       setLibraryRows([]);
       myAssignedBookIds = new Set();
       myGroups = [];
       groupItems = [];
+      bookGroupLinks = [];
       groupState.groupId = null;
       adminState.loaded = false;
       renderTopbar();
