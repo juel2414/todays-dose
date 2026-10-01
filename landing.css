@@ -109,7 +109,7 @@
   transform: translateX(-50%) rotate(-3deg);
   background: rgba(188, 214, 242, .85); border: 1.5px solid var(--ink); border-radius: 2px;
 }
-.landing .lp-sticky svg { margin-top: 6px; }
+.landing .lp-sticky svg { display: block; margin: 4px 6px 0 auto; }
 
 .landing .lp-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .landing .lp-stat { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; }
