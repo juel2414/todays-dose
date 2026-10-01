@@ -6676,6 +6676,7 @@ const groupState = {
   members: [], // [{ user_id, name, email, joined_at }]
   memberGoals: [], // [{ userId, goal }]
   sharing: false, // "내 목표 공유하기" 선택 상자 열림
+  libQuery: '', // 관리자: 도서관 검색어
 };
 
 /* ----- 공유 내용 (계산 · 비교) ----- */
@@ -7178,6 +7179,25 @@ function renderGroupItemProgress(item, members, memberGoals, actionsHtml, linkFo
     </section>`;
 }
 
+/** 관리자: 도서관 책 검색 결과 (제목·저자에 검색어가 들어간 승인된 책) */
+function renderShareLibraryResults(books, query) {
+  const q = normalizeBookTitle(query);
+  const found = q ? books.filter((b) => normalizeBookTitle(`${b.title} ${b.author || ''}`).includes(q)) : books;
+  if (!books.length) return `<p class="muted small">${t('공유할 수 있는 도서관 책이 없습니다. (이미 공유한 책은 빠져요)')}</p>`;
+  if (!found.length) return `<p class="muted small">${t('찾는 책이 도서관에 없습니다.')}</p>`;
+  const shown = found.slice(0, 30);
+  return shown.map((b) => `
+    <div class="book-result">
+      ${b.coverUrl ? `<img class="cover cover-sm" src="${escapeHtml(b.coverUrl)}" alt="" loading="lazy">` : '<span class="cover cover-sm cover-none"></span>'}
+      <div class="book-result-main">
+        <strong>${escapeHtml(b.title)}</strong>
+        <span class="muted small">${[b.author, t('{pages}페이지 · {n}개 챕터', { pages: bookPages(b), n: b.chapters.length })].filter(Boolean).map(escapeHtml).join(' · ')}</span>
+      </div>
+      <button type="button" class="btn btn-small btn-primary" data-action="share-library" data-book="${escapeHtml(b.id)}">${t('공유')}</button>
+    </div>`).join('')
+    + (found.length > shown.length ? `<p class="muted small">${t('{n}권 더 있어요. 검색어를 더 적어 주세요.', { n: found.length - shown.length })}</p>` : '');
+}
+
 /** 리더 화면: 초대 · 공유한 목표(멤버 진도) · 멤버 */
 function renderLeaderGroup(group) {
   const today = todayStr();
@@ -7237,22 +7257,24 @@ function renderLeaderGroup(group) {
     </div>
     ${groupState.sharing ? `
     <div class="panel share-picker">
-      ${shareable.length || shareableBooks.length ? `
-        <p class="muted small">${t('내 목표의 이름과 내용(목차·목록·범위)만 공유되고, 날짜와 진도는 공유되지 않아요. 멤버는 각자 날짜를 정합니다.')}</p>
+      <p class="muted small">${t('내 목표의 이름과 내용(목차·목록·범위)만 공유되고, 날짜와 진도는 공유되지 않아요. 멤버는 각자 날짜를 정합니다.')}</p>
+      ${shareable.length ? `
         <div class="group-form-row">
           <select id="share-goal" class="input">
-            ${shareable.length ? `<optgroup label="${t('내 목표')}">
-              ${shareable.map((g) => `<option value="${escapeHtml(g.id)}">[${typeLabel(g.type)}] ${escapeHtml(g.title)}</option>`).join('')}
-            </optgroup>` : ''}
-            ${shareableBooks.length ? `<optgroup label="${t('도서관')}">
-              ${shareableBooks.map((b) => `<option value="${escapeHtml(LIBRARY_SOURCE_PREFIX + b.id)}">${escapeHtml(b.title)}${b.author ? ` · ${escapeHtml(b.author)}` : ''}</option>`).join('')}
-            </optgroup>` : ''}
+            ${shareable.map((g) => `<option value="${escapeHtml(g.id)}">[${typeLabel(g.type)}] ${escapeHtml(g.title)}</option>`).join('')}
           </select>
           <button type="button" class="btn btn-primary" data-action="share-confirm">${t('공유')}</button>
           <button type="button" class="btn" data-action="share-close">${t('취소')}</button>
         </div>`
       : `<p class="muted">${t('공유할 목표가 없습니다. 먼저 <a href="#/new">새 목표</a>를 만들어 주세요. (그룹에서 받은 목표는 다시 공유할 수 없어요)')}</p>
-         <button type="button" class="btn btn-small" data-action="share-close">${t('닫기')}</button>`}
+         ${account.isAdmin ? '' : `<button type="button" class="btn btn-small" data-action="share-close">${t('닫기')}</button>`}`}
+      ${account.isAdmin ? `
+      <div class="share-library">
+        <h4>${t('도서관에서 찾기')} <span class="muted small">${t('(관리자)')}</span></h4>
+        <input type="search" id="share-lib-q" class="input" placeholder="${t('책 제목이나 저자로 찾기')}" value="${escapeHtml(groupState.libQuery || '')}">
+        <div id="share-lib-results" class="book-search-results">${renderShareLibraryResults(shareableBooks, groupState.libQuery || '')}</div>
+        ${shareable.length ? '' : `<button type="button" class="btn btn-small" data-action="share-close">${t('닫기')}</button>`}
+      </div>` : ''}
     </div>` : ''}
     ${items.length ? itemsHtml : `<div class="empty">${t('아직 필독서나 필수 시청이 없습니다. 내 책·강의 목표를 공유하면 멤버들이 같은 내용으로 계획을 세울 수 있어요.')}</div>`}
 
@@ -7303,6 +7325,14 @@ function renderGroupMemberGoal(group, userId, goalId) {
 }
 
 function bindGroupEvents(container, group) {
+  container.addEventListener('input', (e) => {
+    if (e.target.id !== 'share-lib-q') return;
+    groupState.libQuery = e.target.value;
+    const sharedSources = new Set(groupItems.filter((i) => i.groupId === group.id).map((i) => i.sourceGoalId).filter(Boolean));
+    const books = libraryRows.filter((b) => b.status === 'approved' && !sharedSources.has(LIBRARY_SOURCE_PREFIX + b.id))
+      .sort((a, b) => a.title.localeCompare(b.title, 'ko'));
+    container.querySelector('#share-lib-results').innerHTML = renderShareLibraryResults(books, groupState.libQuery);
+  });
   container.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
@@ -7356,8 +7386,8 @@ function bindGroupEvents(container, group) {
     } else if (action === 'share-open' || action === 'share-close') {
       groupState.sharing = action === 'share-open';
       render();
-    } else if (action === 'share-confirm') {
-      const value = container.querySelector('#share-goal').value;
+    } else if (action === 'share-confirm' || action === 'share-library') {
+      const value = action === 'share-library' ? LIBRARY_SOURCE_PREFIX + btn.dataset.book : container.querySelector('#share-goal').value;
       const src = groupItemSource({ sourceGoalId: value });
       if (!src) return;
       await run(async () => {
@@ -8134,6 +8164,12 @@ const EN = {
   '자주 묻는 질문': 'FAQ',
   '설명서의 화면 그림은 한국어 화면이에요.': 'Screenshots in this guide show the Korean screens.',
   '내 목표': 'My goals',
+  '도서관에서 찾기': 'Find in the library',
+  '(관리자)': '(admin)',
+  '책 제목이나 저자로 찾기': 'Search by title or author',
+  '공유할 수 있는 도서관 책이 없습니다. (이미 공유한 책은 빠져요)': 'No library books to share. (Books already shared are hidden.)',
+  '찾는 책이 도서관에 없습니다.': 'No matching book in the library.',
+  '{n}권 더 있어요. 검색어를 더 적어 주세요.': (p) => `${p.n} more — type more to narrow down.`,
 };
 
 /* =========================================================================

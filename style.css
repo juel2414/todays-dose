@@ -1241,3 +1241,7 @@ body.modal-open { overflow: hidden; }
 .guide-faq-item { padding: 14px 18px; margin-bottom: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
 .guide-faq-item h3 { margin: 0 0 6px; font-size: 16px; }
 .guide-faq-item p { margin: 0; line-height: 1.7; }
+.share-library { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.share-library h4 { margin: 0 0 10px; font-size: 15px; }
+.share-library .input { max-width: 420px; }
+.share-library .book-search-results { border: 1px solid var(--border); margin-bottom: 10px; }
