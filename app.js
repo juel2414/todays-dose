@@ -6677,6 +6677,7 @@ const groupState = {
   memberGoals: [], // [{ userId, goal }]
   sharing: false, // "내 목표 공유하기" 선택 상자 열림
   libQuery: '', // 관리자: 도서관 검색어
+  goalQuery: '', // 공유할 내 목표 검색어
 };
 
 /* ----- 공유 내용 (계산 · 비교) ----- */
@@ -7179,6 +7180,22 @@ function renderGroupItemProgress(item, members, memberGoals, actionsHtml, linkFo
     </section>`;
 }
 
+/** 공유할 내 목표 목록 (이름으로 거르기) */
+function renderShareGoalResults(goals, query) {
+  const q = normalizeBookTitle(query);
+  const found = q ? goals.filter((g) => normalizeBookTitle(`${g.title} ${getBookAuthor(g)}`).includes(q)) : goals;
+  if (!found.length) return `<p class="muted small">${t('찾는 목표가 없습니다.')}</p>`;
+  return found.map((g) => `
+    <div class="book-result">
+      <span class="type-tag type-${g.type}">${typeLabel(g.type)}</span>
+      <div class="book-result-main">
+        <strong>${escapeHtml(g.title)}</strong>
+        <span class="muted small">${[getBookAuthor(g), describeShareContent({ type: g.type, content: goalShareContent(g) })].filter(Boolean).map(escapeHtml).join(' · ')}</span>
+      </div>
+      <button type="button" class="btn btn-small btn-primary" data-action="share-goal" data-goal="${escapeHtml(g.id)}">${t('공유')}</button>
+    </div>`).join('');
+}
+
 /** 관리자: 도서관 책 검색 결과 (제목·저자에 검색어가 들어간 승인된 책) */
 function renderShareLibraryResults(books, query) {
   const q = normalizeBookTitle(query);
@@ -7258,23 +7275,20 @@ function renderLeaderGroup(group) {
     ${groupState.sharing ? `
     <div class="panel share-picker">
       <p class="muted small">${t('내 목표의 이름과 내용(목차·목록·범위)만 공유되고, 날짜와 진도는 공유되지 않아요. 멤버는 각자 날짜를 정합니다.')}</p>
-      ${shareable.length ? `
-        <div class="group-form-row">
-          <select id="share-goal" class="input">
-            ${shareable.map((g) => `<option value="${escapeHtml(g.id)}">[${typeLabel(g.type)}] ${escapeHtml(g.title)}</option>`).join('')}
-          </select>
-          <button type="button" class="btn btn-primary" data-action="share-confirm">${t('공유')}</button>
-          <button type="button" class="btn" data-action="share-close">${t('취소')}</button>
-        </div>`
-      : `<p class="muted">${t('공유할 목표가 없습니다. 먼저 <a href="#/new">새 목표</a>를 만들어 주세요. (그룹에서 받은 목표는 다시 공유할 수 없어요)')}</p>
-         ${account.isAdmin ? '' : `<button type="button" class="btn btn-small" data-action="share-close">${t('닫기')}</button>`}`}
+      <div class="share-library share-mine">
+        <h4>${t('내 목표에서 고르기')}</h4>
+        ${shareable.length ? `
+          <input type="search" id="share-goal-q" class="input" placeholder="${t('목표 이름으로 찾기')}" value="${escapeHtml(groupState.goalQuery || '')}">
+          <div id="share-goal-results" class="book-search-results">${renderShareGoalResults(shareable, groupState.goalQuery || '')}</div>`
+        : `<p class="muted small">${t('공유할 목표가 없습니다. 먼저 <a href="#/new">새 목표</a>를 만들어 주세요. (그룹에서 받은 목표는 다시 공유할 수 없어요)')}</p>`}
+      </div>
       ${account.isAdmin ? `
       <div class="share-library">
         <h4>${t('도서관에서 찾기')} <span class="muted small">${t('(관리자)')}</span></h4>
         <input type="search" id="share-lib-q" class="input" placeholder="${t('책 제목이나 저자로 찾기')}" value="${escapeHtml(groupState.libQuery || '')}">
         <div id="share-lib-results" class="book-search-results">${renderShareLibraryResults(shareableBooks, groupState.libQuery || '')}</div>
-        ${shareable.length ? '' : `<button type="button" class="btn btn-small" data-action="share-close">${t('닫기')}</button>`}
       </div>` : ''}
+      <div class="share-picker-foot"><button type="button" class="btn btn-small" data-action="share-close">${t('닫기')}</button></div>
     </div>` : ''}
     ${items.length ? itemsHtml : `<div class="empty">${t('아직 필독서나 필수 시청이 없습니다. 내 책·강의 목표를 공유하면 멤버들이 같은 내용으로 계획을 세울 수 있어요.')}</div>`}
 
@@ -7326,6 +7340,13 @@ function renderGroupMemberGoal(group, userId, goalId) {
 
 function bindGroupEvents(container, group) {
   container.addEventListener('input', (e) => {
+    if (e.target.id === 'share-goal-q') {
+      groupState.goalQuery = e.target.value;
+      const shared = new Set(groupItems.filter((i) => i.groupId === group.id).map((i) => i.sourceGoalId).filter(Boolean));
+      const goals = appData.goals.filter((g) => !shared.has(g.id) && !g.groupItemId);
+      container.querySelector('#share-goal-results').innerHTML = renderShareGoalResults(goals, groupState.goalQuery);
+      return;
+    }
     if (e.target.id !== 'share-lib-q') return;
     groupState.libQuery = e.target.value;
     const sharedSources = new Set(groupItems.filter((i) => i.groupId === group.id).map((i) => i.sourceGoalId).filter(Boolean));
@@ -7386,8 +7407,8 @@ function bindGroupEvents(container, group) {
     } else if (action === 'share-open' || action === 'share-close') {
       groupState.sharing = action === 'share-open';
       render();
-    } else if (action === 'share-confirm' || action === 'share-library') {
-      const value = action === 'share-library' ? LIBRARY_SOURCE_PREFIX + btn.dataset.book : container.querySelector('#share-goal').value;
+    } else if (action === 'share-goal' || action === 'share-library') {
+      const value = action === 'share-library' ? LIBRARY_SOURCE_PREFIX + btn.dataset.book : btn.dataset.goal;
       const src = groupItemSource({ sourceGoalId: value });
       if (!src) return;
       await run(async () => {
@@ -8170,6 +8191,9 @@ const EN = {
   '공유할 수 있는 도서관 책이 없습니다. (이미 공유한 책은 빠져요)': 'No library books to share. (Books already shared are hidden.)',
   '찾는 책이 도서관에 없습니다.': 'No matching book in the library.',
   '{n}권 더 있어요. 검색어를 더 적어 주세요.': (p) => `${p.n} more — type more to narrow down.`,
+  '내 목표에서 고르기': 'Choose from my goals',
+  '목표 이름으로 찾기': 'Search by goal name',
+  '찾는 목표가 없습니다.': 'No matching goal.',
 };
 
 /* =========================================================================

@@ -1245,3 +1245,6 @@ body.modal-open { overflow: hidden; }
 .share-library h4 { margin: 0 0 10px; font-size: 15px; }
 .share-library .input { max-width: 420px; }
 .share-library .book-search-results { border: 1px solid var(--border); margin-bottom: 10px; }
+.share-mine { margin-top: 8px; padding-top: 0; border-top: 0; }
+.share-picker-foot { display: flex; justify-content: flex-end; margin-top: 12px; }
+.book-result .type-tag { flex-shrink: 0; }

@@ -274,8 +274,8 @@ const GUIDE = [
       img: 'share',
       steps: [
         { ko: '그룹 화면의 <b>+ 내 목표 공유하기</b>를 눌러요.', en: 'Click <b>+ Share one of my goals</b> on the group page.' },
-        { ko: '공유할 내 목표를 골라요.', en: 'Choose the goal to share.' },
-        { ko: '<b>공유</b>를 누르면 멤버들의 첫 화면에 <b>계획 세우기</b>로 나타나요.', en: 'Click <b>Share</b> — it appears on members’ dashboards with <b>Make a plan</b>.' },
+        { ko: '<b>내 목표에서 고르기</b>에 내 목표가 나와요. 많으면 이름으로 찾아요.', en: '<b>Choose from my goals</b> lists your goals — search by name if there are many.' },
+        { ko: '공유할 목표의 <b>공유</b>를 누르면 멤버들의 첫 화면에 <b>계획 세우기</b>로 나타나요.', en: 'Click <b>Share</b> on a goal — it appears on members’ dashboards with <b>Make a plan</b>.' },
       ],
     }],
     tip: { ko: '공유되는 건 제목과 내용(목차·강의 목록·범위)뿐이에요. 리더의 날짜와 진도는 공유되지 않고, 멤버는 각자 날짜를 정해요.', en: 'Only the title and contents are shared — not your dates or progress. Each member sets their own dates.' },
