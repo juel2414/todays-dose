@@ -2329,8 +2329,8 @@ function renderTopbar() {
   bar.hidden = false;
   bar.innerHTML = `
     <div class="topbar-inner">
+      <a class="brand" href="#/"><img class="brand-logo" src="logo/symbol.svg" alt="" width="26" height="26">${t('오늘분량')}</a>
       <nav class="topbar-nav">
-        <a class="brand" href="#/"><img class="brand-logo" src="logo/symbol.svg" alt="" width="26" height="26">${t('오늘분량')}</a>
         <a class="nav-link" href="#/groups">${t('그룹')}</a>
         <a class="nav-link" href="#/help">${t('도움말')}</a>
         ${account.isAdmin ? `<a class="nav-link" href="#/admin">${t('관리자')}</a>` : ''}

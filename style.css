@@ -554,16 +554,17 @@ input[type="date"].input { width: 180px; }
   border-bottom: 1px solid var(--border);
 }
 .topbar-inner {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr; /* 로고 | 가운데 메뉴 | 오른쪽 */
   align-items: center;
+  gap: 16px;
   max-width: 1160px;
   height: 52px;
   margin: 0 auto;
   padding: 0 32px;
 }
 .brand { font-weight: 700; color: var(--text); text-decoration: none; }
-.topbar-right { display: flex; align-items: center; gap: 14px; font-size: 14px; }
+.topbar-right { display: flex; align-items: center; justify-content: flex-end; gap: 14px; font-size: 14px; }
 .topbar .user { color: var(--muted); }
 .save-state { font-size: 13px; }
 .save-state.is-saving { color: var(--muted); }
@@ -613,7 +614,8 @@ input[type="date"].input { width: 180px; }
 .login-lang { position: fixed; top: 14px; right: 16px; z-index: 5; }
 
 /* ===== 우리 팀 · 사역자 필독서 ===== */
-.topbar-nav { display: flex; align-items: center; gap: 20px; }
+.topbar-nav { display: flex; align-items: center; justify-content: center; gap: 28px; }
+.topbar .brand { justify-self: start; }
 .nav-link { font-size: 14px; font-weight: 600; color: var(--muted); text-decoration: none; }
 .nav-link:hover { color: var(--text); }
 
