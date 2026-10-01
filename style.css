@@ -1218,12 +1218,18 @@ body.modal-open { overflow: hidden; }
 
 /* ===== 도움말 (사용 설명서) ===== */
 .guide { max-width: 900px; }
-.guide-toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 32px; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.guide-toc { display: flex; flex-direction: column; gap: 12px; margin: 0 0 36px; padding: 16px 18px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.guide-toc-part { display: flex; gap: 14px; align-items: flex-start; }
+.guide-toc-part > strong { flex: 0 0 190px; font-size: 14px; padding-top: 6px; }
+.guide-toc-part > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.guide-part { margin-bottom: 20px; }
+.guide-part-title { font-size: 26px; margin: 0 0 22px; padding-bottom: 10px; border-bottom: 2px solid var(--border); }
+.guide-shot-block h4 { margin: 18px 0 10px; font-size: 16px; color: var(--primary); }
 .guide-toc a { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; background: var(--neutral-soft); color: var(--text); text-decoration: none; font-size: 14px; }
 .guide-toc a:hover { background: var(--primary-soft); color: var(--primary); }
 .guide-toc a span { font-weight: 700; color: var(--primary); }
 .guide-section { margin-bottom: 48px; }
-.guide-section h2 { display: flex; align-items: center; gap: 10px; font-size: 22px; margin: 0 0 10px; }
+.guide-section h3 { display: flex; align-items: center; gap: 10px; font-size: 21px; margin: 0 0 10px; }
 .guide-no { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: var(--primary); color: #fff; font-size: 16px; flex-shrink: 0; }
 .guide-intro { margin: 0 0 14px; line-height: 1.7; }
 .guide-shot { margin: 0 0 14px; }
