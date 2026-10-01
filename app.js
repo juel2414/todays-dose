@@ -2231,6 +2231,16 @@ function runPlanSelfTests() {
 
   check('강의 목록 합치기: 겹친 제목은 한 번만', JSON.stringify(mergeLectureTitles([['1강 a', '2강 b', '3강 c'], ['3강 c', '4강 d']])) === JSON.stringify(['1강 a', '2강 b', '3강 c', '4강 d']));
 
+  // 관리자: 도서관 책을 그룹에 공유
+  const savedRows = libraryRows;
+  libraryRows = [{ id: 'lb1', status: 'approved', title: '책', author: '저자', coverUrl: null, chapters: [{ name: '1장', startPage: 1 }, { name: '2장', startPage: 11 }], lastPage: 20 }];
+  const libItem = { id: 'it9', type: 'book', title: '책', content: libraryBookShareContent(libraryRows[0]), sourceGoalId: 'lib:lb1' };
+  check('그룹: 도서관 책 원본 연결', groupItemSource(libItem)?.type === 'book' && !isGroupItemSourceChanged(libItem)
+    && !isGroupItemChanged(linkGoalToGroupItem(createGoalFromInput({ ...goalToInput(src), title: '책', ...libItem.content }), libItem), libItem));
+  libraryRows = [{ ...libraryRows[0], lastPage: 25 }];
+  check('그룹: 도서관 책이 바뀌면 다시 공유 표시', isGroupItemSourceChanged(libItem));
+  libraryRows = savedRows;
+
   console.group('■ 검사 결과');
   console.table(results);
   console.groupEnd();
@@ -6704,6 +6714,35 @@ function isSourceGoalChanged(item, goal) {
   return !!goal && (goal.type !== item.type || shareSignature(goal.title, goalShareContent(goal)) !== shareSignature(item.title, item.content));
 }
 
+/* 관리자는 도서관 책을 그룹에 바로 공유할 수 있다. 이때 원본 표시는 source_goal_id = 'lib:<책 id>' */
+const LIBRARY_SOURCE_PREFIX = 'lib:';
+
+/** 도서관 책 → 공유 내용 (목표의 goalShareContent와 같은 모양) */
+function libraryBookShareContent(book) {
+  return {
+    author: String(book.author || '').trim(),
+    chapters: book.chapters.map((c) => ({ name: String(c.name).trim(), startPage: Number(c.startPage) })),
+    lastPage: Number(book.lastPage),
+  };
+}
+
+/** 공유 항목의 원본(내 목표 또는 도서관 책) → { type, title, content, coverUrl } (없으면 null) */
+function groupItemSource(item) {
+  const id = item.sourceGoalId || '';
+  if (id.startsWith(LIBRARY_SOURCE_PREFIX)) {
+    const book = libraryRows.find((b) => b.id === id.slice(LIBRARY_SOURCE_PREFIX.length) && b.status === 'approved');
+    return book ? { type: 'book', title: book.title, content: libraryBookShareContent(book), coverUrl: book.coverUrl || null } : null;
+  }
+  const goal = id ? getGoal(id) : null;
+  return goal ? { type: goal.type, title: goal.title, content: goalShareContent(goal), coverUrl: getCoverUrl(goal) } : null;
+}
+
+/** 원본이 공유한 뒤에 바뀌었는지 (내 목표·도서관 책 공통) */
+function isGroupItemSourceChanged(item) {
+  const src = groupItemSource(item);
+  return !!src && (src.type !== item.type || shareSignature(src.title, src.content) !== shareSignature(item.title, item.content));
+}
+
 /** 공유 내용 최신본을 반영한 수정 입력 (기간·쉬는 날은 그대로) */
 function inputFromGroupItem(goal, item) {
   return { ...goalToInput(goal), title: item.title, ...item.content };
@@ -7146,12 +7185,17 @@ function renderLeaderGroup(group) {
   const sharedSources = new Set(items.map((i) => i.sourceGoalId).filter(Boolean));
   // 그룹에서 받은 목표는 다시 공유하지 않는다 (다른 그룹 내용의 재배포 방지)
   const shareable = appData.goals.filter((g) => !sharedSources.has(g.id) && !g.groupItemId);
+  // 관리자: 도서관(승인된 책)에서도 고를 수 있다
+  const shareableBooks = account.isAdmin
+    ? libraryRows.filter((b) => b.status === 'approved' && !sharedSources.has(LIBRARY_SOURCE_PREFIX + b.id))
+      .sort((a, b) => a.title.localeCompare(b.title, 'ko'))
+    : [];
   const loading = !groupState.loaded;
 
   const renderItem = (item) => {
-    const source = item.sourceGoalId ? getGoal(item.sourceGoalId) : null;
+
     const actions = `
-      ${isSourceGoalChanged(item, source) ? `<button type="button" class="btn btn-small" data-action="share-update" data-item="${escapeHtml(item.id)}"
+      ${isGroupItemSourceChanged(item) ? `<button type="button" class="btn btn-small" data-action="share-update" data-item="${escapeHtml(item.id)}"
         title="${t('내 목표에서 바꾼 이름·내용을 멤버들에게 다시 공유합니다')}">${t('바뀐 내용 공유')}</button>` : ''}
       <button type="button" class="btn btn-small btn-danger" data-action="share-delete" data-item="${escapeHtml(item.id)}">${t('공유 취소')}</button>`;
     return renderGroupItemProgress(item, loading ? null : groupState.members, groupState.memberGoals, actions,
@@ -7193,11 +7237,16 @@ function renderLeaderGroup(group) {
     </div>
     ${groupState.sharing ? `
     <div class="panel share-picker">
-      ${shareable.length ? `
+      ${shareable.length || shareableBooks.length ? `
         <p class="muted small">${t('내 목표의 이름과 내용(목차·목록·범위)만 공유되고, 날짜와 진도는 공유되지 않아요. 멤버는 각자 날짜를 정합니다.')}</p>
         <div class="group-form-row">
           <select id="share-goal" class="input">
-            ${shareable.map((g) => `<option value="${escapeHtml(g.id)}">[${typeLabel(g.type)}] ${escapeHtml(g.title)}</option>`).join('')}
+            ${shareable.length ? `<optgroup label="${t('내 목표')}">
+              ${shareable.map((g) => `<option value="${escapeHtml(g.id)}">[${typeLabel(g.type)}] ${escapeHtml(g.title)}</option>`).join('')}
+            </optgroup>` : ''}
+            ${shareableBooks.length ? `<optgroup label="${t('도서관')}">
+              ${shareableBooks.map((b) => `<option value="${escapeHtml(LIBRARY_SOURCE_PREFIX + b.id)}">${escapeHtml(b.title)}${b.author ? ` · ${escapeHtml(b.author)}` : ''}</option>`).join('')}
+            </optgroup>` : ''}
           </select>
           <button type="button" class="btn btn-primary" data-action="share-confirm">${t('공유')}</button>
           <button type="button" class="btn" data-action="share-close">${t('취소')}</button>
@@ -7308,24 +7357,25 @@ function bindGroupEvents(container, group) {
       groupState.sharing = action === 'share-open';
       render();
     } else if (action === 'share-confirm') {
-      const goal = getGoal(container.querySelector('#share-goal').value);
-      if (!goal) return;
+      const value = container.querySelector('#share-goal').value;
+      const src = groupItemSource({ sourceGoalId: value });
+      if (!src) return;
       await run(async () => {
         check(await sb.from(GROUP_ITEMS_TABLE).insert({
-          group_id: group.id, type: goal.type, title: goal.title.trim(), content: goalShareContent(goal),
-          cover_url: getCoverUrl(goal), source_goal_id: goal.id,
+          group_id: group.id, type: src.type, title: src.title.trim(), content: src.content,
+          cover_url: src.coverUrl, source_goal_id: value,
         }));
         groupState.sharing = false;
         await refreshGroups();
       });
     } else if (action === 'share-update') {
       const item = groupItems.find((i) => i.id === btn.dataset.item);
-      const goal = item && getGoal(item.sourceGoalId);
-      if (!goal) return;
+      const src = item && groupItemSource(item);
+      if (!src) return;
       if (!confirm(t('내 목표의 바뀐 이름·내용을 멤버들에게 다시 공유할까요?\n이미 계획을 세운 멤버에게는 "적용할까요?" 안내가 나타납니다.'))) return;
       await run(async () => {
         check(await sb.from(GROUP_ITEMS_TABLE).update({
-          type: goal.type, title: goal.title.trim(), content: goalShareContent(goal), cover_url: getCoverUrl(goal), updated_at: new Date().toISOString(),
+          type: src.type, title: src.title.trim(), content: src.content, cover_url: src.coverUrl, updated_at: new Date().toISOString(),
         }).eq('id', item.id));
         await refreshGroups();
       });
@@ -8083,6 +8133,7 @@ const EN = {
   '목차': 'Contents',
   '자주 묻는 질문': 'FAQ',
   '설명서의 화면 그림은 한국어 화면이에요.': 'Screenshots in this guide show the Korean screens.',
+  '내 목표': 'My goals',
 };
 
 /* =========================================================================
