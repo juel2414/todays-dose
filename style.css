@@ -558,10 +558,8 @@ input[type="date"].input { width: 180px; }
   grid-template-columns: 1fr auto 1fr; /* 로고 | 가운데 메뉴 | 오른쪽 */
   align-items: center;
   gap: 16px;
-  max-width: 1160px;
-  height: 52px;
-  margin: 0 auto;
-  padding: 0 32px;
+  height: 56px;
+  padding: 0 40px; /* 로고·로그아웃을 화면 양 끝에 */
 }
 .brand { font-weight: 700; color: var(--text); text-decoration: none; }
 .topbar-right { display: flex; align-items: center; justify-content: flex-end; gap: 14px; font-size: 14px; }
