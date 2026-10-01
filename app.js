@@ -5841,14 +5841,19 @@ function applyPlanFilter(container) {
   if (empty) empty.hidden = shown > 0 || !container.querySelector('[data-plan-person]');
 }
 
+/** 관리자: 그룹에 회원 추가. 이미 멤버면(그사이 초대 링크로 참여 등) 성공으로 본다 */
+async function adminInsertGroupMember(groupId, userId) {
+  const { error } = await getSupabase().from(GROUP_MEMBERS_TABLE).insert({ group_id: groupId, user_id: userId });
+  if (error && error.code !== '23505') throw error; // 23505 = 이미 있는 멤버
+}
+
 /** 관리자: 드롭다운으로 고른 그룹에 회원 추가 */
 async function adminAddToGroup(select) {
   const groupId = select.value;
   if (!groupId) return;
   select.disabled = true;
   try {
-    const { error } = await getSupabase().from(GROUP_MEMBERS_TABLE).insert({ group_id: groupId, user_id: select.dataset.memberGroupAdd });
-    if (error) throw error;
+    await adminInsertGroupMember(groupId, select.dataset.memberGroupAdd);
     await Promise.all([adminLoadGroups(), loadGroups()]);
     renderTopbar();
     render();
@@ -5952,7 +5957,7 @@ async function handleAdminGroupAction(action, btn, container) {
   } else if (action === 'ag-add-member' && g) {
     const userId = container.querySelector(`[data-add-member="${g.id}"]`).value;
     if (!userId) return true;
-    job = async () => check(await sb.from(GROUP_MEMBERS_TABLE).insert({ group_id: g.id, user_id: userId }));
+    job = async () => adminInsertGroupMember(g.id, userId);
   } else if (action === 'ag-remove-member' && g) {
     if (!confirm(t('{name}님을 그룹에서 내보낼까요?\n그 멤버의 계획은 개인 목표로 남고, 더 이상 볼 수 없습니다.', { name: btn.dataset.name }))) return true;
     job = async () => check(await sb.from(GROUP_MEMBERS_TABLE).delete().eq('group_id', g.id).eq('user_id', btn.dataset.user));
