@@ -1461,6 +1461,7 @@ async function loadAccount(user) {
     isAdmin: admin.data === true,
     language: profile.data && isLang(profile.data.language) ? profile.data.language : null,
     motto: (profile.data && profile.data.motto) || '',
+    dayLog: profile.data && profile.data.day_log && typeof profile.data.day_log === 'object' ? { ...profile.data.day_log } : {},
   };
 }
 
@@ -2733,6 +2734,7 @@ function renderDashboard(root) {
     return;
   }
 
+  syncDayLog(); // 오늘 상태를 먼저 기록해야 연속 기록·도장판이 바로 맞게 나온다
   const nDone = todayItems.filter((x) => x.done).length;
   const allDone = todayItems.length > 0 && nDone === todayItems.length;
   root.innerHTML = `
@@ -2755,11 +2757,14 @@ function renderDashboard(root) {
             <h2>${t('오늘 할 분량')}</h2>
             ${todayItems.length ? `<span class="serif-num">${t('{total}개 중 {done}개 완료', { total: todayItems.length, done: nDone })}</span>` : ''}
           </div>
+          ${todayItems.length ? `<div class="today-bar ${allDone ? 'is-full' : ''}"><i style="width:${Math.round((nDone / todayItems.length) * 100)}%"></i>${allDone ? '<b aria-hidden="true">✓</b>' : ''}</div>` : ''}
+          ${allDone ? renderTodayFinish(active) : ''}
           ${todayItems.length ? todayItems.map(renderTodayItem).join('')
             : `<p class="dash-today-empty">${active.length ? t('오늘은 할 분량이 없어요.') : t('진행 중인 목표가 없습니다. <a href="#/new">새 목표를 추가</a>해 보세요.')}</p>`}
         </section>
 
         <aside class="dash-aside">
+          ${renderMotivationCard()}
           ${pendingCards}
           <section class="closed-box">
             <button type="button" class="closed-toggle" data-action="toggle-closed" aria-expanded="${dashState.closedOpen}">
@@ -2808,16 +2813,195 @@ function renderDashboard(root) {
       const done = s.done >= row.cumulative;
       if (done && s.done > row.cumulative
         && !confirm(t('오늘 분량보다 더 진행했어요. 진도를 오늘 분량 시작 전으로 되돌릴까요?'))) return;
+      const wasAllDone = todayDayStatus() === 'done';
       applyRowCheck(goal, s.basis, row, !done);
       commit();
       const y = window.scrollY;
       dashState.justChecked = done ? null : goal.id;
+      dashState.justFinished = !wasAllDone && todayDayStatus() === 'done';
       renderDashboard(root);
+      if (dashState.justFinished) celebrateToday();
       dashState.justChecked = null;
+      dashState.justFinished = false;
       window.scrollTo(0, y);
     }
   });
   bindMottoInput(root);
+}
+
+/* =========================================================================
+ * 동기부여 — 오늘 끝 축하 · 내일 미리보기 · 연속 기록 · 이번 주 도장판
+ *   하루 기록(account.dayLog, 서버 study_planner_profiles.day_log): { 'YYYY-MM-DD': 'done' | 'open' }
+ *   done = 그날 오늘 분량을 전부 끝냄, open = 할 게 있었는데 아직. 기록 없는 날은 계획으로 판단한다.
+ *   쉬는 날(할 분량이 없는 날)은 연속 기록을 끊지 않는다.
+ * ========================================================================= */
+
+/** 오늘 상태: 'done' | 'open' | null(오늘 할 분량 없음) */
+function todayDayStatus() {
+  if (!appData) return null;
+  const today = todayStr();
+  const items = appData.goals.map((g) => {
+    const s = getGoalSummary(g, undefined, today);
+    return todayItemOf(g, s);
+  }).filter(Boolean);
+  if (!items.length) return null;
+  return items.every((x) => x.done) ? 'done' : 'open';
+}
+
+/** 오늘 상태가 바뀌었으면 서버에 기록 (실패해도 화면은 그대로) */
+function syncDayLog() {
+  if (!currentUser || !appData) return;
+  const today = todayStr();
+  const status = todayDayStatus();
+  if (!status) return;
+  account.dayLog = account.dayLog || {};
+  if (account.dayLog[today] === status) return;
+  account.dayLog[today] = status;
+  try {
+    getSupabase().rpc('study_planner_log_day', { p_date: today, p_status: status })
+      .then(({ error }) => { if (error) console.warn('[streak] 하루 기록 실패:', error); })
+      .catch((err) => console.warn('[streak] 하루 기록 실패:', err));
+  } catch (err) {
+    console.warn('[streak] 하루 기록 실패:', err);
+  }
+}
+
+/** 그날 공부할 분량이 있었던(있을) 목표가 하나라도 있는지 — 기록이 없는 날을 판단할 때 쓴다 */
+let studyCtxCache = null;
+function studyCtx() {
+  return studyCtxCache || appData.goals.map((g) => {
+    const s = getGoalSummary(g);
+    const last = g.progress.history.length ? g.progress.history[0].date : null;
+    return { g, plan: s.plan, endedOn: s.isComplete ? last : null };
+  });
+}
+function hadStudyDay(date) {
+  return studyCtx().some(({ g, plan, endedOn }) => {
+    if (diffDays(g.startDate, date) < 0 || diffDays(date, g.dueDate) < 0) return false;
+    if (endedOn && diffDays(endedOn, date) > 0) return false; // 이미 끝낸 뒤
+    return !isRestDate(date, plan.restWeekdays, plan.restDates);
+  });
+}
+
+/** 하루의 도장 상태: done · miss · rest · today · future */
+function dayStampOf(date, today = todayStr()) {
+  const log = account.dayLog || {};
+  const gap = diffDays(today, date);
+  if (log[date] === 'done') return 'done';
+  if (gap > 0) return hadStudyDay(date) ? 'future' : 'rest';
+  if (gap === 0) return todayDayStatus() ? 'today' : 'rest';
+  return log[date] === 'open' || hadStudyDay(date) ? 'miss' : 'rest';
+}
+
+/** 연속 기록: 어제부터 거꾸로 다 한 날을 센다. 쉬는 날은 건너뛰고, 오늘 다 했으면 +1 */
+function computeStreak(today = todayStr()) {
+  const log = account.dayLog || {};
+  const earliest = appData.goals.reduce((m, g) => (!m || diffDays(g.startDate, m) > 0 ? g.startDate : m), null);
+  let streak = 0;
+  for (let i = 1; i <= 400; i++) {
+    const d = addDays(today, -i);
+    if (earliest && diffDays(earliest, d) < 0) break;
+    if (log[d] === 'done') { streak++; continue; }
+    if (log[d] === 'open' || hadStudyDay(d)) break;
+  }
+  if (log[today] === 'done') streak++;
+  return streak;
+}
+
+/** 며칠 비우고 돌아왔는지: 마지막 기록이 3일 넘게 전이면 그 일수 */
+function comebackGap(today = todayStr()) {
+  const past = Object.keys(account.dayLog || {}).filter((d) => DATE_RE.test(d) && diffDays(d, today) > 0).sort();
+  if (!past.length) return 0;
+  const gap = diffDays(past[past.length - 1], today);
+  return gap >= 4 ? gap : 0;
+}
+
+/** 오른쪽 위 카드: 연속 기록 + 이번 주 도장판 */
+function renderMotivationCard() {
+  if (!appData.goals.length) return '';
+  studyCtxCache = null;
+  studyCtxCache = studyCtx();
+  try { return renderMotivationCardInner(); } finally { studyCtxCache = null; }
+}
+
+function renderMotivationCardInner() {
+  const today = todayStr();
+  const offset = (parseDate(today).getDay() + 6) % 7; // 월요일 = 0
+  const monday = addDays(today, -offset);
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const date = addDays(monday, i);
+    return { date, stamp: dayStampOf(date, today), label: weekdayLabel(date) };
+  });
+  const study = days.filter((d) => d.stamp !== 'rest');
+  const doneN = days.filter((d) => d.stamp === 'done').length;
+  const weekDone = study.length > 0 && doneN === study.length;
+  const streak = computeStreak(today);
+  const gap = comebackGap(today);
+  const todayDone = (account.dayLog || {})[today] === 'done';
+  let note;
+  if (weekDone) note = t('이번 주 완주!');
+  else if (gap && !todayDone) note = t('다시 왔네요! 오늘 분량만 하면 돼요');
+  else if (!streak) note = t('오늘 끝내면 1일째예요');
+  else if (!todayDone && todayDayStatus()) note = t('오늘 끝내면 {n}일째예요', { n: streak + 1 });
+  else note = t('쉬는 날은 끊기지 않아요');
+  return `
+    <section class="mot-card ${weekDone ? 'is-week-done' : ''}">
+      <div class="mot-top">
+        <div class="mot-streak">
+          <span class="mot-flame" aria-hidden="true"></span>
+          <span class="mot-num">${streak}</span>
+          <span class="mot-unit">${t('일째 이어서')}</span>
+        </div>
+        <span class="mot-week-count">${t('이번 주 {done}/{total}', { done: doneN, total: study.length })}</span>
+      </div>
+      <div class="mot-week" role="list" aria-label="${t('이번 주 기록')}">
+        ${days.map((d) => `<span class="mot-day is-${d.stamp}" role="listitem" title="${escapeHtml(d.date)}">
+          <i aria-hidden="true">${d.stamp === 'done' ? '✓' : ''}</i><b>${escapeHtml(d.label)}</b></span>`).join('')}
+      </div>
+      <p class="mot-note">${escapeHtml(note)}</p>
+    </section>`;
+}
+
+/** 오늘 다 끝냈을 때: 손글씨 '오늘 끝!' + 내일 할 분량 미리보기 */
+function renderTodayFinish(active) {
+  const tomorrow = addDays(todayStr(), 1);
+  const rows = active.map(({ goal, s }) => {
+    if (diffDays(tomorrow, goal.dueDate) < 0) return null;
+    const row = buildSchedule(s.plan).find((r) => r.date === tomorrow);
+    if (!row || row.isRestDay || row.amount === 0) return null;
+    const from = Math.max(s.done, row.prevCumulative);
+    if (from >= row.cumulative) return null;
+    useUnitOf(goal);
+    return `<li><span class="today-next-title">${escapeHtml(goal.title)}</span><span class="today-next-range">${escapeHtml(describeUnitsRange(goal, s.basis, from, row.cumulative))}</span></li>`;
+  }).filter(Boolean);
+  return `
+    <div class="today-finish ${dashState.justFinished ? 'is-new' : ''}">
+      <div class="today-finish-head">
+        <span class="hand-note today-finish-word">${t('오늘 끝!')}</span>
+        <span class="today-finish-sub">${t('내일 할 분량이에요. 오늘은 여기까지!')}</span>
+      </div>
+      ${rows.length ? `<ul class="today-next">${rows.join('')}</ul>` : `<p class="today-next-rest">${t('내일은 쉬는 날이에요.')}</p>`}
+    </div>`;
+}
+
+/** 오늘 분량을 막 다 끝냈을 때 종이 조각이 잠깐 흩날린다 */
+function celebrateToday() {
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const layer = document.createElement('div');
+  layer.className = 'confetti';
+  layer.setAttribute('aria-hidden', 'true');
+  const colors = ['#3B5BA5', '#141414', '#9fb3e0', '#dfe4ef', '#f0a898'];
+  layer.innerHTML = Array.from({ length: 36 }, (_, i) => {
+    const x = Math.round(Math.random() * 100);
+    const dx = Math.round((Math.random() - 0.5) * 160);
+    const rot = Math.round(Math.random() * 720 - 360);
+    const delay = Math.round(Math.random() * 250);
+    const dur = 1100 + Math.round(Math.random() * 700);
+    const w = 6 + Math.round(Math.random() * 6);
+    return `<span style="left:${x}%;--dx:${dx}px;--rot:${rot}deg;animation-delay:${delay}ms;animation-duration:${dur}ms;width:${w}px;height:${Math.round(w * (i % 3 ? 1.6 : 1))}px;background:${colors[i % colors.length]};border-radius:${i % 4 ? '2px' : '50%'}"></span>`;
+  }).join('');
+  document.body.appendChild(layer);
+  setTimeout(() => layer.remove(), 2400);
 }
 
 /** 오른쪽 위 손글씨 다짐: 누르면 그 자리에서 고친다 (내 화면에만 보임) */
@@ -9428,6 +9612,17 @@ const EN = {
   '챕터 선택': 'Select chapter',
   '선택한 챕터 {n}개를 지울까요?': 'Delete {n} selected chapters?',
   '{n}개 선택': '{n} selected',
+  '이번 주 완주!': 'Perfect week!',
+  '다시 왔네요! 오늘 분량만 하면 돼요': 'Welcome back! Just today’s dose.',
+  '오늘 끝내면 1일째예요': 'Finish today for day 1',
+  '오늘 끝내면 {n}일째예요': 'Finish today for day {n}',
+  '쉬는 날은 끊기지 않아요': 'Days off don’t break it',
+  '일째 이어서': 'day streak',
+  '이번 주 {done}/{total}': 'This week {done}/{total}',
+  '이번 주 기록': 'This week',
+  '오늘 끝!': 'Done for today!',
+  '내일 할 분량이에요. 오늘은 여기까지!': 'Here’s tomorrow. That’s it for today!',
+  '내일은 쉬는 날이에요.': 'Tomorrow is a day off.',
   '표지': 'Cover',
   '표지 주소가 올바르지 않습니다.': 'The cover address is invalid.',
   '책 표지': 'Book cover',
