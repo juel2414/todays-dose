@@ -2757,7 +2757,7 @@ function renderDashboard(root) {
             <h2>${t('오늘 할 분량')}</h2>
             ${todayItems.length ? `<span class="serif-num">${t('{total}개 중 {done}개 완료', { total: todayItems.length, done: nDone })}</span>` : ''}
           </div>
-          ${todayItems.length ? `<div class="today-bar ${allDone ? 'is-full' : ''}"><i style="width:${Math.round((nDone / todayItems.length) * 100)}%"></i>${allDone ? '<b aria-hidden="true">✓</b>' : ''}</div>` : ''}
+          ${todayItems.length ? `<div class="today-bar ${allDone ? 'is-full' : ''}"><span class="today-bar-track"><i style="width:${Math.round((nDone / todayItems.length) * 100)}%"></i></span>${allDone ? '<b aria-hidden="true">✓</b>' : ''}</div>` : ''}
           ${allDone ? renderTodayFinish(active) : ''}
           ${todayItems.length ? todayItems.map(renderTodayItem).join('')
             : `<p class="dash-today-empty">${active.length ? t('오늘은 할 분량이 없어요.') : t('진행 중인 목표가 없습니다. <a href="#/new">새 목표를 추가</a>해 보세요.')}</p>`}
@@ -2932,9 +2932,11 @@ function renderMotivationCardInner() {
     const date = addDays(monday, i);
     return { date, stamp: dayStampOf(date, today), label: weekdayLabel(date) };
   });
-  const study = days.filter((d) => d.stamp !== 'rest');
   const doneN = days.filter((d) => d.stamp === 'done').length;
-  const weekDone = study.length > 0 && doneN === study.length;
+  // 이번 주 완주: 남은 칸이 모두 도장이거나 쉬는 날 (쉬는 날도 채운 칸으로 센다)
+  const weekDone = doneN > 0 && days.every((d) => d.stamp === 'done' || d.stamp === 'rest');
+  const weekN = doneN + (weekDone ? days.filter((d) => d.stamp === 'rest').length : 0);
+  const rots = [-8, 5, -3, 9, -6, 4, -10];
   const streak = computeStreak(today);
   const gap = comebackGap(today);
   const todayDone = (account.dayLog || {})[today] === 'done';
@@ -2948,15 +2950,15 @@ function renderMotivationCardInner() {
     <section class="mot-card ${weekDone ? 'is-week-done' : ''}">
       <div class="mot-top">
         <div class="mot-streak">
-          <span class="mot-flame" aria-hidden="true"></span>
+          <svg class="mot-flame" viewBox="0 0 20 24" aria-hidden="true"><path d="M10 1.5c.6 3.6 5.8 6.4 5.8 12.2A5.8 5.8 0 0 1 4.2 13.7c0-2.6 1.4-4.1 2.6-5.3.2 1.6 1 2.7 2.1 3.2C8.4 8 9.2 4.6 10 1.5Z"/></svg>
           <span class="mot-num">${streak}</span>
           <span class="mot-unit">${t('일째 이어서')}</span>
         </div>
-        <span class="mot-week-count">${t('이번 주 {done}/{total}', { done: doneN, total: study.length })}</span>
+        <span class="mot-week-count">${t('이번 주 {done}/{total}', { done: weekN, total: 7 })}</span>
       </div>
       <div class="mot-week" role="list" aria-label="${t('이번 주 기록')}">
-        ${days.map((d) => `<span class="mot-day is-${d.stamp}" role="listitem" title="${escapeHtml(d.date)}">
-          <i aria-hidden="true">${d.stamp === 'done' ? '✓' : ''}</i><b>${escapeHtml(d.label)}</b></span>`).join('')}
+        ${days.map((d, i) => `<span class="mot-day is-${d.stamp} ${d.date === today ? 'is-now' : ''} ${d.date === today && d.stamp === 'done' && dashState.justFinished ? 'is-fresh' : ''}" role="listitem" title="${escapeHtml(d.date)}">
+          <b>${escapeHtml(d.label)}</b><span class="mot-cell" aria-hidden="true">${d.stamp === 'done' ? `<i style="--rot:${rots[i]}deg"><span>✓</span></i>` : '<i></i>'}</span></span>`).join('')}
       </div>
       <p class="mot-note">${escapeHtml(note)}</p>
     </section>`;
@@ -2972,15 +2974,15 @@ function renderTodayFinish(active) {
     const from = Math.max(s.done, row.prevCumulative);
     if (from >= row.cumulative) return null;
     useUnitOf(goal);
-    return `<li><span class="today-next-title">${escapeHtml(goal.title)}</span><span class="today-next-range">${escapeHtml(describeUnitsRange(goal, s.basis, from, row.cumulative))}</span></li>`;
+    return `<li><span class="today-next-title">${escapeHtml(goal.title)}</span><b class="today-next-range">${escapeHtml(describeUnitsRange(goal, s.basis, from, row.cumulative))}</b></li>`;
   }).filter(Boolean);
   return `
     <div class="today-finish ${dashState.justFinished ? 'is-new' : ''}">
       <div class="today-finish-head">
         <span class="hand-note today-finish-word">${t('오늘 끝!')}</span>
-        <span class="today-finish-sub">${t('내일 할 분량이에요. 오늘은 여기까지!')}</span>
+        <span class="today-finish-sub">${rows.length ? t('내일 할 분량이에요. 오늘은 여기까지!') : t('내일은 쉬는 날이에요.')}</span>
       </div>
-      ${rows.length ? `<ul class="today-next">${rows.join('')}</ul>` : `<p class="today-next-rest">${t('내일은 쉬는 날이에요.')}</p>`}
+      ${rows.length ? `<ul class="today-next">${rows.join('')}</ul>` : ''}
     </div>`;
 }
 
@@ -2990,15 +2992,16 @@ function celebrateToday() {
   const layer = document.createElement('div');
   layer.className = 'confetti';
   layer.setAttribute('aria-hidden', 'true');
-  const colors = ['#3B5BA5', '#141414', '#9fb3e0', '#dfe4ef', '#f0a898'];
-  layer.innerHTML = Array.from({ length: 36 }, (_, i) => {
-    const x = Math.round(Math.random() * 100);
-    const dx = Math.round((Math.random() - 0.5) * 160);
-    const rot = Math.round(Math.random() * 720 - 360);
-    const delay = Math.round(Math.random() * 250);
-    const dur = 1100 + Math.round(Math.random() * 700);
-    const w = 6 + Math.round(Math.random() * 6);
-    return `<span style="left:${x}%;--dx:${dx}px;--rot:${rot}deg;animation-delay:${delay}ms;animation-duration:${dur}ms;width:${w}px;height:${Math.round(w * (i % 3 ? 1.6 : 1))}px;background:${colors[i % colors.length]};border-radius:${i % 4 ? '2px' : '50%'}"></span>`;
+  const colors = ['#3B5BA5', '#141414', '#dfe4ef', '#3B5BA5', '#9fb3e0'];
+  const r = Math.random;
+  layer.innerHTML = Array.from({ length: 46 }, (_, i) => {
+    const style = [
+      `left:${(r() * 100).toFixed(1)}%`, `width:${(6 + r() * 6).toFixed(1)}px`, `height:${(9 + r() * 7).toFixed(1)}px`,
+      `background:${colors[i % 5]}`, `border-radius:${i % 4 ? 1 : 6}px`,
+      `--dx:${((r() - 0.5) * 120).toFixed(0)}px`, `--dy:${(260 + r() * 360).toFixed(0)}px`, `--rot:${((r() - 0.5) * 900).toFixed(0)}deg`,
+      `animation-duration:${(1.1 + r() * 0.8).toFixed(2)}s`, `animation-delay:${(r() * 0.35).toFixed(2)}s`,
+    ].join(';');
+    return `<span style="${style}"></span>`;
   }).join('');
   document.body.appendChild(layer);
   setTimeout(() => layer.remove(), 2400);

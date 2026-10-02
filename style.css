@@ -2313,22 +2313,23 @@ tr.is-today .check-mark { color: #fff; }
 .gf-cover-actions label.is-busy { opacity: .6; cursor: progress; }
 
 /* =========================================================================
- * 동기부여 — 오늘 진행 막대 · 오늘 끝 + 내일 미리보기 · 연속 기록 · 이번 주 도장판 · 종이 조각
+ * 동기부여 — Claude Design '동기부여' 시안
+ *   오늘 진행 막대 · 오늘 끝 + 내일 미리보기 · 연속 기록 · 이번 주 도장판 · 종이 조각
  * ========================================================================= */
-.today-bar { position: relative; height: 6px; margin: 14px 0 2px; border-radius: 6px; background: #ececea; overflow: visible; }
-.today-bar i { display: block; height: 100%; border-radius: 6px; background: var(--primary); transition: width .5s cubic-bezier(.2, .8, .2, 1); }
-.today-bar.is-full i { background: var(--text); }
-.today-bar b { position: absolute; right: -4px; top: 50%; width: 22px; height: 22px; margin-top: -11px; border-radius: 50%; background: var(--text); color: #fff; font-size: 12px; display: grid; place-items: center; }
+.today-bar { display: flex; align-items: center; gap: 8px; margin: 12px 0 2px; }
+.today-bar-track { flex: 1; height: 6px; border-radius: 6px; background: #ececea; overflow: hidden; display: block; }
+.today-bar-track i { display: block; height: 100%; border-radius: 6px; background: var(--primary); transition: width .35s ease, background .35s ease; }
+.today-bar.is-full .today-bar-track i { background: var(--text); }
+.today-bar b { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--text); color: #fff; font-size: 11px; font-weight: 800; display: grid; place-items: center; }
 
-.today-finish { margin: 16px 0 6px; padding: 18px 20px; border-radius: 18px; background: var(--primary-soft); display: flex; flex-direction: column; gap: 12px; }
-.today-finish-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
-.today-finish-word { font-size: 34px; transform: rotate(-4deg); }
-.today-finish-sub { font-size: 14px; color: var(--text-2); }
-.today-next { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
-.today-next li { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; font-size: 14px; padding: 8px 12px; border-radius: 10px; background: rgba(255, 255, 255, .7); }
-.today-next-title { color: var(--text-2); }
-.today-next-range { font-weight: 700; }
-.today-next-rest { margin: 0; font-size: 14px; color: var(--text-2); }
+.today-finish { margin: 14px 0 4px; padding: 16px 18px; border-radius: 16px; background: #dfe4ef; display: flex; flex-direction: column; gap: 10px; }
+.today-finish-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.today-finish-word { font-size: 34px; line-height: 1; color: #1f2f57; transform: rotate(-3deg); }
+.today-finish-sub { font-size: 13px; color: #33427a; }
+.today-next { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.today-next li { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; padding: 7px 0; border-top: 1px solid #c9d2e8; }
+.today-next-title { font-size: 13px; color: #4a5778; min-width: 0; }
+.today-next-range { font-size: 14px; white-space: nowrap; }
 @keyframes finishIn { 0% { opacity: 0; transform: translateY(10px) scale(.97); } 100% { opacity: 1; transform: none; } }
 @keyframes finishWrite { from { clip-path: inset(-30% 100% -30% -10%); } to { clip-path: inset(-30% -10% -30% -10%); } }
 .today-finish.is-new { animation: finishIn .5s cubic-bezier(.2, .8, .2, 1) both; }
@@ -2339,41 +2340,52 @@ tr.is-today .check-mark { color: #fff; }
 .today-finish.is-new .today-next li:nth-child(3) { animation-delay: .65s; }
 .today-finish.is-new .today-next li:nth-child(n+4) { animation-delay: .75s; }
 
-.mot-card { background: var(--surface); border-radius: var(--card-radius); padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; }
-.mot-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.mot-streak { display: flex; align-items: baseline; gap: 6px; }
-.mot-flame { align-self: center; width: 12px; height: 16px; background: var(--primary); border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%; transform: rotate(-8deg); }
-.mot-num { font-family: var(--serif, 'Cormorant Garamond', serif); font-style: italic; font-weight: 600; font-size: 40px; line-height: 1; }
-.mot-unit { font-size: 14px; font-weight: 600; }
-.mot-week-count { font: 500 12px var(--mono); color: var(--text-2); }
-.mot-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
-.mot-day { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-.mot-day i { width: 100%; max-width: 34px; aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-size: 13px; font-weight: 700; border: 1.5px solid #d4d4d0; color: #fff; }
-.mot-day b { font: 500 11px var(--font); color: var(--muted); }
-.mot-day.is-done i { background: var(--primary); border-color: var(--primary); transform: rotate(-8deg); }
-.mot-day.is-today i { border: 2px solid var(--text); }
-.mot-day.is-today b { color: var(--text); font-weight: 700; }
-.mot-day.is-miss i { border-style: solid; border-color: #d4d4d0; background: transparent; }
-.mot-day.is-rest i { border: 0; background: transparent; position: relative; }
-.mot-day.is-rest i::after { content: ""; width: 10px; height: 1.5px; background: #c4c4c0; }
-.mot-day.is-future i { border-style: dashed; border-color: #dcdcd8; }
-.mot-note { margin: 0; font-family: var(--hand); font-size: 20px; line-height: 1.1; color: var(--primary); transform: rotate(-2deg); transform-origin: left; }
-.mot-card.is-week-done { background: var(--text); color: #fff; }
-.mot-card.is-week-done .mot-week-count, .mot-card.is-week-done .mot-day b { color: #a9a9a6; }
-.mot-card.is-week-done .mot-note { color: #9fb3e0; }
-.mot-card.is-week-done .mot-flame { background: #9fb3e0; }
+/* 연속 기록 카드 (완주한 주는 검정) */
+.mot-card { --st-fg: #141414; --st-muted: #6b6b68; --ring: #b9b9b5; --ink: #3B5BA5; --ink-fg: #fff; --hand-fg: #3B5BA5;
+  background: #fff; color: var(--st-fg); border-radius: 22px; padding: 22px 22px 18px; display: flex; flex-direction: column; gap: 16px; }
+.mot-card.is-week-done { --st-fg: #f2f2ef; --st-muted: #a9a9a6; --ring: #5a5a58; --ink: #dfe4ef; --ink-fg: #141414; --hand-fg: #dfe4ef; background: #141414; }
+.mot-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.mot-streak { display: flex; align-items: flex-end; gap: 8px; }
+.mot-flame { width: 20px; height: 24px; flex: none; margin-bottom: 10px; fill: var(--ink); }
+.mot-num { font-family: var(--serif); font-style: italic; font-weight: 600; font-size: 64px; line-height: .8; letter-spacing: -0.02em; }
+.mot-unit { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+.mot-week-count { font: 500 12px var(--mono); color: var(--st-muted); padding-top: 4px; white-space: nowrap; }
+.mot-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.mot-day { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.mot-day b { font: 500 11px var(--mono); color: var(--st-muted); }
+.mot-day.is-now b { color: var(--st-fg); }
+.mot-cell { position: relative; width: 38px; height: 38px; display: grid; place-items: center; }
+.mot-cell i { display: block; box-sizing: border-box; border-radius: 50%; }
+.mot-day.is-done .mot-cell i { width: 38px; height: 38px; border: 2px solid var(--ink); padding: 3px; transform: rotate(var(--rot, -8deg)); opacity: .94; }
+.mot-day.is-done .mot-cell i span { width: 100%; height: 100%; border-radius: 50%; background: var(--ink); color: var(--ink-fg); display: grid; place-items: center; font-size: 15px; font-weight: 800; }
+.mot-day.is-today .mot-cell i { width: 38px; height: 38px; border: 3px solid var(--st-fg); }
+.mot-day.is-miss .mot-cell i { width: 34px; height: 34px; border: 1.5px solid var(--ring); }
+.mot-day.is-rest .mot-cell i { width: 14px; height: 2px; border-radius: 2px; background: var(--st-muted); }
+.mot-day.is-future .mot-cell i { width: 34px; height: 34px; border: 1.5px dashed var(--ring); }
+.mot-note { margin: 0; font-family: var(--hand); font-size: 25px; line-height: 1.1; color: var(--hand-fg); transform: rotate(-2deg); transform-origin: left; }
 
-@keyframes stampIn { 0% { transform: scale(1.6) rotate(-20deg); opacity: 0; } 60% { transform: scale(.92) rotate(-6deg); opacity: 1; } 100% { transform: rotate(-8deg); } }
-.dash-enter .mot-day.is-done i { animation: stampIn .45s cubic-bezier(.3, 1.4, .5, 1) both; }
-.dash-enter .mot-day:nth-child(1) i { animation-delay: .7s; } .dash-enter .mot-day:nth-child(2) i { animation-delay: .76s; }
-.dash-enter .mot-day:nth-child(3) i { animation-delay: .82s; } .dash-enter .mot-day:nth-child(4) i { animation-delay: .88s; }
-.dash-enter .mot-day:nth-child(5) i { animation-delay: .94s; } .dash-enter .mot-day:nth-child(6) i { animation-delay: 1s; }
-.dash-enter .mot-day:nth-child(7) i { animation-delay: 1.06s; }
+/* 방금 찍힌 오늘 도장: 퍼지는 잉크 + 쾅 */
+@keyframes tdInk { 0% { transform: scale(.6); opacity: .7; } 100% { transform: scale(1.9); opacity: 0; } }
+@keyframes tdPop { 0% { transform: scale(1.7) rotate(-20deg); opacity: 0; } 60% { transform: scale(.92) rotate(-6deg); opacity: 1; } 100% { transform: rotate(var(--rot, -8deg)); opacity: .94; } }
+.mot-day.is-fresh .mot-cell::before { content: ""; position: absolute; inset: -2px; border-radius: 50%; border: 3px solid var(--primary); animation: tdInk .9s ease-out .25s both; }
+.mot-day.is-fresh .mot-cell i { animation: tdPop .5s cubic-bezier(.3, 1.4, .5, 1) both; }
+.dash-enter .mot-day.is-done .mot-cell i { animation: tdPop .45s cubic-bezier(.3, 1.4, .5, 1) both; }
+.dash-enter .mot-day:nth-child(1) .mot-cell i { animation-delay: .7s; } .dash-enter .mot-day:nth-child(2) .mot-cell i { animation-delay: .76s; }
+.dash-enter .mot-day:nth-child(3) .mot-cell i { animation-delay: .82s; } .dash-enter .mot-day:nth-child(4) .mot-cell i { animation-delay: .88s; }
+.dash-enter .mot-day:nth-child(5) .mot-cell i { animation-delay: .94s; } .dash-enter .mot-day:nth-child(6) .mot-cell i { animation-delay: 1s; }
+.dash-enter .mot-day:nth-child(7) .mot-cell i { animation-delay: 1.06s; }
 
+/* 종이 조각 */
 .confetti { position: fixed; inset: 0; pointer-events: none; z-index: 1000; overflow: hidden; }
-.confetti span { position: absolute; top: -20px; animation: confettiFall 1.4s cubic-bezier(.25, .6, .35, 1) both; }
-@keyframes confettiFall { 0% { transform: translate(0, 0) rotate(0); opacity: 1; } 85% { opacity: 1; } 100% { transform: translate(var(--dx), 105vh) rotate(var(--rot)); opacity: 0; } }
+.confetti span { position: absolute; top: 0; animation-name: tdConf; animation-timing-function: cubic-bezier(.2, .6, .4, 1); animation-fill-mode: both; }
+@keyframes tdConf { 0% { transform: translate(0, -30px) rotate(0); opacity: 1; } 80% { opacity: 1; } 100% { transform: translate(var(--dx), var(--dy)) rotate(var(--rot)); opacity: 0; } }
+
+@media (max-width: 420px) {
+  .mot-card { padding: 18px 16px 16px; }
+  .mot-cell, .mot-day.is-done .mot-cell i, .mot-day.is-today .mot-cell i { width: 34px; height: 34px; }
+  .mot-day.is-miss .mot-cell i, .mot-day.is-future .mot-cell i { width: 30px; height: 30px; }
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .today-finish.is-new, .today-finish.is-new *, .dash-enter .mot-day i { animation: none !important; }
+  .today-finish.is-new, .today-finish.is-new *, .mot-day .mot-cell i, .mot-day .mot-cell::before { animation: none !important; }
 }
