@@ -1459,7 +1459,16 @@ async function loadAccount(user) {
   return {
     isAdmin: admin.data === true,
     language: profile.data && isLang(profile.data.language) ? profile.data.language : null,
+    motto: (profile.data && profile.data.motto) || '',
   };
+}
+
+const MOTTO_MAX = 30;
+
+/** 대시보드 손글씨 다짐 저장 (빈 값이면 지움) */
+async function saveAccountMotto(motto) {
+  const { error } = await getSupabase().rpc('study_planner_set_motto', { p_motto: motto || null });
+  if (error) throw error;
 }
 
 /** 계정에 언어 저장 (실패해도 화면은 그대로, 경고만) */
@@ -2727,7 +2736,7 @@ function renderDashboard(root) {
           ${(() => { const g = dashboardGreeting(todayItems, active); return g ? `<p class="dash-greet">${escapeHtml(g)}</p>` : ''; })()}
         </div>
         <div class="dash-head-actions">
-          <span class="hand-note">${allDone ? t('잘했어요!') : t('오늘도 조금씩!')}</span>
+          ${renderMottoNote(allDone)}
           <a class="btn btn-blue btn-lg" href="#/new">${t('+ 새 목표 추가')}</a>
         </div>
       </div>
@@ -2770,6 +2779,13 @@ function renderDashboard(root) {
   root.querySelector('.dash').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
+    if (btn.dataset.action === 'edit-motto') {
+      dashState.mottoEdit = true;
+      renderDashboard(root);
+      const input = root.querySelector('.motto-input');
+      if (input) { input.focus(); input.select(); }
+      return;
+    }
     if (btn.dataset.action === 'toggle-closed') {
       dashState.closedOpen = !dashState.closedOpen;
       renderDashboard(root);
@@ -2793,6 +2809,53 @@ function renderDashboard(root) {
       window.scrollTo(0, y);
     }
   });
+  bindMottoInput(root);
+}
+
+/** 오른쪽 위 손글씨 다짐: 누르면 그 자리에서 고친다 (내 화면에만 보임) */
+function renderMottoNote(allDone) {
+  const motto = account.motto || '';
+  if (dashState.mottoEdit) {
+    return `<span class="motto-edit">
+      <input type="text" class="motto-input hand-note" maxlength="${MOTTO_MAX}" value="${escapeHtml(motto)}"
+        placeholder="${t('나의 다짐을 적어 보세요')}" aria-label="${t('나의 다짐')}">
+      <span class="motto-help">${t('Enter 저장 · Esc 취소 · 비우면 기본 문구')}</span>
+    </span>`;
+  }
+  const text = motto || (allDone ? t('잘했어요!') : t('오늘도 조금씩!'));
+  return `<button type="button" class="motto-note hand-note ${motto ? 'is-mine' : ''}" data-action="edit-motto"
+    title="${t('눌러서 나의 다짐 적기')}">${escapeHtml(text)}<span class="motto-pen" aria-hidden="true">✎</span></button>`;
+}
+
+/** 다짐 입력칸: Enter·바깥 누르기 = 저장, Esc = 취소 */
+function bindMottoInput(root) {
+  const input = root.querySelector('.motto-input');
+  if (!input) return;
+  let finished = false;
+  const finish = async (save) => {
+    if (finished) return;
+    finished = true;
+    const prev = account.motto || '';
+    const next = input.value.trim().slice(0, MOTTO_MAX);
+    dashState.mottoEdit = false;
+    if (save && next !== prev) account.motto = next;
+    renderDashboard(root);
+    if (!save || next === prev) return;
+    try {
+      await saveAccountMotto(next);
+    } catch (err) {
+      console.warn('[account] 다짐 저장 실패:', err);
+      account.motto = prev;
+      if (parseRoute().view === 'dashboard') renderDashboard(root);
+      alert(t('다짐을 저장하지 못했어요. 잠시 후 다시 시도해 주세요.'));
+    }
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.isComposing) return;
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
 }
 
 /** 대시보드에 처음 들어올 때만 등장 효과 (체크·펼치기로 다시 그릴 때는 없음) */
@@ -9077,6 +9140,11 @@ const EN = {
   '책을 읽는 사람 손그림': 'Sketch of a person reading',
   '오늘도 조금씩!': 'A little every day!',
   '잘했어요!': 'Nice!',
+  '나의 다짐을 적어 보세요': 'Write your motto',
+  '나의 다짐': 'My motto',
+  'Enter 저장 · Esc 취소 · 비우면 기본 문구': 'Enter to save · Esc to cancel · Leave empty for default',
+  '눌러서 나의 다짐 적기': 'Tap to write your motto',
+  '다짐을 저장하지 못했어요. 잠시 후 다시 시도해 주세요.': 'Couldn’t save your motto. Please try again shortly.',
   '오늘이면 끝!': 'Last day!',
   '내일이면 끝!': 'One day to go!',
   '일주일이면 끝!': 'Less than a week!',

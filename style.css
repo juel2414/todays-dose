@@ -2231,3 +2231,17 @@ tr.is-today .check-mark { color: #fff; }
   .dash-illust img, .today-item.is-just * { animation: none !important; }
   .goal-card:hover { transform: none; }
 }
+
+/* 대시보드 손글씨 다짐 — 누르면 그 자리에서 고친다 */
+.motto-note { position: relative; border: 0; background: none; padding: 2px 4px; margin: 0 0 8px; cursor: pointer; color: var(--primary); font-family: var(--hand); font-size: 24px; line-height: 1; max-width: 340px; white-space: normal; text-align: right; }
+.motto-note:hover { color: #2c4783; }
+.motto-note::after { content: ""; position: absolute; left: 4px; right: 4px; bottom: -3px; height: 1.5px; background: currentColor; opacity: 0; transform: scaleX(.4); transition: opacity .2s, transform .25s cubic-bezier(.2, .8, .2, 1); }
+.motto-note:hover::after, .motto-note:focus-visible::after { opacity: .5; transform: none; }
+.motto-pen { position: absolute; top: -12px; right: -14px; font: 400 13px var(--font); color: var(--text-2); opacity: 0; transform: translateY(4px) rotate(6deg); transition: opacity .2s, transform .2s; }
+.motto-note:hover .motto-pen, .motto-note:focus-visible .motto-pen { opacity: 1; transform: rotate(6deg); }
+.motto-edit { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; margin-bottom: 4px; }
+.motto-input { transform: rotate(-3deg); width: min(320px, 70vw); border: 0; border-bottom: 1.5px dashed var(--primary); background: transparent; padding: 2px 4px 4px; font-size: 24px; text-align: right; outline: none; }
+.motto-input::placeholder { color: rgba(59, 91, 165, .4); }
+.motto-help { font: 500 10px var(--mono); letter-spacing: .04em; color: var(--text-2); }
+@keyframes mottoIn { from { clip-path: inset(-20% 100% -20% -10%); } to { clip-path: inset(-20% -10% -20% -10%); } }
+.dash-enter .motto-note { animation: mottoIn .7s cubic-bezier(.65, 0, .35, 1) .9s both; }
