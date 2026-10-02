@@ -505,3 +505,86 @@ body.is-landing #app { max-width: none; padding: 0; }
   background: radial-gradient(60% 70% at 50% 55%, rgba(159, 179, 224, .22), transparent 70%); }
 .lp-fx.is-in .lp-wm-wrap::after { animation: lpHalo 1.8s ease 4.2s both; }
 @keyframes lpHalo { 0% { opacity: 0; } 45% { opacity: 1; } 100% { opacity: 0; } }
+
+/* =========================================================================
+ * 아래 섹션 등장 효과 — .lp-sfx(움직임 줄이기 아님)일 때만, 화면에 들어오면 .is-seen
+ * ========================================================================= */
+.lp-sfx { --ease-out: cubic-bezier(.2, .8, .2, 1); --ease-io: cubic-bezier(.65, 0, .35, 1); }
+/* 제목: 아래에서 잘려 올라오기 */
+.lp-sfx .lp-why .lp-h-xl, .lp-sfx .lp-calc .lp-h-lg, .lp-sfx .lp-h-remove, .lp-sfx .lp-faq-main .lp-h-lg, .lp-sfx .lp-end h2 {
+  clip-path: inset(0 0 100% 0); transform: translateY(28px); transition: clip-path 1s var(--ease-out), transform 1s var(--ease-out); }
+.lp-sfx .is-seen .lp-h-xl, .lp-sfx .is-seen .lp-h-lg, .lp-sfx .lp-h-remove.is-seen, .lp-sfx .lp-end.is-seen h2 { clip-path: inset(-10% -5% -20% -5%); transform: none; }
+
+/* 왜: 예전 방식 줄이 차례로 들어오고 취소선이 그어진다 */
+.lp-sfx .lp-old li { opacity: 0; transform: translateX(-24px); transition: opacity .6s ease, transform .7s var(--ease-out); transition-delay: calc(.25s + var(--ri) * .12s); }
+.lp-sfx .lp-why.is-seen .lp-old li { opacity: 1; transform: none; }
+.lp-sfx .lp-old-text { text-decoration: none; background: linear-gradient(var(--ink), var(--ink)) no-repeat 0 56% / 0% 2.5px; transition: background-size .5s var(--ease-io); transition-delay: calc(.9s + var(--ri, 0) * .14s); }
+.lp-sfx .lp-old li .lp-old-text { transition-delay: inherit; }
+.lp-sfx .lp-why.is-seen .lp-old-text { background-size: 100% 2.5px; }
+.lp-sfx .lp-old li:nth-child(1) .lp-old-text { transition-delay: 1s; }
+.lp-sfx .lp-old li:nth-child(2) .lp-old-text { transition-delay: 1.12s; }
+.lp-sfx .lp-old li:nth-child(3) .lp-old-text { transition-delay: 1.24s; }
+.lp-sfx .lp-old li:nth-child(4) .lp-old-text { transition-delay: 1.36s; }
+.lp-sfx .lp-old li:nth-child(5) .lp-old-text { transition-delay: 1.48s; }
+/* 오늘분량 1·2·3이 하나씩 튀어나온다 */
+.lp-sfx .lp-new { opacity: 0; transform: translateY(30px) scale(.98); transition: opacity .7s ease .15s, transform .9s var(--ease-out) .15s; }
+.lp-sfx .lp-why.is-seen .lp-new { opacity: 1; transform: none; }
+.lp-sfx .lp-new-step { opacity: 0; transform: translateY(18px); transition: opacity .5s ease, transform .6s cubic-bezier(.3, 1.6, .5, 1); transition-delay: calc(1.7s + var(--ri) * .22s); }
+.lp-sfx .lp-why.is-seen .lp-new-step { opacity: 1; transform: none; }
+
+/* 계산기: 떠오르기 · 요일 칸 차례로 · 말풍선 톡 */
+.lp-sfx .lp-calc-main, .lp-sfx .lp-calc-side { opacity: 0; transform: translateY(32px); transition: opacity .8s ease, transform .9s var(--ease-out); }
+.lp-sfx .lp-calc-side { transition-delay: .15s; }
+.lp-sfx .lp-calc.is-seen .lp-calc-main, .lp-sfx .lp-calc.is-seen .lp-calc-side { opacity: 1; transform: none; }
+.lp-sfx .lp-day { opacity: 0; transform: scale(.6); transition: opacity .3s ease, transform .4s cubic-bezier(.3, 1.6, .5, 1), background .15s, color .15s; transition-delay: calc(.4s + var(--ri) * .06s), calc(.4s + var(--ri) * .06s), 0s, 0s; }
+.lp-sfx .lp-calc.is-seen .lp-day { opacity: 1; transform: none; }
+.lp-sfx .lp-bubble { opacity: 0; transform: translateY(8px) scale(.7); transform-origin: 0 100%; transition: opacity .3s ease 1.4s, transform .5s cubic-bezier(.3, 1.7, .5, 1) 1.4s; }
+.lp-sfx .lp-calc.is-seen .lp-bubble { opacity: 1; transform: none; }
+
+/* 없앤 세 가지: 파란 취소선이 그어지고, 카드가 반대쪽에서 들어온다 */
+.lp-sfx .lp-rm-copy { opacity: 0; transform: translateY(26px); transition: opacity .7s ease, transform .8s var(--ease-out); }
+.lp-sfx .lp-rm-row.is-seen .lp-rm-copy { opacity: 1; transform: none; }
+.lp-sfx .lp-rm-word { text-decoration: none; background: linear-gradient(var(--blue), var(--blue)) no-repeat 0 58% / 0% var(--rm-line, 6px); transition: background-size .6s var(--ease-io) .55s; }
+.lp-sfx .lp-rm-word-2 { --rm-line: 8px; }
+.lp-sfx .lp-rm-word-3 { --rm-line: 5px; background-position: 0 52%; }
+.lp-sfx .lp-rm-row.is-seen .lp-rm-word { background-size: 100% var(--rm-line, 6px); }
+.lp-sfx .lp-rm-left > :last-child { opacity: 0; transform: translateX(60px); transition: opacity .8s ease .2s, transform 1s var(--ease-out) .2s; }
+.lp-sfx .lp-rm-right > :first-child { opacity: 0; transform: translateX(-60px); transition: opacity .8s ease .2s, transform 1s var(--ease-out) .2s; }
+.lp-sfx .lp-rm-row.is-seen > :last-child, .lp-sfx .lp-rm-row.is-seen > :first-child { opacity: 1; transform: none; }
+.lp-sfx .lp-toc-row { opacity: 0; transform: translateY(8px); transition: opacity .4s ease, transform .5s var(--ease-out); transition-delay: calc(.7s + var(--ri) * .13s); }
+.lp-sfx .lp-rm-row.is-seen .lp-toc-row { opacity: 1; transform: none; }
+.lp-sfx .lp-strip span { transform: scaleY(0); transform-origin: 50% 100%; transition: transform .35s cubic-bezier(.3, 1.4, .5, 1); transition-delay: calc(.7s + var(--ri) * .07s); }
+.lp-sfx .lp-rm-row.is-seen .lp-strip span { transform: none; }
+.lp-sfx .lp-replan-old { transition: transform .9s var(--ease-out) .5s, opacity .6s ease .5s; transform: rotate(0deg) translateX(40px); opacity: 0; }
+.lp-sfx .lp-rm-row.is-seen .lp-replan-old { transform: rotate(-3deg); opacity: 1; }
+.lp-sfx .lp-replan-new { transition: transform 1s cubic-bezier(.3, 1.3, .5, 1) .85s, opacity .5s ease .85s; transform: translateY(50px) rotate(3deg); opacity: 0; }
+.lp-sfx .lp-rm-row.is-seen .lp-replan-new { transform: none; opacity: 1; }
+.lp-sfx .lp-rm-left > .lp-replan { transform: none; opacity: 1; }
+
+/* 이런 분들: 그림 알약이 하나씩 튀어나오고, 아래 칸이 차례로 */
+.lp-sfx .lp-who-sentence { opacity: 0; transform: translateY(24px); transition: opacity .8s ease, transform .9s var(--ease-out); }
+.lp-sfx .lp-who.is-seen .lp-who-sentence { opacity: 1; transform: none; }
+.lp-sfx .lp-pill { transform: scale(0) rotate(-8deg); transition: transform .6s cubic-bezier(.3, 1.6, .5, 1); transition-delay: calc(.35s + var(--ri) * .18s); }
+.lp-sfx .lp-who.is-seen .lp-pill { transform: none; }
+.lp-sfx .lp-accent { background: linear-gradient(transparent 62%, rgba(59, 91, 165, .22) 62%) no-repeat 0 0 / 0% 100%; transition: background-size .8s var(--ease-io) 1.3s; }
+.lp-sfx .lp-who.is-seen .lp-accent { background-size: 100% 100%; }
+.lp-sfx .lp-who-item { opacity: 0; transform: translateY(26px); transition: opacity .6s ease, transform .7s var(--ease-out); transition-delay: calc(1s + var(--ri) * .12s); }
+.lp-sfx .lp-who.is-seen .lp-who-item { opacity: 1; transform: none; }
+
+/* 이야기 · 자주 묻는 질문 · 마지막 */
+.lp-sfx .lp-story { opacity: 0; transform: translateY(30px); transition: opacity .9s ease, transform 1s var(--ease-out); }
+.lp-sfx .lp-story.is-seen { opacity: 1; transform: none; }
+.lp-sfx .lp-faq-item { opacity: 0; transform: translateY(16px); transition: opacity .5s ease, transform .6s var(--ease-out); transition-delay: calc(.35s + var(--ri) * .1s); }
+.lp-sfx .lp-faq-main.is-seen .lp-faq-item { opacity: 1; transform: none; }
+.lp-sfx .lp-end .lp-cta { opacity: 0; transform: translateY(20px) scale(.96); transition: opacity .6s ease .45s, transform .7s cubic-bezier(.3, 1.5, .5, 1) .45s; }
+.lp-sfx .lp-end.is-seen .lp-cta { opacity: 1; transform: none; }
+@media (max-width: 760px) {
+  /* 휴대폰: 옆에서 들어오는 대신 아래에서 (가로 넘침 방지) */
+  .lp-sfx .lp-rm-left > :last-child, .lp-sfx .lp-rm-right > :first-child { transform: translateY(30px); }
+  .landing { overflow-x: clip; }
+}
+/* 취소선은 글자 길이만큼만 */
+.lp-sfx .lp-old-text { justify-self: start; width: fit-content; }
+.lp-sfx .lp-rm-word { align-self: flex-start; justify-self: start; width: fit-content; }
+.lp-sfx .lp-accent { background-image: linear-gradient(transparent 64%, rgba(59, 91, 165, .14) 64%); }
+@media (max-width: 760px) { .lp-sfx .lp-rm-right .lp-rm-word { align-self: flex-end; } }

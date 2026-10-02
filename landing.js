@@ -342,6 +342,7 @@ function renderLanding(root, options) {
   </div>`;
   const landing = root.querySelector('.landing');
   initLandingHeroFx(landing);
+  initLandingScrollFx(landing);
 
   // 메뉴: 주소(#)를 바꾸지 않고 해당 칸으로 스크롤 (앱이 # 주소를 화면 이동에 쓴다)
   landing.addEventListener('click', (e) => {
@@ -497,4 +498,64 @@ function initLandingHeroFx(landing) {
     });
   };
   window.addEventListener('scroll', onScroll, { passive: true });
+}
+
+/* =========================================================================
+ * 아래 섹션 등장 효과 (순수 JS/CSS) — 화면에 들어올 때 한 번씩
+ *  - 제목: 아래에서 잘려 올라오기
+ *  - 예전 방식: 줄이 차례로 들어오고 취소선이 그어진다 → 오늘분량 1·2·3이 하나씩 튀어나온다
+ *  - 계산기: 하루 분량 숫자가 0부터 올라간다, 말풍선이 톡 튀어나온다
+ *  - 없앤 세 가지: 글자 위 파란 취소선이 그어지고, 카드가 반대쪽에서 들어온다
+ *    (목차 줄이 차례로 · 달력 칸이 하루씩 채워짐 · 원래 계획은 밀려나고 새 계획이 올라옴)
+ *  - 이런 분들: 그림 알약이 하나씩 튀어나오고 아래 칸이 차례로 올라온다
+ *  - 자주 묻는 질문 · 마지막: 차례로 떠오르기
+ * ========================================================================= */
+function initLandingScrollFx(landing) {
+  if (!landing || !('IntersectionObserver' in window)) return;
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) return;
+  landing.classList.add('lp-sfx');
+  // 차례 번호 매기기
+  const order = (sel) => landing.querySelectorAll(sel).forEach((el, i) => el.style.setProperty('--ri', i));
+  order('.lp-old li');
+  order('.lp-new-step');
+  order('.lp-toc-row');
+  order('.lp-strip span');
+  order('.lp-who-sentence .lp-pill');
+  order('.lp-who-item');
+  order('.lp-faq-item');
+  order('.lp-days .lp-day');
+
+  // 계산기 숫자: 0부터 지금 값까지 올라간다 (한 번만)
+  const countUp = () => {
+    const el = landing.querySelector('[data-lp-perday]');
+    const target = Number(el && el.textContent);
+    if (!el || !Number.isFinite(target) || target <= 0) return;
+    const t0 = performance.now();
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / 1100);
+      const eased = 1 - Math.pow(1 - k, 3);
+      if (el.dataset.lpTouched) return; // 사용자가 값을 바꾸면 멈춘다
+      el.textContent = String(Math.round(target * eased));
+      if (k < 1) requestAnimationFrame(step);
+      else el.textContent = String(target);
+    };
+    el.textContent = '0';
+    requestAnimationFrame(step);
+  };
+  landing.querySelectorAll('[data-lp-amount], [data-lp-weeks], [data-lp-day]').forEach((x) => {
+    x.addEventListener('input', () => { const el = landing.querySelector('[data-lp-perday]'); if (el) el.dataset.lpTouched = '1'; });
+    x.addEventListener('click', () => { const el = landing.querySelector('[data-lp-perday]'); if (el) el.dataset.lpTouched = '1'; });
+  });
+
+  const targets = landing.querySelectorAll('.lp-why, .lp-calc, .lp-h-remove, .lp-rm-row, .lp-who, .lp-story, .lp-faq-main, .lp-end');
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      entry.target.classList.add('is-seen');
+      if (entry.target.classList.contains('lp-calc')) setTimeout(countUp, 350);
+      io.unobserve(entry.target);
+    });
+  }, { threshold: 0.22, rootMargin: '0px 0px -8% 0px' });
+  targets.forEach((el) => io.observe(el));
 }
