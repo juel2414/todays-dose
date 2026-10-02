@@ -452,6 +452,26 @@ body.is-landing #app { max-width: none; padding: 0; }
   .lp-bloom-c, .lp-bloom-d { width: 80vw; height: 80vw; }
 }
 
-/* ===== 첫 화면 픽셀 배경 (21st Hero With Pixel Background 참고 · 캔버스) ===== */
-.lp-hero-pixels { position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; display: block; }
-.lp-hero > *:not(.lp-hero-glow):not(.lp-hero-bloom):not(.lp-hero-pixels) { position: relative; z-index: 1; }
+.lp-hero > *:not(.lp-hero-glow):not(.lp-hero-bloom):not(.lp-hero-lines) { position: relative; z-index: 1; }
+
+/* ===== 첫 화면 가는 선 격자 + 먼지 (21st Hero Minimalism 참고 · 밝은 종이에 맞게 뒤집음) =====
+   화면을 가로지르는 가는 선이 하나씩 그어져 격자를 만들고, 아주 작은 먼지가 천천히 떠다닌다. */
+.lp-hero-lines { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.lp-hero-lines i { position: absolute; display: block; background: rgba(20, 20, 20, .09); }
+.lp-line-v { top: 0; bottom: 0; left: var(--x); width: 1px; transform-origin: 50% 0; }
+.lp-line-h { left: 0; right: 0; top: var(--y); height: 1px; transform-origin: 0 50%; }
+.lp-line-h-mid { top: auto; bottom: 46%; }
+.lp-line-h-low { top: auto; bottom: clamp(150px, 26vh, 300px); }
+.lp-fx .lp-line-v { transform: scaleY(0); transition: transform 1.6s cubic-bezier(.65, 0, .35, 1) var(--d); }
+.lp-fx .lp-line-h { transform: scaleX(0); transition: transform 1.6s cubic-bezier(.65, 0, .35, 1) var(--d); }
+.lp-fx.is-in .lp-line-v, .lp-fx.is-in .lp-line-h { transform: none; }
+/* 먼지: 작은 점 두 겹이 서로 다른 속도로 떠다닌다 */
+.lp-dust, .lp-dust::after { position: absolute; inset: -20%; display: block; opacity: .55;
+  background-image: radial-gradient(rgba(20, 20, 20, .35) .8px, transparent 1.2px), radial-gradient(rgba(59, 91, 165, .45) .9px, transparent 1.3px);
+  background-size: 173px 151px, 229px 197px; background-position: 0 0, 61px 89px; animation: lpDust 60s linear infinite; }
+.lp-dust::after { content: ''; inset: 0; opacity: .7; background-size: 113px 131px, 157px 139px; background-position: 37px 11px, 97px 53px; animation-duration: 90s; animation-direction: reverse; }
+@keyframes lpDust { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-6%, -10%, 0); } }
+.lp-fx .lp-dust { opacity: 0; transition: opacity 2s ease 1s; }
+.lp-fx.is-in .lp-dust { opacity: .55; }
+@media (prefers-reduced-motion: reduce) { .lp-dust, .lp-dust::after { animation: none; } }
+@media (max-width: 760px) { .lp-line-v[style*="50%"] { display: none; } .lp-line-h-mid { display: none; } }
