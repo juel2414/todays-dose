@@ -353,7 +353,7 @@ body.is-landing #app { max-width: none; padding: 0; }
 .lp-char > span { display: inline-block; }
 .lp-char-o > span { display: inline; }
 .lp-hero { position: relative; }
-.lp-hero > *:not(.lp-hero-glow) { position: relative; z-index: 1; }
+.lp-hero > *:not(.lp-hero-glow):not(.lp-hero-bloom) { position: relative; z-index: 1; }
 .lp-hero-glow { position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: 0; transition: opacity .5s ease;
   background-image: radial-gradient(rgba(20, 20, 20, .22) 1px, transparent 1.5px); background-size: 22px 22px;
   -webkit-mask-image: radial-gradient(300px circle at var(--gx, 50%) var(--gy, 40%), #000 0%, transparent 70%);
@@ -365,11 +365,23 @@ body.is-landing #app { max-width: none; padding: 0; }
   transition: transform .95s cubic-bezier(.2, .8, .2, 1), clip-path .95s cubic-bezier(.2, .8, .2, 1), opacity .5s ease;
   transition-delay: calc(260ms + var(--i) * 60ms); }
 .lp-fx.is-in .lp-char > span { transform: none; clip-path: inset(-60% -40% -60% -40%); opacity: 1; }
-/* o의 파란 반달은 글자가 다 올라온 뒤 그려진다 · 고리는 살짝 돌며 자리 잡기 */
-.lp-fx .lp-o-arc { stroke-dasharray: 60; stroke-dashoffset: 60; transition: stroke-dashoffset .9s cubic-bezier(.6, 0, .2, 1) 1.15s; }
+/* o: 고리가 다이얼처럼 네 번 '딱딱' 끊어 돌다가 정확히 멈추고, 파란 반달은 짧고 빠르게 그어진다 */
+.lp-fx .lp-big-o { transform: rotate(-120deg); transform-origin: 50% 50%; }
+.lp-fx.is-in .lp-big-o { animation: lpDial .9s .75s both; }
+@keyframes lpDial {
+  0% { transform: rotate(-120deg); animation-timing-function: cubic-bezier(.8, 0, .2, 1); }
+  20% { transform: rotate(-90deg); animation-timing-function: steps(1, end); }
+  25% { transform: rotate(-90deg); animation-timing-function: cubic-bezier(.8, 0, .2, 1); }
+  45% { transform: rotate(-60deg); animation-timing-function: steps(1, end); }
+  50% { transform: rotate(-60deg); animation-timing-function: cubic-bezier(.8, 0, .2, 1); }
+  70% { transform: rotate(-30deg); animation-timing-function: steps(1, end); }
+  75% { transform: rotate(-30deg); animation-timing-function: cubic-bezier(.8, 0, .2, 1); }
+  100% { transform: rotate(0deg); }
+}
+.lp-fx .lp-o-arc { stroke-dasharray: 60; stroke-dashoffset: 60; transition: stroke-dashoffset .28s cubic-bezier(.9, 0, .1, 1) 1.68s; }
 .lp-fx.is-in .lp-o-arc { stroke-dashoffset: 0; }
-.lp-fx .lp-big-o { transform: rotate(-120deg); transform-origin: 50% 50%; transition: transform 1.4s cubic-bezier(.2, .8, .2, 1) .7s; }
-.lp-fx.is-in .lp-big-o { transform: none; }
+.lp-fx.is-in .lp-char-o > span { animation: lpClick .22s 1.96s both; }
+@keyframes lpClick { 0% { transform: scale(1); } 40% { transform: scale(1.045); } 100% { transform: scale(1); } }
 
 /* 2. 제목: 단어가 흐림에서 또렷하게 */
 .lp-fx .lp-word { display: inline-block; opacity: 0; filter: blur(10px); transform: translateY(10px);
@@ -408,4 +420,32 @@ body.is-landing #app { max-width: none; padding: 0; }
   .lp-fx .lp-big-wordmark { transform: translate3d(0, calc(var(--sy, 0) * -40px), 0); }
   .lp-fx.is-in .lp-today-card, .lp-fx.is-in .lp-hero-illus { transform: none; }
   .lp-hero-glow { display: none; }
+}
+
+/* ===== 첫 화면 배경: 번지는 빛 (21st Animated Gradient · Bloom · Silk 계열 참고, 순수 CSS) =====
+   종이 회색 위에 파랑 · 연파랑 · 흰빛 덩어리가 천천히 흐르고, 옅은 필름 질감을 얹는다. 마우스를 따라 살짝 밀린다. */
+.lp-hero-bloom { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none;
+  transform: translate3d(calc(var(--px, 0) * -24px), calc(var(--py, 0) * -18px), 0); transition: transform .8s ease-out; }
+.lp-hero-bloom i { position: absolute; display: block; border-radius: 50%; filter: blur(70px); opacity: .9; will-change: transform; }
+.lp-bloom-a { width: 46vw; height: 46vw; left: -8vw; top: -14vw; background: radial-gradient(circle at 40% 40%, rgba(59, 91, 165, .38), rgba(59, 91, 165, 0) 68%); animation: lpBloomA 26s ease-in-out infinite alternate; }
+.lp-bloom-b { width: 40vw; height: 40vw; right: -6vw; top: 8vh; background: radial-gradient(circle at 50% 50%, rgba(223, 228, 239, .95), rgba(223, 228, 239, 0) 70%); animation: lpBloomB 22s ease-in-out infinite alternate; }
+.lp-bloom-c { width: 36vw; height: 36vw; left: 30vw; bottom: -18vw; background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, .9), rgba(255, 255, 255, 0) 68%); animation: lpBloomC 30s ease-in-out infinite alternate; }
+.lp-bloom-d { width: 28vw; height: 28vw; right: 14vw; bottom: -6vw; background: radial-gradient(circle at 50% 50%, rgba(59, 91, 165, .26), rgba(59, 91, 165, 0) 70%); animation: lpBloomD 24s ease-in-out infinite alternate; }
+@keyframes lpBloomA { 0% { transform: translate(0, 0) scale(1); } 50% { transform: translate(14vw, 10vh) scale(1.12); } 100% { transform: translate(4vw, 22vh) scale(.95); } }
+@keyframes lpBloomB { 0% { transform: translate(0, 0) scale(1); } 50% { transform: translate(-12vw, 14vh) scale(1.08); } 100% { transform: translate(-4vw, -6vh) scale(1.15); } }
+@keyframes lpBloomC { 0% { transform: translate(0, 0) scale(1); } 50% { transform: translate(-16vw, -14vh) scale(1.1); } 100% { transform: translate(10vw, -8vh) scale(.9); } }
+@keyframes lpBloomD { 0% { transform: translate(0, 0) scale(.9); } 50% { transform: translate(-20vw, -24vh) scale(1.15); } 100% { transform: translate(-8vw, -10vh) scale(1); } }
+/* 필름 질감 */
+.lp-hero-bloom::after { content: ''; position: absolute; inset: -50%; opacity: .07; mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+/* 처음엔 빛도 서서히 켜진다 */
+.lp-fx .lp-hero-bloom { opacity: 0; transition: opacity 1.6s ease .2s, transform .8s ease-out; }
+.lp-fx.is-in .lp-hero-bloom { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .lp-hero-bloom i { animation: none; } }
+@media (max-width: 760px) {
+  .lp-hero { overflow: hidden; }
+  .lp-hero-bloom i { filter: blur(50px); }
+  .lp-bloom-a { width: 110vw; height: 110vw; left: -40vw; top: -30vw; }
+  .lp-bloom-b { width: 90vw; height: 90vw; right: -40vw; top: 30vh; }
+  .lp-bloom-c, .lp-bloom-d { width: 80vw; height: 80vw; }
 }

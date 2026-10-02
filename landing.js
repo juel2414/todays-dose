@@ -191,6 +191,7 @@ function renderLanding(root, options) {
   <div class="landing">
     <div class="lp-page">
       <header class="lp-hero" id="lp-top">
+        <div class="lp-hero-bloom" aria-hidden="true"><i class="lp-bloom-a"></i><i class="lp-bloom-b"></i><i class="lp-bloom-c"></i><i class="lp-bloom-d"></i></div>
         <div class="lp-hero-glow" aria-hidden="true"></div>
         <div class="lp-topbar">
           <a href="#" class="lp-brand" data-lp-scroll="lp-top" aria-label="${E(T.brandLabel)}">
