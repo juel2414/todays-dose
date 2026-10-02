@@ -213,12 +213,14 @@ body.is-landing #app { max-width: none; padding: 0; }
 @media (min-width: 761px) {
   body.is-landing { overflow-x: clip; }
   .lp-hero { width: 100vw; margin-left: calc(50% - 50vw); box-sizing: border-box; min-height: 100vh; min-height: 100svh; padding: 28px clamp(36px, 4vw, 80px) clamp(32px, 5vh, 64px); }
-  .lp-hero-title { margin-top: clamp(28px, 6vh, 72px); font-size: clamp(36px, 2.6vw, 56px); }
-  .lp-big-wordmark { font-size: min(18.6vw, 34vh); margin-top: clamp(4px, 1vh, 16px); }
+  /* 남는 높이는 제목 위와 큰 글자 아래로 나눠 가운데가 비지 않게 */
+  .lp-hero-title { margin-top: auto; padding-top: clamp(24px, 4vh, 56px); font-size: clamp(36px, min(2.6vw, 4.4vh), 60px); }
+  .lp-big-wordmark { font-size: min(20vw, 36vh); margin-top: clamp(4px, 1vh, 16px); }
   .lp-hero-row { margin-top: auto; padding-top: clamp(24px, 4vh, 48px); }
-  .lp-hero-sub { font-size: clamp(17px, 1.1vw, 21px); max-width: 380px; }
-  .lp-hero-illus { flex-basis: clamp(380px, 28vw, 600px); max-width: clamp(380px, 28vw, 600px); }
-  .lp-today-card { max-width: clamp(340px, 22vw, 440px); }
+  .lp-hero-sub { font-size: clamp(17px, min(1.1vw, 1.9vh), 22px); max-width: 400px; }
+  /* 손그림 · 카드는 화면 높이에도 맞춘다 (세로가 긴 화면에서 크게) */
+  .lp-hero-illus { flex-basis: clamp(360px, min(30vw, 44vh), 700px); max-width: clamp(360px, min(30vw, 44vh), 700px); }
+  .lp-today-card { max-width: clamp(340px, min(22vw, 34vh), 460px); }
 }
 
 @media (max-width: 1100px) and (min-width: 761px) {
