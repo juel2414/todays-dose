@@ -2277,3 +2277,8 @@ tr.is-today .check-mark { color: #fff; }
   .gf-enter *, .gf-enter, .gf-sum-big.is-tick, .type-card:has(input:checked) .type-card-check { animation: none !important; }
   .type-card:hover, .type-card:hover .type-card-img img { transform: none; }
 }
+
+/* 새 목표 — 기타 내용: 단위 칩 · 단위/전체 · 항목 목록 사이 간격 */
+.gf-card [data-section="custom"]:not([hidden]) { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
+.gf-card [data-section="custom"] .custom-unit-presets { margin-top: 0; }
+.gf-card [data-section="custom"] .gf-textarea { width: 100%; }
