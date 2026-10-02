@@ -2582,7 +2582,11 @@ function render() {
   if (route.view === 'admin') {
     if (!account.isAdmin) { navigate('#/'); return; }
     renderAdmin(root, route.tab, route);
-  } else if (route.view === 'form') renderGoalForm(root, goal, route.bookId || null, route.groupItemId || null);
+  } else if (route.view === 'form') {
+    renderGoalForm(root, goal, route.bookId || null, route.groupItemId || null);
+    const page = root.querySelector('.gf-page');
+    if (page) page.classList.add('gf-enter');
+  }
   else if (route.view === 'groups') renderGroups(root);
   else if (route.view === 'help') renderHelp(root);
   else if (route.view === 'join') renderJoinGroup(root, route.code);
@@ -4548,7 +4552,14 @@ function updateFormSummary(input, info) {
   useUnitOf(isCustom ? { type: 'custom', custom: { unit: input.customUnit } } : null);
   const limit = HEAVY_PER_DAY[unitBasis];
   const heavy = !!(limit && perDay >= limit);
-  bigEl.textContent = perDay ? t('하루 {amount}', { amount: formatAmount(perDay, unitBasis) }) : '—';
+  const bigText = perDay ? t('하루 {amount}', { amount: formatAmount(perDay, unitBasis) }) : '—';
+  if (bigEl.textContent !== bigText) {
+    bigEl.textContent = bigText;
+    // 하루 분량이 바뀌면 숫자가 톡 바뀌는 느낌
+    bigEl.classList.remove('is-tick');
+    void bigEl.offsetWidth;
+    bigEl.classList.add('is-tick');
+  }
   bigEl.classList.toggle('is-heavy', heavy);
   const md = (d) => formatShortDate(d);
   document.getElementById('gf-sum-period').textContent = validDates

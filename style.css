@@ -2247,3 +2247,33 @@ tr.is-today .check-mark { color: #fff; }
 .dash-enter .motto-note { animation: mottoIn .7s cubic-bezier(.65, 0, .35, 1) .9s both; }
 .dash-head-actions .motto-note, .dash-head-actions .motto-edit { margin-right: 56px; }
 @media (max-width: 760px) { .dash-head-actions .motto-note, .dash-head-actions .motto-edit { margin-right: 16px; } }
+
+/* =========================================================================
+ * 새 목표 추가 — 간단한 효과만 (들어올 때 한 번 · 종류 카드 · 하루 분량 숫자)
+ * ========================================================================= */
+@keyframes gfRise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes gfFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes gfPop { 0% { transform: scale(.4); } 70% { transform: scale(1.15); } 100% { transform: none; } }
+@keyframes gfTick { 0% { opacity: .2; transform: translateY(8px); } 100% { opacity: 1; transform: none; } }
+
+.gf-enter .gf-head { animation: gfFade .5s ease both; }
+.gf-enter .gf-card { animation: gfRise .6s cubic-bezier(.2, .8, .2, 1) .05s both; }
+.gf-enter .gf-summary { animation: gfRise .6s cubic-bezier(.2, .8, .2, 1) .15s both; }
+.gf-enter .type-card { animation: gfRise .5s cubic-bezier(.2, .8, .2, 1) both; }
+.gf-enter .type-card:nth-child(1) { animation-delay: .2s; }
+.gf-enter .type-card:nth-child(2) { animation-delay: .26s; }
+.gf-enter .type-card:nth-child(3) { animation-delay: .32s; }
+.gf-enter .type-card:nth-child(4) { animation-delay: .38s; }
+
+.type-card { transition: border-color .15s, background .15s, transform .2s cubic-bezier(.2, .8, .2, 1); }
+.type-card:hover { transform: translateY(-2px); }
+.type-card-img img { transition: transform .3s cubic-bezier(.2, .8, .2, 1); }
+.type-card:hover .type-card-img img { transform: scale(1.05); }
+.type-card:has(input:checked) .type-card-check { animation: gfPop .35s cubic-bezier(.3, 1.5, .5, 1); }
+
+.gf-sum-big.is-tick { animation: gfTick .3s cubic-bezier(.2, .8, .2, 1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .gf-enter *, .gf-enter, .gf-sum-big.is-tick, .type-card:has(input:checked) .type-card-check { animation: none !important; }
+  .type-card:hover, .type-card:hover .type-card-img img { transform: none; }
+}
