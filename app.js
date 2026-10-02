@@ -1702,6 +1702,30 @@ async function adminLoadProfiles() {
   return data;
 }
 
+/* ----- 문의 (도움말 → 어드민) ----- */
+
+const INQUIRIES_TABLE = 'study_planner_inquiries';
+
+/** 도움말에서 문의 보내기. 이메일·이름은 서버가 계정에서 채운다 */
+async function sendInquiry(message, page) {
+  const { error } = await getSupabase().from(INQUIRIES_TABLE).insert({ user_id: currentUser.id, message, page: page || null });
+  if (error) throw error;
+}
+
+async function adminLoadInquiries() {
+  const { data, error } = await getSupabase().from(INQUIRIES_TABLE)
+    .select('id, user_id, email, name, message, page, status, created_at, done_at')
+    .order('created_at', { ascending: false }).limit(300);
+  if (error) throw error;
+  return data;
+}
+
+async function adminSetInquiryStatus(id, status) {
+  const { error } = await getSupabase().from(INQUIRIES_TABLE)
+    .update({ status, done_at: status === 'done' ? new Date().toISOString() : null }).eq('id', id);
+  if (error) throw error;
+}
+
 /** 모든 그룹 · 멤버 · 공유 목표 → adminState */
 async function adminLoadGroups() {
   const sb = getSupabase();
@@ -6153,6 +6177,8 @@ const adminState = {
   memberSearch: '', // 전체 회원 검색어
   planSearch: '', // 회원 계획 검색어
   memberGroupFilter: '', // '' 전체 | 'none' 그룹 없음 | 그룹 id
+  inquiries: [], // 도움말에서 보낸 문의 (최신순)
+  inquiryFilter: 'open', // 'open' 답할 것 | 'all' 전체
 };
 
 const ADMIN_TABS = [
@@ -6160,15 +6186,17 @@ const ADMIN_TABS = [
   ['plans', '회원 계획'],
   ['books', '도서관'],
   ['members', '회원 관리'],
+  ['inquiries', '문의'],
 ];
 
 async function loadAdminData() {
   adminState.loading = true;
   adminState.error = null;
   try {
-    const [profiles, rows, goals, assignments] = await Promise.all([
-      adminLoadProfiles(), loadLibraryRows(), adminLoadAllGoals(), adminLoadAssignments(), adminLoadGroups(),
+    const [profiles, rows, goals, assignments, , inquiries] = await Promise.all([
+      adminLoadProfiles(), loadLibraryRows(), adminLoadAllGoals(), adminLoadAssignments(), adminLoadGroups(), adminLoadInquiries(),
     ]);
+    adminState.inquiries = inquiries;
     adminState.profiles = profiles;
     adminState.goals = goals.filter((x) => checkGoalShape(x.goal, 0) === null);
     adminState.assignments = assignments;
@@ -6213,6 +6241,8 @@ function renderAdmin(root, tab, route = {}) {
     body = renderAdminMembers();
   } else if (tab === 'plans') {
     body = renderAdminPlans();
+  } else if (tab === 'inquiries') {
+    body = renderAdminInquiries();
   } else if (tab === 'member') {
     body = renderAdminMemberGoal(route.userId, route.goalId);
   } else {
@@ -6249,7 +6279,10 @@ function renderAdmin(root, tab, route = {}) {
       ${tab === 'member' ? '' : summary}
       <div class="admin-tabbar">
         <nav class="admin-tabs" aria-label="${t('관리자 메뉴')}">
-          ${ADMIN_TABS.map(([key, label]) => `<a class="admin-tab ${key === tab || (tab === 'member' && key === 'plans') ? 'is-active' : ''}" href="#/admin/${key}">${t(label)}</a>`).join('')}
+          ${ADMIN_TABS.map(([key, label]) => {
+            const openN = key === 'inquiries' ? adminState.inquiries.filter((q) => q.status === 'open').length : 0;
+            return `<a class="admin-tab ${key === tab || (tab === 'member' && key === 'plans') ? 'is-active' : ''}" href="#/admin/${key}">${t(label)}${openN ? `<span class="admin-tab-count">${openN}</span>` : ''}</a>`;
+          }).join('')}
         </nav>
         <button type="button" class="btn btn-small btn-outline-muted" data-action="admin-refresh" ${adminState.loading ? 'disabled' : ''}>${t('새로고침')}</button>
       </div>`}
@@ -6261,6 +6294,37 @@ function renderAdmin(root, tab, route = {}) {
     fillChapterEditor(book ? book.chapters : []);
     refreshChapterEditor();
   }
+}
+
+/* ----- 문의 ----- */
+
+function renderAdminInquiries() {
+  const all = adminState.inquiries;
+  const openN = all.filter((q) => q.status === 'open').length;
+  const list = adminState.inquiryFilter === 'all' ? all : all.filter((q) => q.status === 'open');
+  const filters = [['open', t('답할 문의 {n}', { n: openN })], ['all', t('전체 {n}', { n: all.length })]];
+  const subject = t('Re: 오늘분량 문의');
+  return `
+    <div class="inq-head">
+      <div class="filter-pills">${filters.map(([k, label]) => `<button type="button" class="filter-pill ${adminState.inquiryFilter === k ? 'is-active' : ''}" data-action="inquiry-filter" data-filter="${k}">${escapeHtml(label)}</button>`).join('')}</div>
+      <span class="muted small">${t('답장은 이메일로 보내고, 보낸 뒤 처리 완료를 눌러 주세요.')}</span>
+    </div>
+    ${list.length ? `<div class="inq-list">${list.map((q) => `
+      <article class="inq-card ${q.status === 'done' ? 'is-done' : ''}">
+        <div class="inq-top">
+          <span class="badge ${q.status === 'done' ? 'badge-done' : 'badge-behind'}">${q.status === 'done' ? t('처리 완료') : t('답할 것')}</span>
+          <b>${escapeHtml(q.name || q.email || t('알 수 없음'))}</b>
+          ${q.email ? `<span class="muted small">${escapeHtml(q.email)}</span>` : ''}
+          <span class="inq-time mono">${escapeHtml(timestampToDateTime(q.created_at))}</span>
+        </div>
+        <p class="inq-msg">${escapeHtml(q.message)}</p>
+        <div class="inq-actions">
+          ${q.page ? `<span class="muted small">${t('보낸 곳: {page}', { page: escapeHtml(q.page) })}</span>` : ''}
+          ${q.email ? `<a class="btn btn-small btn-outline" href="mailto:${encodeURIComponent(q.email)}?subject=${encodeURIComponent(subject)}">${t('이메일로 답장')}</a>` : ''}
+          <button type="button" class="btn btn-small ${q.status === 'done' ? 'btn-outline-muted' : 'btn-dark'}" data-action="inquiry-status" data-id="${escapeHtml(q.id)}">${q.status === 'done' ? t('다시 열기') : t('처리 완료')}</button>
+        </div>
+      </article>`).join('')}</div>`
+      : `<div class="empty">${adminState.inquiryFilter === 'all' ? t('아직 받은 문의가 없어요.') : t('답할 문의가 없어요.')}</div>`}`;
 }
 
 /* ----- 진도 현황 ----- */
@@ -7192,6 +7256,26 @@ function bindAdminEvents(container, tab) {
       adminState.libraryFilter = 'pending';
       adminState.editingBookId = null;
       navigate('#/admin/books');
+      return;
+    }
+    if (action === 'inquiry-filter') {
+      adminState.inquiryFilter = btn.dataset.filter;
+      render();
+      return;
+    }
+    if (action === 'inquiry-status') {
+      const q = adminState.inquiries.find((x) => x.id === btn.dataset.id);
+      if (!q) return;
+      const next = q.status === 'open' ? 'done' : 'open';
+      btn.disabled = true;
+      try {
+        await adminSetInquiryStatus(q.id, next);
+        q.status = next;
+        q.done_at = next === 'done' ? new Date().toISOString() : null;
+      } catch (err) {
+        alert(`${t('저장하지 못했습니다')}: ${err.message || String(err)}`);
+      }
+      render();
       return;
     }
     if (action === 'admin-refresh') {
@@ -9614,6 +9698,18 @@ const EN = {
   '챕터 선택': 'Select chapter',
   '선택한 챕터 {n}개를 지울까요?': 'Delete {n} selected chapters?',
   '{n}개 선택': '{n} selected',
+  '문의': 'Inquiries',
+  '답할 문의 {n}': (p) => `To answer ${p.n}`,
+  '전체 {n}': (p) => `All ${p.n}`,
+  'Re: 오늘분량 문의': 'Re: Today’s Dose question',
+  '답장은 이메일로 보내고, 보낸 뒤 처리 완료를 눌러 주세요.': 'Reply by email, then mark it done.',
+  '처리 완료': 'Done',
+  '답할 것': 'Open',
+  '보낸 곳: {page}': (p) => `From: ${p.page}`,
+  '이메일로 답장': 'Reply by email',
+  '다시 열기': 'Reopen',
+  '아직 받은 문의가 없어요.': 'No inquiries yet.',
+  '답할 문의가 없어요.': 'Nothing to answer.',
   '이번 주 완주!': 'Perfect week!',
   '다시 왔네요! 오늘 분량만 하면 돼요': 'Welcome back! Just today’s dose.',
   '오늘 끝내면 1일째예요': 'Finish today for day 1',

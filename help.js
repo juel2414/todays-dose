@@ -5,7 +5,6 @@
  *   문구의 **굵게**는 앱 화면의 버튼·메뉴 이름이다.
  * ========================================================================= */
 
-const HELP_CONTACT = 'rlawndpfjuel@gmail.com';
 const HELP_TABS = ['start', 'daily', 'member', 'leader', 'faq'];
 
 const HELP_TEXT = {
@@ -16,9 +15,19 @@ const HELP_TEXT = {
     flow: ['목표 만들기', '오늘 분량 하고 체크', '밀리면 재분배'],
     tabs: ['처음 시작', '매일 쓰기', '그룹 참여자', '그룹 관리자', '자주 묻는 질문'],
     tip: 'TIP',
-    more: '그래도 모르겠다면 아래 문의하기로 알려 주세요.',
+    more: '그래도 모르겠다면 문의하기로 알려 주세요.',
     contact: '문의하기',
     contactSubject: '오늘분량 문의',
+    askTitle: '무엇이 궁금하거나 불편했나요?',
+    askPlaceholder: '어떤 화면에서 무엇을 하려다 막혔는지 적어 주시면 더 빨리 도와드릴 수 있어요.',
+    askReply: '답장은 가입한 이메일({email})로 드려요.',
+    askSend: '보내기',
+    askSending: '보내는 중…',
+    askCancel: '취소',
+    askEmpty: '내용을 적어 주세요.',
+    askDone: '보냈어요! 확인하고 이메일로 답장 드릴게요.',
+    askFail: '보내지 못했어요. 잠시 후 다시 시도해 주세요.',
+    askMore: '하나 더 보내기',
     shotNote: '',
     guides: {
       start: [
@@ -58,9 +67,19 @@ const HELP_TEXT = {
     flow: ['Create a goal', 'Do today’s dose and check it', 'Behind? Redistribute'],
     tabs: ['Getting started', 'Every day', 'Group members', 'Group admins', 'FAQ'],
     tip: 'TIP',
-    more: 'Still stuck? Let us know with Contact us below.',
+    more: 'Still stuck? Let us know with Contact us.',
     contact: 'Contact us',
     contactSubject: 'Today’s Dose question',
+    askTitle: 'What’s confusing or not working?',
+    askPlaceholder: 'Tell us which screen you were on and what you were trying to do — it helps us answer faster.',
+    askReply: 'We’ll reply to your sign-in email ({email}).',
+    askSend: 'Send',
+    askSending: 'Sending…',
+    askCancel: 'Cancel',
+    askEmpty: 'Please write your message.',
+    askDone: 'Sent! We’ll check it and reply by email.',
+    askFail: 'Couldn’t send. Please try again shortly.',
+    askMore: 'Send another',
     shotNote: 'Screenshots show the Korean screens.',
     guides: {
       start: [
@@ -96,12 +115,18 @@ const HELP_TEXT = {
 };
 
 /** 도움말 화면 상태: 고른 탭 · 펼친 질문 */
-const helpState = { tab: 'start', open: 0 };
+const helpState = { tab: 'start', open: 0, ask: 'closed', draft: '' }; // ask: closed | open | sending | sent
 
 /** 문구의 **굵게** → <b> (나머지는 그대로 이스케이프) */
 function helpMd(text) {
   return String(text).split(/(\*\*[^*]+\*\*)/).filter(Boolean)
     .map((x) => (x.startsWith('**') ? `<b>${escapeHtml(x.slice(2, -2))}</b>` : escapeHtml(x))).join('');
+}
+
+function rerenderHelpKeepScroll(root) {
+  const y = window.scrollY;
+  renderHelp(root);
+  window.scrollTo(0, y);
 }
 
 function renderHelp(root) {
@@ -134,7 +159,28 @@ function renderHelp(root) {
       }).join('')}
     </section>`;
 
-  const mail = `mailto:${HELP_CONTACT}?subject=${encodeURIComponent(T.contactSubject)}`;
+  const email = (typeof currentUser !== 'undefined' && currentUser && currentUser.email) || '';
+  const ask = helpState.ask;
+  const contactBox = ask === 'closed'
+    ? `<div class="help-more">
+        <span>${escapeHtml(T.more)}</span>
+        <button type="button" class="btn btn-small btn-outline" data-help-ask="open">${escapeHtml(T.contact)}</button>
+      </div>`
+    : ask === 'sent'
+      ? `<div class="help-more help-ask is-sent">
+          <span class="hand-note hand-sm">${escapeHtml(T.askDone)}</span>
+          <button type="button" class="link-btn" data-help-ask="open">${escapeHtml(T.askMore)}</button>
+        </div>`
+      : `<form class="help-ask" id="help-ask">
+          <label class="help-ask-title" for="help-ask-text">${escapeHtml(T.askTitle)}</label>
+          <textarea id="help-ask-text" class="gf-input gf-textarea" rows="5" maxlength="2000" placeholder="${escapeHtml(T.askPlaceholder)}" ${ask === 'sending' ? 'disabled' : ''}>${escapeHtml(helpState.draft)}</textarea>
+          <div class="help-ask-foot">
+            <span class="muted small">${email ? escapeHtml(T.askReply.replace('{email}', email)) : ''}</span>
+            <span class="help-ask-err" id="help-ask-err" hidden></span>
+            <button type="button" class="btn btn-small btn-outline-muted" data-help-ask="closed" ${ask === 'sending' ? 'disabled' : ''}>${escapeHtml(T.askCancel)}</button>
+            <button type="submit" class="btn btn-small btn-dark" ${ask === 'sending' ? 'disabled' : ''}>${escapeHtml(ask === 'sending' ? T.askSending : T.askSend)}</button>
+          </div>
+        </form>`;
   root.innerHTML = `
     <div id="help-page" class="help">
       <div class="help-head">
@@ -159,13 +205,48 @@ function renderHelp(root) {
       ${guides ? `<div class="help-items">${guides}</div>` : faq}
       ${guides && T.shotNote ? `<p class="muted small">${escapeHtml(T.shotNote)}</p>` : ''}
 
-      <div class="help-more">
-        <span>${escapeHtml(T.more)}</span>
-        <a class="btn btn-small btn-outline" href="${mail}">${escapeHtml(T.contact)}</a>
-      </div>
+      ${contactBox}
     </div>`;
 
-  root.querySelector('#help-page').addEventListener('click', (e) => {
+  const page = root.querySelector('#help-page');
+  const askText = page.querySelector('#help-ask-text');
+  if (askText) {
+    askText.addEventListener('input', () => { helpState.draft = askText.value; });
+    if (ask === 'open') askText.focus({ preventScroll: true });
+  }
+  const askForm = page.querySelector('#help-ask');
+  if (askForm) {
+    askForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const message = askText.value.trim();
+      const err = page.querySelector('#help-ask-err');
+      if (!message) { err.textContent = T.askEmpty; err.hidden = false; askText.focus(); return; }
+      helpState.draft = message;
+      helpState.ask = 'sending';
+      rerenderHelpKeepScroll(root);
+      try {
+        await sendInquiry(message, `help/${helpState.tab}`);
+        helpState.ask = 'sent';
+        helpState.draft = '';
+      } catch (ex) {
+        console.warn('[help] 문의 보내기 실패:', ex);
+        helpState.ask = 'open';
+        rerenderHelpKeepScroll(root);
+        const e2 = root.querySelector('#help-ask-err');
+        if (e2) { e2.textContent = T.askFail; e2.hidden = false; }
+        return;
+      }
+      rerenderHelpKeepScroll(root);
+    });
+  }
+
+  page.addEventListener('click', (e) => {
+    const askBtn = e.target.closest('[data-help-ask]');
+    if (askBtn) {
+      helpState.ask = askBtn.dataset.helpAsk;
+      rerenderHelpKeepScroll(root);
+      return;
+    }
     const tabBtn = e.target.closest('[data-help-tab]');
     if (tabBtn) {
       helpState.tab = tabBtn.dataset.helpTab;
