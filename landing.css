@@ -141,7 +141,7 @@ body.is-landing #app { max-width: none; padding: 0; }
 .lp-rm-word { display: inline-block; text-decoration: line-through; text-decoration-color: var(--blue); }
 .lp-rm-word-1 { font-family: 'Nanum Myeongjo', serif; font-size: 92px; font-weight: 800; letter-spacing: -0.05em; line-height: 1.05; transform: skewX(-10deg); transform-origin: left bottom; text-decoration-thickness: 6px; }
 .lp-rm-word-2 { font-size: 96px; font-weight: 900; letter-spacing: -0.07em; line-height: 1; text-decoration-thickness: 8px; }
-.lp-rm-word-3 { font-family: 'Nanum Pen Script', cursive; font-size: 124px; font-weight: 400; letter-spacing: -0.02em; line-height: .9; text-decoration-thickness: 5px; }
+.lp-rm-word-3 { font-family: 'Hi Melody', cursive; font-size: 124px; font-weight: 400; letter-spacing: -0.02em; line-height: .9; text-decoration-thickness: 5px; }
 .lp-card { background: #fff; border-radius: 22px; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
 .lp-card-label { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--muted); }
 .lp-ai { padding: 1px 8px 2px; border: 1.5px solid var(--ink); border-radius: 99px; font-family: var(--serif); font-style: italic; font-weight: 600; font-size: 13px; color: var(--ink); }

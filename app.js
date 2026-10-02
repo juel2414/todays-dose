@@ -6906,7 +6906,7 @@ const EXPORT_FONTS = {
   base: "'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif",
   num: "Hahmlet, 'Pretendard Variable', 'Apple SD Gothic Neo', serif",
   mono: "'JetBrains Mono', 'Pretendard Variable', 'Apple SD Gothic Neo', monospace",
-  hand: "'Nanum Pen Script', 'Apple SD Gothic Neo', cursive",
+  hand: "'Hi Melody', 'Apple SD Gothic Neo', cursive",
   serif: "'Cormorant Garamond', Georgia, serif",
 };
 
@@ -6917,7 +6917,7 @@ async function loadExportFonts() {
   const sample = '가나다 오늘분량 p.123 Today';
   const wanted = [
     `700 54px 'Pretendard Variable'`, `500 20px 'Pretendard Variable'`, `600 46px Hahmlet`,
-    `500 20px 'JetBrains Mono'`, `400 40px 'Nanum Pen Script'`, `italic 600 30px 'Cormorant Garamond'`,
+    `500 20px 'JetBrains Mono'`, `400 40px 'Hi Melody'`, `italic 600 30px 'Cormorant Garamond'`,
   ];
   const timeout = new Promise((r) => setTimeout(r, 5000));
   await Promise.race([Promise.all(wanted.map((f) => document.fonts.load(f, sample).catch(() => null))).then(() => document.fonts.ready), timeout]);
