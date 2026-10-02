@@ -2398,7 +2398,7 @@ function renderTopbar() {
       <nav class="topbar-nav">
         ${navLink('groups', '#/groups', t('그룹'))}
         ${navLink('help', '#/help', t('도움말'))}
-        ${account.isAdmin ? navLink('admin', '#/admin', t('관리자')) : ''}
+        ${account.isAdmin ? navLink('admin', '#/admin', t('어드민')) : ''}
       </nav>
       <div class="topbar-right">
         ${renderLangToggle()}
@@ -6241,7 +6241,7 @@ function renderAdmin(root, tab, route = {}) {
       ${editingBook || tab === 'member' ? '' : `
       <div class="admin-head">
         <div class="admin-head-text">
-          <h1>${t('관리자')}</h1>
+          <h1>${t('어드민')}</h1>
           <p>${t('회원·그룹·도서관을 관리해요.')}</p>
         </div>
         <span class="hand-note">${t('오늘도 다들 잘하고 있어요')}</span>
@@ -8944,6 +8944,7 @@ const EN = {
   '저장 실패': 'Save failed',
   '다시 시도': 'Retry',
   '관리자': 'Admin',
+  '어드민': 'Admin',
   '로그아웃': 'Log out',
   '책·강의의 마감일까지 매일 할 분량을 계획하고 진도를 기록합니다.': 'Plan how much to do each day to finish your books and lectures by the due date, and track your progress.',
   '구글 계정으로 로그인하면 어느 기기에서든 같은 계획을 볼 수 있습니다.': 'Sign in with your Google account to see the same plans on any device.',
