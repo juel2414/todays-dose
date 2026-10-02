@@ -149,7 +149,7 @@ function loadLandingFonts() {
   if (document.getElementById('lp-fonts')) return;
   const links = [
     'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css',
-    'https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,600&family=Hahmlet:wght@600&family=JetBrains+Mono:wght@500&family=Nanum+Myeongjo:wght@800&family=Hi+Melody&display=swap',
+    'https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,600&family=Hahmlet:wght@600&family=JetBrains+Mono:wght@500&family=Nanum+Myeongjo:wght@800&family=Nanum+Pen+Script&display=swap',
   ];
   links.forEach((href, i) => {
     const link = document.createElement('link');

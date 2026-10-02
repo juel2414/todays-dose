@@ -28,7 +28,7 @@
   --font: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
   --serif: 'Cormorant Garamond', Georgia, serif;
   --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
-  --hand: 'Hi Melody', cursive;
+  --hand: 'Nanum Pen Script', cursive;
 }
 
 * { box-sizing: border-box; }
@@ -2245,3 +2245,5 @@ tr.is-today .check-mark { color: #fff; }
 .motto-help { font: 500 10px var(--mono); letter-spacing: .04em; color: var(--text-2); }
 @keyframes mottoIn { from { clip-path: inset(-20% 100% -20% -10%); } to { clip-path: inset(-20% -10% -20% -10%); } }
 .dash-enter .motto-note { animation: mottoIn .7s cubic-bezier(.65, 0, .35, 1) .9s both; }
+.dash-head-actions .motto-note, .dash-head-actions .motto-edit { margin-right: 56px; }
+@media (max-width: 760px) { .dash-head-actions .motto-note, .dash-head-actions .motto-edit { margin-right: 16px; } }
