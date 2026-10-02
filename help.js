@@ -262,7 +262,7 @@ const GUIDE = [
       img: 'invite',
       steps: [
         { ko: '<b>초대 코드</b>예요. 코드만 알려 줘도 [그룹 → 초대 코드로 참여]에서 들어올 수 있어요.', en: 'The <b>invite code</b> — members can enter it under [Groups → Join with an invite code].' },
-        { ko: '<b>링크 복사</b>를 눌러 단톡방 등에 붙여 넣어요. 링크를 받은 사람은 로그인 후 바로 참여해요.', en: '<b>Copy link</b> and paste it into your chat. People join right after signing in.' },
+        { ko: '<b>초대 링크 복사</b>를 눌러 단톡방 등에 붙여 넣어요. 링크를 받은 사람은 로그인 후 바로 참여해요. (<b>코드 복사</b>로 코드만 보낼 수도 있어요)', en: '<b>Copy invite link</b> and paste it into your chat. People join right after signing in.' },
         { ko: '<b>코드 새로 만들기</b>: 링크가 너무 퍼졌을 때 예전 코드를 막아요. 이미 참여한 멤버는 그대로예요.', en: '<b>New code</b>: stops the old code/link; existing members stay.' },
       ],
     }],
