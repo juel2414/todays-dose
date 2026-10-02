@@ -214,10 +214,16 @@ function renderLanding(root, options) {
         </div>
 
         <h1 class="lp-hero-title"><span class="lp-dot"></span><span>${lpWords(E(T.heroTitle))}</span></h1>
-        <div class="lp-big-wordmark" aria-hidden="true">
-          <span class="lp-big-today">${lpChars('Today', 0)}<span class="lp-char" style="--i:5"><span class="lp-apos">’</span></span>${lpChars('s', 6)}</span>
-          <span class="lp-big-dose">${lpChars('D', 7)}<span class="lp-char lp-char-o" style="--i:8"><span>${LP_BIG_O}</span></span>${lpChars('se', 9)}</span>
-          <img class="lp-hero-mini" src="${LP_ASSETS.hero}" alt="">
+        <div class="lp-wm-wrap">
+          <div class="lp-big-wordmark" aria-hidden="true">
+            <span class="lp-big-today">${lpChars('Today', 0)}<span class="lp-char" style="--i:5"><span class="lp-apos">’</span></span>${lpChars('s', 6)}</span>
+            <span class="lp-big-dose">${lpChars('D', 7)}<span class="lp-char lp-char-o" style="--i:8"><span>${LP_BIG_O}</span></span>${lpChars('se', 9)}</span>
+            <img class="lp-hero-mini" src="${LP_ASSETS.hero}" alt="">
+          </div>
+          <div class="lp-big-wordmark lp-wm-shine" aria-hidden="true">
+            <span class="lp-big-today">${lpChars('Today', 0)}<span class="lp-char" style="--i:5"><span class="lp-apos">’</span></span>${lpChars('s', 6)}</span>
+            <span class="lp-big-dose">${lpChars('D', 7)}<span class="lp-char lp-char-o" style="--i:8"><span>${LP_BIG_O}</span></span>${lpChars('se', 9)}</span>
+          </div>
         </div>
 
         <div class="lp-hero-row">
