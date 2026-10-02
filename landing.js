@@ -8,7 +8,7 @@ const LANDING_TEXT = {
   ko: {
     nav: ['소개', '기능', '이런 분들', '자주 묻는 질문'],
     login: '로그인',
-    heroTitle: '계획은 맡기고, 공부만 하세요.',
+    heroTitle: '계획은 맡기고, 실행만 하세요.',
     heroSub: '마감일만 정하면, 매일 오늘 할 분량이 나와요.',
     cta: 'Google 계정으로 시작하기',
     illusAlt: '책 더미에 기대어 책을 읽는 사람 손그림',
@@ -63,7 +63,7 @@ const LANDING_TEXT = {
   en: {
     nav: ['About', 'Features', 'Who', 'FAQ'],
     login: 'Log in',
-    heroTitle: 'Leave the planning to us. Just study.',
+    heroTitle: 'Leave the planning to us. Just get it done.',
     heroSub: 'Set a deadline. Every day, you get today’s amount.',
     cta: 'Continue with Google',
     illusAlt: 'Hand-drawn person reading against a stack of books',
