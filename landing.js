@@ -156,7 +156,7 @@ function landingWordmark(size, dark) {
 }
 
 /* 큰 글자 로고의 o (파란 반달이 있는 원) */
-const LP_BIG_O = '<svg viewBox="0 0 100 100" class="lp-big-o" aria-hidden="true"><path class="lp-o-ring" d="M51.62 3.68 A46.35 46.35 0 0 1 71.56 91.03" fill="none" stroke="#141414" stroke-width="7.3"/><path class="lp-o-arc" d="M66.89 88.45 A42 42 0 0 1 33.11 88.45" fill="none" stroke="#3B5BA5" stroke-width="16"/><path class="lp-o-ring" d="M28.44 91.03 A46.35 46.35 0 0 1 48.38 3.68" fill="none" stroke="#141414" stroke-width="2.4"/></svg>';
+const LP_BIG_O = '<svg viewBox="0 0 100 100" class="lp-big-o" aria-hidden="true"><path class="lp-o-ring" d="M51.62 3.68 A46.35 46.35 0 0 1 71.56 91.03" fill="none" stroke="#141414" stroke-width="7.3"/><path class="lp-o-arc" pathLength="100" d="M66.89 88.45 A42 42 0 0 1 33.11 88.45" fill="none" stroke="#3B5BA5" stroke-width="16"/><path class="lp-o-ring" d="M28.44 91.03 A46.35 46.35 0 0 1 48.38 3.68" fill="none" stroke="#141414" stroke-width="2.4"/></svg>';
 
 /* 첫 화면 효과용: 글자 하나씩 감싸기 (아래에서 잘려 올라오는 효과) */
 function lpChars(text, start) {
@@ -192,6 +192,7 @@ function renderLanding(root, options) {
     <div class="lp-page">
       <header class="lp-hero" id="lp-top">
         <div class="lp-hero-bloom" aria-hidden="true"><i class="lp-bloom-a"></i><i class="lp-bloom-b"></i><i class="lp-bloom-c"></i><i class="lp-bloom-d"></i></div>
+        <canvas class="lp-hero-pixels" aria-hidden="true"></canvas>
         <div class="lp-hero-glow" aria-hidden="true"></div>
         <div class="lp-topbar">
           <a href="#" class="lp-brand" data-lp-scroll="lp-top" aria-label="${E(T.brandLabel)}">
@@ -473,6 +474,8 @@ function initLandingHeroFx(landing) {
     cta.addEventListener('pointerleave', () => { cta.style.transform = ''; });
   }
 
+  initHeroPixels(hero);
+
   // 스크롤: 첫 화면을 지나는 만큼 0 → 1
   let sraf = 0;
   const onScroll = () => {
@@ -486,4 +489,146 @@ function initLandingHeroFx(landing) {
     });
   };
   window.addEventListener('scroll', onScroll, { passive: true });
+}
+
+/* =========================================================================
+ * 첫 화면 픽셀 배경 (21st "Hero With Pixel Background" 참고 · 순수 캔버스)
+ *  - 처음: 종이색 픽셀이 화면을 덮고 있다가 하나씩 흩어지며 사라져 뒤의 빛 배경이 드러난다
+ *  - 마우스: 커서 근처 픽셀이 파랗게 켜졌다가 서서히 꺼진다 (지나간 자국)
+ *  - 가만히 있을 때: 드문드문 픽셀이 옅게 반짝인다
+ *  첫 화면이 보이지 않거나 탭이 숨겨지면 그리지 않는다.
+ * ========================================================================= */
+function initHeroPixels(hero) {
+  const canvas = hero.querySelector('.lp-hero-pixels');
+  if (!canvas || !canvas.getContext) return;
+  const ctx = canvas.getContext('2d');
+  const CELL = 18;
+  const GAP = 2;
+  let cols = 0;
+  let rows = 0;
+  let w = 0;
+  let h = 0;
+  let cover = []; // 처음 덮개: 각 칸이 사라지기 시작하는 시각(ms)
+  let energy = new Float32Array(0); // 마우스·반짝임 밝기 0~1
+  let tint = new Uint8Array(0); // 0 = 파랑, 1 = 연파랑, 2 = 먹색
+  const t0 = performance.now();
+  const INTRO = 1300;
+
+  function resize() {
+    const r = hero.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    w = Math.ceil(r.width);
+    h = Math.ceil(r.height);
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cols = Math.ceil(w / CELL);
+    rows = Math.ceil(h / CELL);
+    const n = cols * rows;
+    if (cover.length !== n) {
+      cover = Array.from({ length: n }, (_, i) => {
+        // 가운데부터 바깥으로 흩어지되, 무작위로 섞는다
+        const cx = (i % cols) / cols - 0.5;
+        const cy = Math.floor(i / cols) / rows - 0.5;
+        return Math.sqrt(cx * cx + cy * cy) * 900 + Math.random() * 700;
+      });
+      energy = new Float32Array(n);
+      tint = Uint8Array.from({ length: n }, () => {
+        const r2 = Math.random();
+        return r2 < 0.62 ? 0 : r2 < 0.9 ? 1 : 2;
+      });
+    }
+  }
+  resize();
+  window.addEventListener('resize', () => { if (hero.isConnected) { resize(); kick(); } });
+
+  let mx = -1e4;
+  let my = -1e4;
+  hero.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'touch') return;
+    const r = hero.getBoundingClientRect();
+    mx = e.clientX - r.left;
+    my = e.clientY - r.top;
+    kick();
+  });
+  hero.addEventListener('pointerleave', () => { mx = -1e4; my = -1e4; });
+
+  let visible = true;
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver((entries) => { visible = entries[0].isIntersecting; if (visible) kick(); }).observe(hero);
+  }
+
+  let raf = 0;
+  let last = performance.now();
+  let twinkleAt = 0;
+  function kick() { if (!raf) raf = requestAnimationFrame(frame); }
+
+  function frame(now) {
+    raf = 0;
+    if (!hero.isConnected) return;
+    const dt = Math.min(64, now - last);
+    last = now;
+    const t = now - t0;
+    const intro = t < INTRO + 1600;
+    const R = 96;
+
+    // 마우스 근처 칸 켜기
+    if (mx > -1e3) {
+      const c0 = Math.max(0, Math.floor((mx - R) / CELL));
+      const c1 = Math.min(cols - 1, Math.floor((mx + R) / CELL));
+      const r0 = Math.max(0, Math.floor((my - R) / CELL));
+      const r1 = Math.min(rows - 1, Math.floor((my + R) / CELL));
+      for (let r = r0; r <= r1; r++) {
+        for (let c = c0; c <= c1; c++) {
+          const dx = c * CELL + CELL / 2 - mx;
+          const dy = r * CELL + CELL / 2 - my;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d < R && Math.random() < 0.35) {
+            const i = r * cols + c;
+            energy[i] = Math.max(energy[i], 1 - d / R);
+          }
+        }
+      }
+    }
+    // 가만히 있을 때 드문드문 반짝임
+    if (now > twinkleAt) {
+      twinkleAt = now + 140;
+      for (let k = 0; k < 2; k++) {
+        const i = (Math.random() * energy.length) | 0;
+        energy[i] = Math.max(energy[i], 0.35 + Math.random() * 0.3);
+      }
+    }
+
+    ctx.clearRect(0, 0, w, h);
+    const fade = dt / 900;
+    for (let i = 0; i < energy.length; i++) {
+      const x = (i % cols) * CELL;
+      const y = Math.floor(i / cols) * CELL;
+      // 처음 덮개 (종이색) — 차례로 옅어지며 사라진다
+      if (intro) {
+        const k = (t - cover[i]) / 260;
+        if (k < 1) {
+          ctx.globalAlpha = k <= 0 ? 1 : 1 - k;
+          ctx.fillStyle = '#e8e8e5';
+          ctx.fillRect(x, y, CELL, CELL);
+          ctx.fillStyle = tint[i] === 1 ? '#d3d9e6' : '#dcdcd8';
+          ctx.fillRect(x + GAP / 2, y + GAP / 2, CELL - GAP, CELL - GAP);
+        }
+      }
+      const e = energy[i];
+      if (e > 0.01) {
+        ctx.globalAlpha = e * (tint[i] === 2 ? 0.16 : tint[i] === 1 ? 0.55 : 0.28);
+        ctx.fillStyle = tint[i] === 0 ? '#3B5BA5' : tint[i] === 1 ? '#dfe4ef' : '#141414';
+        ctx.fillRect(x + GAP / 2, y + GAP / 2, CELL - GAP, CELL - GAP);
+        energy[i] = Math.max(0, e - fade);
+      }
+    }
+    ctx.globalAlpha = 1;
+    // 첫 화면이 보이고 탭이 열려 있을 때만 계속 그린다 (반짝임이 있어 멈추지 않는다)
+    if (visible && !document.hidden) raf = requestAnimationFrame(frame);
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) kick(); });
+  kick();
 }

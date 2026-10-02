@@ -353,7 +353,7 @@ body.is-landing #app { max-width: none; padding: 0; }
 .lp-char > span { display: inline-block; }
 .lp-char-o > span { display: inline; }
 .lp-hero { position: relative; }
-.lp-hero > *:not(.lp-hero-glow):not(.lp-hero-bloom) { position: relative; z-index: 1; }
+
 .lp-hero-glow { position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: 0; transition: opacity .5s ease;
   background-image: radial-gradient(rgba(20, 20, 20, .22) 1px, transparent 1.5px); background-size: 22px 22px;
   -webkit-mask-image: radial-gradient(300px circle at var(--gx, 50%) var(--gy, 40%), #000 0%, transparent 70%);
@@ -365,7 +365,7 @@ body.is-landing #app { max-width: none; padding: 0; }
   transition: transform .95s cubic-bezier(.2, .8, .2, 1), clip-path .95s cubic-bezier(.2, .8, .2, 1), opacity .5s ease;
   transition-delay: calc(260ms + var(--i) * 60ms); }
 .lp-fx.is-in .lp-char > span { transform: none; clip-path: inset(-60% -40% -60% -40%); opacity: 1; }
-/* o: 고리가 다이얼처럼 네 번 '딱딱' 끊어 돌다가 정확히 멈추고, 파란 반달은 짧고 빠르게 그어진다 */
+/* o: 고리가 다이얼처럼 네 번 '딱딱' 끊어 돌다가 정확히 멈춘다 */
 .lp-fx .lp-big-o { transform: rotate(-120deg); transform-origin: 50% 50%; }
 .lp-fx.is-in .lp-big-o { animation: lpDial .9s .75s both; }
 @keyframes lpDial {
@@ -378,9 +378,11 @@ body.is-landing #app { max-width: none; padding: 0; }
   75% { transform: rotate(-30deg); animation-timing-function: cubic-bezier(.8, 0, .2, 1); }
   100% { transform: rotate(0deg); }
 }
-.lp-fx .lp-o-arc { stroke-dasharray: 60; stroke-dashoffset: 60; transition: stroke-dashoffset .28s cubic-bezier(.9, 0, .1, 1) 1.68s; }
-.lp-fx.is-in .lp-o-arc { stroke-dashoffset: 0; }
-.lp-fx.is-in .lp-char-o > span { animation: lpClick .22s 1.96s both; }
+/* 파란 반달: 다이얼이 멈추며 '탁' 한 뒤, 천천히 부드럽게 차오른다 */
+.lp-fx .lp-o-arc { stroke-dasharray: 100; stroke-dashoffset: 100; opacity: .35;
+  transition: stroke-dashoffset 1.4s cubic-bezier(.22, 1, .36, 1) 1.75s, opacity .9s ease 1.75s; }
+.lp-fx.is-in .lp-o-arc { stroke-dashoffset: 0; opacity: 1; }
+.lp-fx.is-in .lp-char-o > span { animation: lpClick .22s 1.62s both; }
 @keyframes lpClick { 0% { transform: scale(1); } 40% { transform: scale(1.045); } 100% { transform: scale(1); } }
 
 /* 2. 제목: 단어가 흐림에서 또렷하게 */
@@ -449,3 +451,7 @@ body.is-landing #app { max-width: none; padding: 0; }
   .lp-bloom-b { width: 90vw; height: 90vw; right: -40vw; top: 30vh; }
   .lp-bloom-c, .lp-bloom-d { width: 80vw; height: 80vw; }
 }
+
+/* ===== 첫 화면 픽셀 배경 (21st Hero With Pixel Background 참고 · 캔버스) ===== */
+.lp-hero-pixels { position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; display: block; }
+.lp-hero > *:not(.lp-hero-glow):not(.lp-hero-bloom):not(.lp-hero-pixels) { position: relative; z-index: 1; }
