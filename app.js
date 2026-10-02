@@ -2321,19 +2321,25 @@ function renderTopbar() {
     return;
   }
   const status = {
-    saving: `<span class="save-state is-saving">${t('저장 중…')}</span>`,
-    saved: `<span class="save-state is-saved">${t('저장됨')}</span>`,
-    error: `<span class="save-state is-error">${t('저장 실패')} <button type="button" class="link-btn" data-action="retry-save">${t('다시 시도')}</button></span>`,
+    saving: `<span class="save-state is-saving"><i class="save-dot"></i>${t('저장 중…')}</span>`,
+    saved: `<span class="save-state is-saved"><i class="save-dot"></i>${t('저장됨')}</span>`,
+    error: `<span class="save-state is-error"><i class="save-dot"></i>${t('저장 실패')} <button type="button" class="link-btn" data-action="retry-save">${t('다시 시도')}</button></span>`,
   }[saveState];
   const name = currentUser.user_metadata && (currentUser.user_metadata.full_name || currentUser.user_metadata.name);
+  const view = location.hash.replace(/^#\/?/, '').split('/')[0];
+  const navLink = (key, href, label) => `<a class="nav-link ${view === key ? 'is-active' : ''}" href="${href}">${label}</a>`;
+  if (typeof loadLandingFonts === 'function') loadLandingFonts();
   bar.hidden = false;
   bar.innerHTML = `
     <div class="topbar-inner">
-      <a class="brand" href="#/"><img class="brand-logo" src="logo/symbol.svg" alt="" width="26" height="26">${t('오늘분량')}</a>
+      <a class="brand" href="#/" aria-label="${t('오늘분량')} Today's Dose">
+        <span class="brand-tile"><img src="landing/mark-light.svg" alt="" width="24" height="24"></span>
+        ${landingWordmark('sm', false)}
+      </a>
       <nav class="topbar-nav">
-        <a class="nav-link" href="#/groups">${t('그룹')}</a>
-        <a class="nav-link" href="#/help">${t('도움말')}</a>
-        ${account.isAdmin ? `<a class="nav-link" href="#/admin">${t('관리자')}</a>` : ''}
+        ${navLink('groups', '#/groups', t('그룹'))}
+        ${navLink('help', '#/help', t('도움말'))}
+        ${account.isAdmin ? navLink('admin', '#/admin', t('관리자')) : ''}
       </nav>
       <div class="topbar-right">
         ${renderLangToggle()}
@@ -2349,7 +2355,7 @@ function renderTopbar() {
             <input type="file" id="backup-file" accept=".json,application/json" hidden>
           </div>
         </div>` : `<span class="user">${escapeHtml(name || currentUser.email || '')}</span>`}
-        <button type="button" class="btn btn-small" data-action="sign-out">${t('로그아웃')}</button>
+        <button type="button" class="btn btn-small btn-outline" data-action="sign-out">${t('로그아웃')}</button>
       </div>
     </div>`;
 }
@@ -2529,6 +2535,7 @@ function render() {
   else if (route.view === 'group') renderGroupPage(root, route);
   else if (route.view === 'detail') renderGoalDetail(root, goal);
   else renderDashboard(root);
+  renderTopbar();
   window.scrollTo(0, 0);
 }
 
@@ -2545,46 +2552,256 @@ function escapeHtml(value) {
  * 8. 화면 — 대시보드
  * ========================================================================= */
 
+/** 대시보드 화면 상태 (끝난 목표 펼침) */
+const dashState = { closedOpen: false };
+
+/** 화면에 부를 이름 (Google 계정 이름 → 이메일 앞부분) */
+function displayName() {
+  if (!currentUser) return '';
+  const meta = currentUser.user_metadata || {};
+  return meta.full_name || meta.name || (currentUser.email || '').split('@')[0];
+}
+
+/** 목표의 종류 표시 (도서관 배정 · 그룹 필독서/필수 시청 · 종류) */
+function renderGoalTypeTag(goal) {
+  const tagKind = bookTagKind(libraryBookForGoal(goal));
+  if (tagKind) return renderBookTag(tagKind);
+  if (goal.groupId) return renderSharedTag(goal.type);
+  return `<span class="type-tag type-${goal.type}">${typeLabel(goal.type)}</span>`;
+}
+
+/** 도서관 책·그룹 항목 내용이 바뀌어 적용을 기다리는지 */
+function isGoalSourceChanged(goal) {
+  const book = libraryBookForGoal(goal);
+  const item = groupItemForGoal(goal);
+  return !!((book && isRequiredBookChanged(goal, book)) || (item && isGroupItemChanged(goal, item)));
+}
+
+/** 손글씨 응원 (D-day 기준): 오늘·내일 끝, 일주일 안이면 끝, 아니면 없음 */
+function ddayCheer(s) {
+  if (s.isComplete) return t('잘했어요!');
+  if (!s.isActive) return '';
+  if (s.dday === 0) return t('오늘이면 끝!');
+  if (s.dday === 1) return t('내일이면 끝!');
+  if (s.dday <= 7) return t('일주일이면 끝!');
+  return '';
+}
+
+/** 오늘 할 분량 목록의 한 줄 데이터 (오늘 공부하는 날이 아니면 null) */
+function todayItemOf(goal, s) {
+  if (!s.isActive || s.notStarted) return null;
+  const row = s.todayRow;
+  if (!row || row.isRestDay || row.amount === 0) return null;
+  useUnitOf(goal);
+  const done = s.done >= row.cumulative;
+  const partial = !done && s.done > row.prevCumulative;
+  const from = partial ? s.done : row.prevCumulative;
+  let hint = '';
+  if (s.basis === 'page') {
+    hint = describeChaptersForPages(goal.book, unitsToPage(goal.book, from + 1), unitsToPage(goal.book, row.cumulative));
+  }
+  return {
+    goal, s, row, done,
+    range: describeUnitsRange(goal, s.basis, from, row.cumulative),
+    amount: partial
+      ? t('{left} 남음 · 오늘 분량 {amount}', { left: formatAmount(row.cumulative - from, s.basis), amount: formatAmount(row.amount, s.basis) })
+      : formatAmount(row.amount, s.basis),
+    hint,
+  };
+}
+
+/** 인사 문구: 오늘 분량이 남은 목표 중 마감이 가장 가까운 것 + 가장 밀린 목표 */
+function dashboardGreeting(todayItems, activeItems) {
+  if (!todayItems.length && !activeItems.length) return '';
+  const left = todayItems.filter((x) => !x.done);
+  if (todayItems.length && !left.length) return t('오늘 분량을 모두 끝냈어요!');
+  const parts = [];
+  const urgent = left.slice().sort((a, b) => a.s.dday - b.s.dday)[0];
+  if (urgent) {
+    const due = urgent.s.dday === 0 ? t('오늘이 마감이에요.')
+      : urgent.s.dday === 1 ? t('내일이 마감이에요.')
+      : t('마감까지 {n}일 남았어요.', { n: urgent.s.dday });
+    parts.push(t('가장 급한 건 「{title}」{josa} {due}', {
+      title: urgent.goal.title, josa: currentLang === 'en' ? '' : josa(urgent.goal.title, '이에요.', '예요.'), due,
+    }));
+  }
+  // 가장 밀린 목표: 밀린 분량을 하루 권장 분량으로 나눈 '밀린 날 수'가 가장 큰 것
+  const daysBehind = (x) => -x.s.diff / Math.max(x.s.dailyPlan, 0.1);
+  const behind = activeItems.filter((x) => x.s.diff < 0).sort((a, b) => daysBehind(b) - daysBehind(a))[0];
+  if (behind) {
+    useUnitOf(behind.goal);
+    const amount = formatAmount(-behind.s.diff, behind.s.basis);
+    parts.push(urgent && behind.goal.id === urgent.goal.id
+      ? t('이 목표는 {amount} 밀려 있어요.', { amount })
+      : t('「{title}」{josa} {amount} 밀렸어요.', {
+        title: behind.goal.title, josa: currentLang === 'en' ? '' : josa(behind.goal.title, '은', '는'), amount,
+      }));
+  }
+  return parts.join(' ');
+}
+
 function renderDashboard(root) {
   const today = todayStr();
-  // 필독서·배정된 책으로 만든 목표는 위쪽 영역에 따로 보여준다
-  const myBooks = getMyLibraryBooks();
-  const showRequired = myBooks.length > 0;
-  const linkedIds = new Set(myBooks.map((b) => findGoalForBook(appData.goals, b.id)).filter(Boolean).map((g) => g.id));
-  const items = appData.goals.filter((g) => !linkedIds.has(g.id))
-    .map((goal) => ({ goal, s: getGoalSummary(goal, undefined, today) }));
+  const name = displayName();
+  const items = appData.goals.map((goal) => ({ goal, s: getGoalSummary(goal, undefined, today) }));
   const active = items.filter((x) => x.s.isActive)
     .sort((a, b) => diffDays(b.goal.dueDate, a.goal.dueDate));
   const finished = items.filter((x) => !x.s.isActive)
     .sort((a, b) => diffDays(a.goal.dueDate, b.goal.dueDate));
+  const todayItems = active.map((x) => todayItemOf(x.goal, x.s)).filter(Boolean);
+  const pendingCards = renderPendingCards();
 
+  const title = name ? t('{name} 님의 오늘분량', { name: escapeHtml(name) }) : t('오늘분량');
+  const dateLine = `<span class="dash-date">${escapeHtml(today)} (${weekdayLabel(today)})</span>`;
+
+  if (!appData.goals.length && !pendingCards) {
+    root.innerHTML = `
+      <div class="dash">
+        <div class="dash-head"><div class="dash-title">${dateLine}<h1>${title}</h1></div></div>
+        <section class="dash-empty">
+          <img src="${LP_ASSETS.hero}" alt="${t('책을 읽는 사람 손그림')}">
+          <h2>${name ? t('{name} 님, 첫 목표를 만들어 볼까요?', { name: escapeHtml(name) }) : t('첫 목표를 만들어 볼까요?')}</h2>
+          <p>${t('책, 강의, 성경 통독, 숙제의 전체 분량과 마감일을 정하면 쉬는 날을 빼고 날마다 오늘 할 분량을 알려 드려요.')}</p>
+          <a class="btn btn-dark btn-lg" href="#/new">${t('+ 새 목표 추가')}</a>
+        </section>
+      </div>`;
+    return;
+  }
+
+  const nDone = todayItems.filter((x) => x.done).length;
+  const allDone = todayItems.length > 0 && nDone === todayItems.length;
   root.innerHTML = `
-    <header class="page-header">
-      <div>
-        <h1>${t('오늘분량')}</h1>
-        <p class="muted">${escapeHtml(today)} (${weekdayLabel(today)})</p>
+    <div class="dash">
+      <div class="dash-head">
+        <div class="dash-title">
+          ${dateLine}
+          <h1>${title}</h1>
+          ${(() => { const g = dashboardGreeting(todayItems, active); return g ? `<p class="dash-greet">${escapeHtml(g)}</p>` : ''; })()}
+        </div>
+        <div class="dash-head-actions">
+          <span class="hand-note">${allDone ? t('잘했어요!') : t('오늘도 조금씩!')}</span>
+          <a class="btn btn-blue btn-lg" href="#/new">${t('+ 새 목표 추가')}</a>
+        </div>
       </div>
-      <div class="header-actions">
-        <a class="btn btn-primary" href="#/new">${t('+ 새 목표 추가')}</a>
+
+      <div class="dash-cols">
+        <section class="dash-today">
+          <div class="dash-today-head">
+            <h2>${t('오늘 할 분량')}</h2>
+            ${todayItems.length ? `<span class="serif-num">${t('{total}개 중 {done}개 완료', { total: todayItems.length, done: nDone })}</span>` : ''}
+          </div>
+          ${todayItems.length ? todayItems.map(renderTodayItem).join('')
+            : `<p class="dash-today-empty">${active.length ? t('오늘은 할 분량이 없어요.') : t('진행 중인 목표가 없습니다. <a href="#/new">새 목표를 추가</a>해 보세요.')}</p>`}
+        </section>
+
+        <aside class="dash-aside">
+          ${pendingCards}
+          <section class="closed-box">
+            <button type="button" class="closed-toggle" data-action="toggle-closed" aria-expanded="${dashState.closedOpen}">
+              <span>${t('끝난 목표 · 마감 지난 목표')} <span class="mono-count">${finished.length}</span></span>
+              <span class="closed-label">${dashState.closedOpen ? t('접기') : t('펼치기')}</span>
+            </button>
+            ${dashState.closedOpen ? (finished.length
+              ? `<div class="closed-list">${finished.map((x) => `
+                  <a class="closed-item" href="#/goal/${escapeHtml(x.goal.id)}">
+                    <span class="closed-title">${escapeHtml(x.goal.title)}</span>${renderStatusBadge(x.s)}
+                  </a>`).join('')}</div>`
+              : `<span class="muted small">${t('아직 없어요')}</span>`) : ''}
+          </section>
+          <div class="dash-illust"><img src="${LP_ASSETS.hero}" alt=""></div>
+        </aside>
       </div>
-    </header>
 
-    ${showRequired ? renderRequiredSection(today, myBooks) : ''}
-    ${renderGroupInbox()}
+      ${active.length ? `
+      <section class="dash-progress">
+        <h2>${t('목표별 진행')}</h2>
+        <div class="progress-grid">${active.map((x) => renderGoalCard(x.goal, x.s)).join('')}</div>
+      </section>` : ''}
+    </div>`;
 
-    <section>
-      <h2 class="section-title">${t('진행 중')} <span class="count">${active.length}</span></h2>
-      ${active.length
-        ? `<div class="card-grid">${active.map((x) => renderGoalCard(x.goal, x.s)).join('')}</div>`
-        : `<div class="empty">${t('진행 중인 목표가 없습니다. <a href="#/new">새 목표를 추가</a>해 보세요.')}</div>`}
-    </section>
+  root.querySelector('.dash').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    if (btn.dataset.action === 'toggle-closed') {
+      dashState.closedOpen = !dashState.closedOpen;
+      renderDashboard(root);
+      return;
+    }
+    if (btn.dataset.action === 'today-check') {
+      const goal = getGoal(btn.dataset.goalId);
+      if (!goal) return;
+      const s = getGoalSummary(goal);
+      const row = s.todayRow;
+      if (!row) return;
+      const done = s.done >= row.cumulative;
+      if (done && s.done > row.cumulative
+        && !confirm(t('오늘 분량보다 더 진행했어요. 진도를 오늘 분량 시작 전으로 되돌릴까요?'))) return;
+      applyRowCheck(goal, s.basis, row, !done);
+      commit();
+      const y = window.scrollY;
+      renderDashboard(root);
+      window.scrollTo(0, y);
+    }
+  });
+}
 
-    ${finished.length ? `
-    <section class="finished-section">
-      <h2 class="section-title">${t('완료 / 종료')} <span class="count">${finished.length}</span></h2>
-      <div class="card-grid">${finished.map((x) => renderGoalCard(x.goal, x.s)).join('')}</div>
-    </section>` : ''}
-  `;
+/** 오늘 할 분량 한 줄 */
+function renderTodayItem(x) {
+  const { goal, s, done } = x;
+  const groupName = goal.groupId ? groupNameOf(goal.groupId) : '';
+  return `
+    <div class="today-item ${done ? 'is-done' : ''}">
+      <button type="button" class="today-check-btn" data-action="today-check" data-goal-id="${escapeHtml(goal.id)}"
+        aria-pressed="${done}" aria-label="${done ? t('오늘 분량 완료 취소') : t('오늘 분량 완료')}">${done ? '✓' : ''}</button>
+      <div class="today-body">
+        <div class="today-meta">
+          ${renderGoalTypeTag(goal)}
+          ${groupName ? `<span>${escapeHtml(groupName)}</span>` : ''}
+          <a class="today-title" href="#/goal/${escapeHtml(goal.id)}">${escapeHtml(goal.title)}</a>
+          ${isGoalSourceChanged(goal) ? `<span class="pill-outline-blue">${t('내용 변경됨')}</span>` : ''}
+        </div>
+        <div class="today-range"><span class="today-range-main">${escapeHtml(x.range)}</span><span class="serif-amt">${escapeHtml(x.amount)}</span></div>
+        ${x.hint ? `<span class="today-hint">${escapeHtml(x.hint)}</span>` : ''}
+      </div>
+      <div class="today-side">
+        ${done ? `<span class="today-done">✓ ${t('완료')}</span><span class="hand-note hand-sm">${t('잘했어요!')}</span>` : ''}
+        <span class="mono-dday ${s.dday <= 3 ? 'is-urgent' : ''}">${formatDday(s.dday)}</span>
+      </div>
+    </div>`;
+}
+
+/** 오른쪽 어두운 카드: 계획을 아직 안 세운 그룹 항목 · 배정된 책 */
+function renderPendingCards() {
+  const groupCards = groupItems.filter((i) => {
+    const g = myGroups.find((x) => x.id === i.groupId);
+    return g && !g.isLeader && !findGoalForGroupItem(appData.goals, i.id);
+  }).map((item) => renderPendingCard({
+    label: t('그룹에서 받은 항목 · 계획 전'),
+    tag: renderSharedTag(item.type),
+    group: groupNameOf(item.groupId),
+    title: item.title,
+    sub: `${typeLabel(item.type)} · ${describeShareContent(item)}`,
+    href: `#/new/group/${item.id}`,
+  }));
+  const bookCards = getMyLibraryBooks().filter((b) => !findGoalForBook(appData.goals, b.id)).map((book) => renderPendingCard({
+    label: t('배정된 책 · 계획 전'),
+    tag: renderBookTag(bookTagKind(book)),
+    group: book.author || '',
+    title: book.title,
+    sub: t('{pages}페이지 · {n}개 챕터', { pages: book.lastPage - book.chapters[0].startPage + 1, n: book.chapters.length }),
+    href: `#/new/book/${book.id}`,
+  }));
+  return [...groupCards, ...bookCards].join('');
+}
+
+function renderPendingCard({ label, tag, group, title, sub, href }) {
+  return `
+    <section class="pending-card">
+      <span class="mono-label">${label}</span>
+      <div class="pending-meta">${tag}${group ? `<span class="pending-group">${escapeHtml(group)}</span>` : ''}<span class="pending-noplan">${t('계획 없음')}</span></div>
+      <div class="pending-title"><b>${escapeHtml(title)}</b><span class="serif-sub">${escapeHtml(sub)}</span></div>
+      <a class="btn btn-white" href="${escapeHtml(href)}">${t('계획 세우기')}</a>
+    </section>`;
 }
 
 
@@ -2627,76 +2844,42 @@ function getMyLibraryBooks() {
   return requiredBooks.filter((b) => bookTagKind(b) !== null);
 }
 
-function renderRequiredSection(today, books) {
-  const cards = books.map((book) => {
-    const goal = findGoalForBook(appData.goals, book.id);
-    if (goal) return renderGoalCard(goal, getGoalSummary(goal, undefined, today));
-    const pages = book.lastPage - book.chapters[0].startPage + 1;
-    return `
-      <div class="goal-card required-empty">
-        <div class="card-top">
-          ${renderBookTag(bookTagKind(book))}
-          <span class="badge badge-waiting">${t('계획 없음')}</span>
-        </div>
-        <div class="card-book">
-          ${renderCoverThumb(book.coverUrl)}
-          <div>
-            <h3 class="card-title">${escapeHtml(book.title)}</h3>
-            ${book.author ? `<p class="card-author">${escapeHtml(book.author)}</p>` : ''}
-            <p class="card-meta">${t('{pages}페이지 · {n}개 챕터', { pages, n: book.chapters.length })}</p>
-          </div>
-        </div>
-        <a class="btn btn-primary" href="#/new/book/${escapeHtml(book.id)}">${t('계획 세우기')}</a>
-      </div>`;
-  }).join('');
-  return `
-    <section class="required-section">
-      <h2 class="section-title">${t('배정된 책')} <span class="count">${books.length}</span></h2>
-      <div class="card-grid">${cards}</div>
-    </section>`;
-}
-
 /** 표지 썸네일 (size: 'sm' | 'md' | 'lg') */
 function renderCoverThumb(url, size = 'md') {
   if (!url) return '';
   return `<img class="cover cover-${size}" src="${escapeHtml(url)}" alt="" loading="lazy">`;
 }
 
-/** 목표 카드. 도서관 책과 연결돼 있으면 표지 · 필독서/배정 표시 · 변경 알림 */
+/** 목표별 진행 카드: 종류 · 상태 · 표지 · 제목 · 마감 · 진행 막대 */
 function renderGoalCard(goal, s) {
   useUnitOf(goal);
-  const requiredBook = libraryBookForGoal(goal);
-  const tagKind = bookTagKind(requiredBook);
-  const groupItem = groupItemForGoal(goal);
-  const changed = (requiredBook && isRequiredBookChanged(goal, requiredBook)) || (groupItem && isGroupItemChanged(goal, groupItem));
+  const groupName = goal.groupId ? groupNameOf(goal.groupId) : '';
+  const author = getBookAuthor(goal);
+  const cover = getCoverUrl(goal);
   return `
     <a class="goal-card ${s.isActive ? '' : 'is-finished'}" href="#/goal/${escapeHtml(goal.id)}">
       <div class="card-top">
         <span class="card-tags">
-          ${tagKind ? renderBookTag(tagKind) : goal.groupId ? renderSharedTag(goal.type) : `<span class="type-tag type-${goal.type}">${typeLabel(goal.type)}</span>`}
-          ${goal.groupId && groupNameOf(goal.groupId) ? `<span class="type-tag type-group">${escapeHtml(groupNameOf(goal.groupId))}</span>` : ''}
-          ${changed ? `<span class="badge badge-ended">${t('내용 변경됨')}</span>` : ''}
+          ${renderGoalTypeTag(goal)}
+          ${isGoalSourceChanged(goal) ? `<span class="pill-outline-blue">${t('내용 변경됨')}</span>` : ''}
         </span>
         ${renderStatusBadge(s)}
       </div>
       <div class="card-book">
-        ${renderCoverThumb(requiredBook ? requiredBook.coverUrl : null)}
-        <div>
+        ${cover ? renderCoverThumb(cover) : ''}
+        <div class="card-book-text">
+          ${groupName ? `<span class="card-group">${escapeHtml(groupName)}</span>` : ''}
           <h3 class="card-title">${escapeHtml(goal.title)}</h3>
-          ${getBookAuthor(goal) ? `<p class="card-author">${escapeHtml(getBookAuthor(goal))}</p>` : ''}
+          ${author ? `<p class="card-author">${escapeHtml(author)}</p>` : ''}
         </div>
       </div>
-      <div class="card-meta">
-        <span>${t('마감 {date}', { date: escapeHtml(goal.dueDate) })}</span>
-        <span class="dday ${s.isActive && s.dday <= 3 ? 'is-urgent' : ''}">${formatDday(s.dday)}</span>
-      </div>
       <div class="progress">
+        <div class="card-meta">
+          <span>${t('마감 {date}', { date: escapeHtml(goal.dueDate) })}</span>
+          <span class="dday ${s.isActive && s.dday <= 3 ? 'is-urgent' : ''}">${formatDday(s.dday)}</span>
+        </div>
         <div class="progress-bar"><div class="progress-fill" style="width:${s.percent}%"></div></div>
-        <span class="progress-text">${s.percent}% · ${formatFraction(s.done, s.total, s.basis)}</span>
-      </div>
-      <div class="card-today">
-        <span class="label">${t('오늘 할 분량')}</span>
-        ${renderTodayAmount(goal, s)}
+        <div class="progress-text"><span class="serif-pct">${s.percent}%</span><span>${formatFraction(s.done, s.total, s.basis)}</span></div>
       </div>
     </a>
   `;
@@ -4099,7 +4282,7 @@ function submitGoalForm(goal, requiredBookId = null, groupItemId = null) {
  *  preview: 적용 전 새 계획 미리보기 { kind: 'replan' | 'due' | 'edit', dueDate?, input? }
  *  draft: 미리보기에서 "수정으로 돌아가기" 할 때 폼에 다시 채울 입력값
  */
-const detailState = { goalId: null, basis: null, view: 'list', month: null, preview: null, draft: null };
+const detailState = { goalId: null, basis: null, view: 'list', month: null, preview: null, draft: null, recMode: 'page' };
 
 function resetDetailState(goal) {
   detailState.goalId = goal.id;
@@ -4118,29 +4301,34 @@ function renderGoalDetail(root, goal) {
   if (detailState.goalId !== goal.id) resetDetailState(goal);
   const basis = detailState.basis;
   const s = getGoalSummary(goal);
+  const cover = getCoverUrl(goal);
+  const author = getBookAuthor(goal);
+  const groupName = goal.groupId ? groupNameOf(goal.groupId) : '';
+  const rest = getRestWeekdays(goal);
+  const cheer = ddayCheer(s);
 
   root.innerHTML = `
-    <div id="detail">
-      <header class="page-header">
+    <div id="detail" class="detail">
+      <a class="back-link" href="#/">← ${t('대시보드')}</a>
+      <header class="detail-head">
         <div class="detail-title">
-          ${renderCoverThumb(getCoverUrl(goal), 'lg')}
-          <div>
-          <a class="back-link" href="#/">← ${t('대시보드')}</a>
-          <h1>${escapeHtml(goal.title)}</h1>
-          ${getBookAuthor(goal) ? `<p class="detail-author">${t('{author} 지음', { author: escapeHtml(getBookAuthor(goal)) })}</p>` : ''}
-          <p class="muted">
-            ${bookTagKind(libraryBookForGoal(goal))
-              ? renderBookTag(bookTagKind(libraryBookForGoal(goal)))
-              : `<span class="type-tag type-${goal.type}">${typeLabel(goal.type)}</span>`}
-            ${goal.startDate} ~ ${goal.dueDate} · ${formatDday(s.dday)}
-            ${getRestWeekdays(goal).length ? ` · ${t('쉬는 요일 {days}', { days: weekdayListLabel(getRestWeekdays(goal)) })}` : ''}
-          </p>
-          ${renderSubmissionStatus(goal)}
+          ${cover ? renderCoverThumb(cover, 'lg') : ''}
+          <div class="detail-title-text">
+            <div class="detail-tags">${renderGoalTypeTag(goal)}${groupName ? `<span>${escapeHtml(groupName)}</span>` : ''}</div>
+            <h1>${escapeHtml(goal.title)}</h1>
+            <div class="detail-meta">
+              ${author ? `<span>${escapeHtml(author)}</span>` : ''}
+              <span class="mono">${goal.startDate} ~ ${goal.dueDate}</span>
+              <b class="mono">${formatDday(s.dday)}</b>
+              ${rest.length ? `<span>${t('쉬는 요일 · {days}', { days: weekdayListLabel(rest) })}</span>` : ''}
+            </div>
+            ${renderSubmissionStatus(goal)}
           </div>
         </div>
         <div class="header-actions">
-          <a class="btn" href="#/edit/${escapeHtml(goal.id)}">${t('수정')}</a>
-          <button type="button" class="btn btn-danger" data-action="delete">${t('삭제')}</button>
+          ${cheer ? `<span class="hand-note">${cheer}</span><span class="detail-sticker"><img src="${LP_ASSETS.hero}" alt=""></span>` : ''}
+          <a class="btn btn-outline" href="#/edit/${escapeHtml(goal.id)}">${t('수정')}</a>
+          <button type="button" class="btn btn-outline-muted" data-action="delete">${t('삭제')}</button>
         </div>
       </header>
 
@@ -4174,15 +4362,17 @@ function renderPlanPanel(goal, basis) {
   return `
     <section class="panel plan-panel">
       <div class="plan-head">
-        <h2 class="section-title">${t('계획표')}</h2>
-        <div class="plan-controls">
-          ${canAdjust ? `<button type="button" class="btn btn-small" data-action="adjust-start" title="${t('날짜별 분량을 직접 정합니다')}">${t('분량 직접 조정')}</button>` : ''}
-          <button type="button" class="btn btn-small" data-action="export-image">${t('이미지로 내보내기')}</button>
+        <div class="plan-head-left">
+          <h2 class="section-title">${t('계획표')}</h2>
           <div class="tabs" role="tablist" aria-label="${t('보기 방식')}">
             ${[['list', '목록'], ['calendar', '달력']].map(([v, label]) => `
               <button type="button" role="tab" class="tab ${v === detailState.view ? 'is-active' : ''}" data-view="${v}">${t(label)}</button>`).join('')}
           </div>
           ${renderBasisTabs(goal, basis)}
+        </div>
+        <div class="plan-controls">
+          ${canAdjust ? `<button type="button" class="btn btn-small btn-outline" data-action="adjust-start" title="${t('날짜별 분량을 직접 정합니다')}">${t('분량 직접 조정')}</button>` : ''}
+          <button type="button" class="btn btn-small btn-outline" data-action="export-image">${t('이미지로 내보내기')}</button>
         </div>
       </div>
       ${detailState.view === 'calendar' ? renderPlanCalendar(goal, basis) : renderPlanTable(goal, basis)}
@@ -4255,6 +4445,17 @@ function renderSubmissionStatus(goal) {
   return `<p class="muted small submission-status">${text}</p>`;
 }
 
+/** 오늘 할 일이 없을 때의 한 줄 (완료 · 마감 지남 · 시작 전 · 쉬는 날) */
+function todayStatusText(goal, s) {
+  useUnitOf(goal);
+  if (s.isComplete) return t('모두 완료했습니다');
+  if (s.isOverdue) return t('마감일이 지났습니다');
+  if (s.notStarted) return t('{date} 시작', { date: formatShortDate(goal.startDate) });
+  const row = s.todayRow;
+  if (row && row.isRestDay) return t('오늘은 {rest}', { rest: restText(goal, row.date) });
+  return t('휴식(분량 없음)');
+}
+
 function renderSummaryPanel(goal, s) {
   useUnitOf(goal);
   const { min, max } = getProgressBounds(goal);
@@ -4262,45 +4463,67 @@ function renderSummaryPanel(goal, s) {
   const cur = goal.progress.current;
   const replanBlocker = getReplanBlocker(goal);
   const previewing = !!detailState.preview;
+  const today = todayItemOf(goal, s);
+  const byChapter = isBook && detailState.recMode === 'chapter';
+  const recHint = goal.type === 'lecture' ? t('어디까지 들었나요?') : goal.type === 'custom' ? t('어디까지 했나요?') : t('어디까지 읽었나요?');
 
   return `
-    <section class="panel summary-panel">
-      ${renderCompareBlock(goal, s)}
+    <div class="detail-cols">
+      <section class="panel summary-panel">
+        ${renderCompareBlock(goal, s)}
+      </section>
 
-      <div class="summary-info">
-        <div><span class="info-label">${t('현재 위치')}</span>${escapeHtml(describePosition(goal))}</div>
-        <div class="summary-today"><span class="info-label">${t('오늘 할 일')}</span>${renderTodayAmount(goal, s)}</div>
-      </div>
+      <aside class="detail-aside">
+        <section class="today-card">
+          <span class="mono-label">${t('오늘 할 일')}</span>
+          ${today ? `
+            <div class="today-card-range"><b>${escapeHtml(today.range)}</b><span class="serif-amt">${escapeHtml(today.amount)}</span></div>
+            ${today.hint ? `<span class="today-card-hint">${escapeHtml(today.hint)}</span>` : ''}
+            ${today.done ? `<span class="today-card-done">✓ ${t('오늘 분량 완료')}</span>` : ''}`
+          : `<div class="today-card-range"><b class="is-text">${escapeHtml(todayStatusText(goal, s))}</b></div>`}
+          <div class="today-card-foot"><span>${t('현재 위치')} · <b>${escapeHtml(describePosition(goal))}</b></span></div>
+        </section>
 
-      <div class="summary-actions">
-        <form class="progress-form ${isBook ? 'is-two-rows' : ''}" data-action="progress" novalidate>
-          ${goal.type === 'bible' ? renderBibleProgressInputs(goal) : `
-          <label for="progress-input" class="field-label">${isBook ? t('마지막으로 읽은 페이지') : goal.type === 'custom' ? t('완료한 {unit} 수', { unit: getUnitLabel('custom') }) : t('완료한 강의 수')}</label>
-          <div class="progress-control">
-            <input id="progress-input" type="number" class="input input-num" min="${min}" max="${max}" value="${cur}">
-            <span class="muted">${isBook ? `(p.${min}~${max})` : goal.type === 'custom' ? `(0~${max})` : t('(0~{max}강)', { max })}</span>
+        <section class="record-card">
+          <div class="record-head">
+            ${isBook ? `
+            <div class="tabs" role="tablist">
+              <button type="button" class="tab ${byChapter ? '' : 'is-active'}" data-rec-mode="page">${t('마지막으로 읽은 페이지')}</button>
+              <button type="button" class="tab ${byChapter ? 'is-active' : ''}" data-rec-mode="chapter">${t('완료한 챕터')}</button>
+            </div>` : `<span class="record-label">${goal.type === 'bible' ? t('마지막으로 읽은 곳') : goal.type === 'custom' ? t('완료한 {unit} 수', { unit: getUnitLabel('custom') }) : t('완료한 강의 수')}</span>`}
+            <span class="hand-note hand-gray">${recHint}</span>
           </div>
-          ${isBook ? renderChapterProgressSelect(goal) : ''}`}
-          <button type="submit" class="btn btn-primary progress-submit">${t('진도 기록')}</button>
+          <form class="progress-form ${byChapter ? 'by-chapter' : ''}" data-action="progress" novalidate>
+            ${goal.type === 'bible' ? renderBibleProgressInputs(goal) : `
+            <label class="record-input record-page" for="progress-input">
+              ${isBook ? '<span class="muted">p.</span>' : ''}
+              <input id="progress-input" type="number" min="${min}" max="${max}" value="${cur}"
+                aria-label="${isBook ? t('마지막으로 읽은 페이지') : t('완료한 수')}">
+              <span class="muted small">${isBook ? `${min}~${max}` : goal.type === 'custom' ? `0~${max}` : t('(0~{max}강)', { max })}</span>
+            </label>
+            ${isBook ? renderChapterProgressSelect(goal) : ''}`}
+            <button type="submit" class="btn btn-dark progress-submit">${t('진도 기록')}</button>
+          </form>
           <span class="progress-error" hidden></span>
-        </form>
+        </section>
+
         <div class="plan-actions">
-          <button type="button" class="btn" data-action="replan" ${replanBlocker || previewing ? 'disabled' : ''}
-            title="${escapeHtml(replanBlocker || t('오늘부터 마감일까지 남은 분량을 다시 균등하게 나눕니다'))}">${t('재분배')}</button>
-          <button type="button" class="btn" data-action="due" ${previewing ? 'disabled' : ''}>${t('마감일 변경')}</button>
+          <button type="button" class="action-card is-main" data-action="replan" ${replanBlocker || previewing ? 'disabled' : ''}
+            title="${escapeHtml(replanBlocker || t('오늘부터 마감일까지 남은 분량을 다시 균등하게 나눕니다'))}">
+            <b>${t('재분배')}</b><span>${t('남은 분량을 오늘부터 다시 나누기')}</span>
+          </button>
+          <button type="button" class="action-card" data-action="due" ${previewing ? 'disabled' : ''}><b>${t('마감일 변경')}</b></button>
         </div>
-      </div>
-    </section>
+      </aside>
+    </div>
   `;
 }
 
-/** 책: "또는 완료한 챕터" 선택 — 고르면 그 챕터의 끝 페이지가 페이지 칸에 채워진다 */
 function renderChapterProgressSelect(goal) {
   useUnitOf(goal);
   const doneCount = completedChapterCount(goal.book, goal.progress.current);
   return `
-    <label for="progress-chapter-select" class="field-label"><span class="muted progress-or">${t('또는')}</span> ${t('완료한 챕터')}</label>
-    <select id="progress-chapter-select" class="input chapter-select">
+    <select id="progress-chapter-select" class="record-input record-chapter" aria-label="${t('완료한 챕터')}">
       <option value="0" ${doneCount === 0 ? 'selected' : ''}>${t('없음')}</option>
       ${getChapterRanges(goal.book).map((c, i) => `
         <option value="${i + 1}" ${doneCount === i + 1 ? 'selected' : ''}>${escapeHtml(c.name)} (~p.${c.endPage})</option>`).join('')}
@@ -4313,12 +4536,11 @@ function renderBibleProgressInputs(goal) {
   const cur = goal.progress.current;
   const pos = cur > 0 ? biblePosition(goal.bible, cur) : null;
   return `
-    <label for="progress-book" class="field-label">${t('마지막으로 읽은 곳')}</label>
-    <select id="progress-book" class="input bible-select">
+    <select id="progress-book" class="record-input bible-select" aria-label="${t('마지막으로 읽은 곳')}">
       <option value="-1" ${pos ? '' : 'selected'}>${t('아직 안 읽음')}</option>
       ${goal.bible.books.map((b, i) => `<option value="${i}" ${pos && pos.index === i ? 'selected' : ''}>${bibleBookName(b.name)}</option>`).join('')}
     </select>
-    <input id="progress-chapter" type="number" class="input input-num" min="1" value="${pos ? pos.chapter : ''}" aria-label="${t('장')}">
+    <input id="progress-chapter" type="number" class="record-input record-num" min="1" value="${pos ? pos.chapter : ''}" aria-label="${t('장')}">
     ${t('장까지') ? `<span class="muted">${t('장까지')}</span>` : ''}`;
 }
 
@@ -4353,12 +4575,14 @@ function describePosition(goal) {
   return cur === 0 ? t('아직 듣지 않음') : t('{n}강까지 완료', { n: cur });
 }
 
-/** 계획 대비 현황: 숫자 상자 4개 + 진행 막대 + 안내 문구 (내 화면·관리자 화면 공용) */
+/** 계획 대비 현황: 숫자 4개 + 진행 막대(권장 위치 · 실제 위치 표시) + 안내 문구 (내 화면·관리자 화면 공용) */
 function renderCompareBlock(goal, s) {
   useUnitOf(goal);
   const targetPercent = s.total > 0 ? Math.min(100, (s.target / s.total) * 100) : 0;
   const donePercent = s.total > 0 ? Math.min(100, (s.done / s.total) * 100) : 0;
   const msg = getCompareMessage(goal, s);
+  // 막대 위 글자가 카드 밖으로 나가지 않게 가장자리에서는 안쪽으로 붙인다
+  const labelPos = (pct) => (pct < 12 ? `left:0;transform:none` : pct > 88 ? `left:auto;right:0;transform:none` : `left:${pct}%`);
   return `
       <div class="summary-top">
         <h2 class="section-title">${t('계획 대비 현황')}</h2>
@@ -4366,20 +4590,21 @@ function renderCompareBlock(goal, s) {
       </div>
 
       <div class="stat-boxes">
-        <div class="stat-box"><strong>${formatAmount(s.dailyPlan, s.basis)}</strong><span>${t('하루 권장')}</span></div>
-        <div class="stat-box"><strong>${formatPosition(goal, s.basis, s.target)}</strong><span>${t('오늘까지 권장')}</span></div>
-        <div class="stat-box"><strong>${formatPosition(goal, s.basis, s.done)}</strong><span>${t('실제 완료')}</span></div>
-        <div class="stat-box"><strong>${formatPosition(goal, s.basis, s.total)}</strong><span>${totalLabel(s.basis)}</span></div>
+        <div class="stat-box"><span>${t('하루 권장')}</span><strong>${formatAmount(s.dailyPlan, s.basis)}</strong></div>
+        <div class="stat-box"><span>${t('오늘까지 권장')}</span><strong>${formatPosition(goal, s.basis, s.target)}</strong></div>
+        <div class="stat-box is-actual"><span>${t('실제 완료')}</span><strong>${formatPosition(goal, s.basis, s.done)}</strong></div>
+        <div class="stat-box"><span>${totalLabel(s.basis)}</span><strong>${formatPosition(goal, s.basis, s.total)}</strong></div>
       </div>
 
-      <div class="compare-bar" role="img"
+      <div class="compare-wrap" role="img"
         aria-label="${t('실제 진도 {done}%, 오늘까지 권장 {target}%', { done: s.percent, target: Math.round(targetPercent) })}">
-        <div class="compare-fill" style="width:${donePercent}%"></div>
-        <div class="compare-marker" style="left:${targetPercent}%"></div>
-      </div>
-      <div class="compare-legend">
-        <span><i class="legend-fill"></i>${t('초록 = 실제 진도 {n}%', { n: s.percent })}</span>
-        <span><i class="legend-marker"></i>${t('검정 선 = 오늘까지 권장 {n}%', { n: Math.floor(targetPercent) })}</span>
+        <span class="compare-label is-target" style="${labelPos(targetPercent)}">${t('오늘까지 권장 {pos}', { pos: formatPosition(goal, s.basis, s.target) })}</span>
+        <div class="compare-bar">
+          <div class="compare-fill" style="width:${donePercent}%"></div>
+          <div class="compare-marker" style="left:${targetPercent}%"></div>
+        </div>
+        <span class="compare-label is-actual" style="${labelPos(donePercent)}">${t('실제 {pos}', { pos: formatPosition(goal, s.basis, s.done) })}</span>
+        ${donePercent < 70 ? `<span class="compare-end">${formatPosition(goal, s.basis, s.total)}</span>` : ''}
       </div>
 
       <div class="compare-message tone-${msg.tone}">${msg.html}</div>`;
@@ -4723,7 +4948,7 @@ function renderPlanTable(goal, basis, readOnly = false) {
           ${row.amount === 0 ? '<span class="muted">-</span>'
             : readOnly ? (checked ? '<span class="check-mark">✓</span>' : '')
             : `<input type="checkbox" class="row-check" data-date="${row.date}" ${checked ? 'checked' : ''}
-                aria-label="${t('{date} 완료', { date: row.date })}">`}
+                aria-label="${t('{date} 완료', { date: row.date })}">${dayDiff < 0 && !checked ? `<span class="miss-tag">${t('못 함')}</span>` : ''}`}
         </td>
       </tr>`;
   }).join('');
@@ -4868,6 +5093,15 @@ function bindDetailEvents(container, goal) {
   container.addEventListener('click', (e) => {
     if (e.target.closest('[data-action="export-image"]')) {
       openExportDialog(goal);
+      return;
+    }
+    const recBtn = e.target.closest('[data-rec-mode]');
+    if (recBtn) {
+      // 진도 입력 방식 전환: 두 칸은 서로 맞춰져 있으므로 보이는 칸만 바꾼다
+      detailState.recMode = recBtn.dataset.recMode;
+      const form = container.querySelector('.progress-form');
+      form.classList.toggle('by-chapter', detailState.recMode === 'chapter');
+      recBtn.parentElement.querySelectorAll('[data-rec-mode]').forEach((b) => b.classList.toggle('is-active', b === recBtn));
       return;
     }
     const viewBtn = e.target.closest('[data-view]');
@@ -5029,7 +5263,7 @@ function bindDetailEvents(container, goal) {
   // 방식 1: 직접 입력
   container.querySelector('[data-action="progress"]').addEventListener('submit', (e) => {
     e.preventDefault();
-    const errorBox = e.target.querySelector('.progress-error');
+    const errorBox = e.target.closest('.record-card').querySelector('.progress-error');
     if (goal.type === 'bible') {
       const units = readBibleProgressInput(goal, e.target);
       if (typeof units === 'string') {
@@ -7446,34 +7680,6 @@ function bindGroupEvents(container, group) {
 /* ----- 대시보드 · 목표 화면 연결 ----- */
 
 /** 대시보드: 아직 계획을 세우지 않은 그룹 공유 목표 */
-function renderGroupInbox() {
-  const pending = groupItems.filter((i) => {
-    const g = myGroups.find((x) => x.id === i.groupId);
-    return g && !g.isLeader && !findGoalForGroupItem(appData.goals, i.id);
-  });
-  if (!pending.length) return '';
-  const cards = pending.map((item) => `
-    <div class="goal-card required-empty">
-      <div class="card-top">
-        <span class="card-tags">${renderSharedTag(item.type)} <span class="type-tag type-group">${escapeHtml(groupNameOf(item.groupId))}</span></span>
-        <span class="badge badge-waiting">${t('계획 없음')}</span>
-      </div>
-      <div class="card-book">
-        ${renderCoverThumb(item.coverUrl)}
-        <div>
-          <h3 class="card-title">${escapeHtml(item.title)}</h3>
-          <p class="card-meta">${typeLabel(item.type)} · ${escapeHtml(describeShareContent(item))}</p>
-        </div>
-      </div>
-      <a class="btn btn-primary" href="#/new/group/${escapeHtml(item.id)}">${t('계획 세우기')}</a>
-    </div>`).join('');
-  return `
-    <section class="required-section">
-      <h2 class="section-title">${t('그룹 필독서 · 필수 시청')} <span class="count">${pending.length}</span></h2>
-      <div class="card-grid">${cards}</div>
-    </section>`;
-}
-
 /** 상세 화면: 리더가 공유 내용을 바꿨으면 적용 안내 */
 function renderGroupItemNotice(goal) {
   const item = groupItemForGoal(goal);
@@ -8199,6 +8405,45 @@ const EN = {
   '내 목표에서 고르기': 'Choose from my goals',
   '목표 이름으로 찾기': 'Search by goal name',
   '찾는 목표가 없습니다.': 'No matching goal.',
+  // 새 디자인 (대시보드 · 목표 상세)
+  '{name} 님의 오늘분량': (p) => `Today’s dose for ${p.name}`,
+  '{name} 님, 첫 목표를 만들어 볼까요?': (p) => `${p.name}, ready to set your first goal?`,
+  '첫 목표를 만들어 볼까요?': 'Ready to set your first goal?',
+  '책, 강의, 성경 통독, 숙제의 전체 분량과 마감일을 정하면 쉬는 날을 빼고 날마다 오늘 할 분량을 알려 드려요.': 'Set the total amount and a deadline for a book, course, Bible reading or homework. We skip your days off and show what to do each day.',
+  '책을 읽는 사람 손그림': 'Sketch of a person reading',
+  '오늘도 조금씩!': 'A little every day!',
+  '잘했어요!': 'Nice!',
+  '오늘이면 끝!': 'Last day!',
+  '내일이면 끝!': 'One day to go!',
+  '일주일이면 끝!': 'Less than a week!',
+  '오늘 분량을 모두 끝냈어요!': 'You finished everything for today!',
+  '오늘이 마감이에요.': 'due today.',
+  '내일이 마감이에요.': 'due tomorrow.',
+  '마감까지 {n}일 남았어요.': (p) => `${p.n} days left.`,
+  '가장 급한 건 「{title}」{josa} {due}': (p) => `Most urgent: “${p.title}”, ${p.due}`,
+  '이 목표는 {amount} 밀려 있어요.': (p) => `It’s ${p.amount} behind.`,
+  '「{title}」{josa} {amount} 밀렸어요.': (p) => `“${p.title}” is ${p.amount} behind.`,
+  '{total}개 중 {done}개 완료': (p) => `${p.done} of ${p.total} done`,
+  '오늘은 할 분량이 없어요.': 'Nothing to do today.',
+  '끝난 목표 · 마감 지난 목표': 'Finished · past deadline',
+  '접기': 'Hide',
+  '펼치기': 'Show',
+  '아직 없어요': 'Nothing here yet',
+  '목표별 진행': 'Progress by goal',
+  '오늘 분량보다 더 진행했어요. 진도를 오늘 분량 시작 전으로 되돌릴까요?': 'You’re past today’s dose. Reset your progress to where today started?',
+  '오늘 분량 완료 취소': 'Undo today’s dose',
+  '오늘 분량 완료': 'Today’s dose done',
+  '그룹에서 받은 항목 · 계획 전': 'From your groups · not planned',
+  '배정된 책 · 계획 전': 'Assigned book · not planned',
+  '쉬는 요일 · {days}': (p) => `Days off · ${p.days}`,
+  '어디까지 읽었나요?': 'How far did you get?',
+  '어디까지 들었나요?': 'How far did you get?',
+  '어디까지 했나요?': 'How far did you get?',
+  '완료한 수': 'Completed',
+  '남은 분량을 오늘부터 다시 나누기': 'Spread what’s left from today',
+  '오늘까지 권장 {pos}': (p) => `Target by today ${p.pos}`,
+  '실제 {pos}': (p) => `Actual ${p.pos}`,
+  '못 함': 'Missed',
 };
 
 /* =========================================================================

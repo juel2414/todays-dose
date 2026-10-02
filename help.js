@@ -131,10 +131,11 @@ const GUIDE = [
     shots: [{
       img: 'today',
       steps: [
-        { ko: '<b>계획대로</b> / <b>○페이지 밀림</b>(빨강) / <b>○ 앞섬</b>(초록)으로 지금 상태를 알려 줘요.', en: 'Your status: <b>On track</b> / <b>… behind</b> (red) / <b>… ahead</b> (green).' },
-        { ko: '<b>오늘 할 분량</b>이에요. 다 하면 <b>✓ 완료</b>가 붙어요. 카드를 누르면 자세한 화면으로 가요.', en: '<b>Today’s amount</b>; shows <b>✓ Done</b> when finished. Click the card for details.' },
+        { ko: '오늘 분량을 다 했으면 <b>동그라미</b>를 눌러요. 그날 분량까지 한 번에 기록되고, 다시 누르면 취소돼요.', en: 'Done with today’s dose? Click the <b>circle</b>. It records progress up to today’s amount; click again to undo.' },
+        { ko: '<b>오늘 할 분량</b>이에요. 목표 이름을 누르면 자세한 화면으로 가요.', en: '<b>Today’s amount</b>. Click the goal name for details.' },
       ],
     }],
+    tip: { ko: '아래 <b>목표별 진행</b>에서 목표마다 <b>계획대로</b> / <b>○페이지 밀림</b> / <b>○ 앞섬</b>과 진행률을 볼 수 있어요.', en: 'Under <b>Progress by goal</b> you can see each goal’s status (<b>On track</b> / <b>… behind</b> / <b>… ahead</b>) and progress.' },
   },
   {
     id: 'record', part: 'daily',
@@ -143,9 +144,9 @@ const GUIDE = [
     shots: [{
       img: 'record',
       steps: [
-        { ko: '<b>마지막으로 읽은 페이지</b>를 적어요. 아래 <b>완료한 챕터</b>를 골라도 돼요.', en: 'Enter the <b>Last page read</b>, or choose the <b>last chapter finished</b>.' },
+        { ko: '<b>마지막으로 읽은 페이지</b>를 적어요. <b>완료한 챕터</b> 탭으로 바꿔 챕터를 골라도 돼요.', en: 'Enter the <b>Last page read</b>, or switch to <b>Chapter finished</b> and pick a chapter.' },
         { ko: '<b>진도 기록</b>을 누르면 저장돼요.', en: 'Click <b>Log progress</b>.' },
-        { ko: '또는 <b>계획표</b>에서 오늘 줄의 <b>체크박스</b>를 누르면 그날 분량까지 한 번에 기록돼요.', en: 'Or tick today’s <b>checkbox</b> in the <b>Plan</b>.' },
+        { ko: '또는 <b>계획표</b>에서 오늘 줄의 <b>동그라미</b>를 누르면 그날 분량까지 한 번에 기록돼요.', en: 'Or click today’s <b>circle</b> in the <b>Schedule</b>.' },
       ],
     }],
     tip: { ko: '강의·기타는 완료한 개수를, 성경 통독은 어디까지 읽었는지(권·장)를 골라요.', en: 'For lectures/other enter how many are done; for Bible reading pick the book and chapter.' },
@@ -213,7 +214,7 @@ const GUIDE = [
   {
     id: 'required', part: 'member',
     title: { ko: '필독서·필수 시청 계획 세우기', en: 'Plan required books and lectures' },
-    intro: { ko: '첫 화면 위쪽 <b>그룹 필독서 · 필수 시청</b>에서도 바로 계획할 수 있어요.', en: 'You can also start from <b>Required in your groups</b> at the top of the dashboard.' },
+    intro: { ko: '첫 화면 오른쪽 <b>그룹에서 받은 항목</b> 카드에서도 바로 계획할 수 있어요.', en: 'You can also start from the <b>From your groups</b> card on the right of the dashboard.' },
     shots: [
       {
         img: 'inbox',
