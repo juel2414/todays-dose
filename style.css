@@ -1985,3 +1985,22 @@ a.plan-row:hover { background: var(--pill); }
 .admin .member-toolbar .muted { margin-right: 0; }
 .check-mark { color: var(--text); font-weight: 700; }
 tr.is-today .check-mark { color: #fff; }
+
+/* ===== 이미지 내보내기 창 (Claude Design) ===== */
+#export-dialog .modal-card { border: 0; border-radius: 26px; padding: 26px 28px 22px; box-shadow: 0 30px 80px -30px rgba(0, 0, 0, .35); display: flex; flex-direction: column; gap: 18px; }
+#export-dialog .modal-head { margin: 0; }
+#export-dialog .modal-head .section-title { font-size: 24px; letter-spacing: -0.04em; margin: 0; }
+.modal-x { cursor: pointer; border: 0; width: 40px; height: 40px; border-radius: 50%; background: var(--neutral-soft); font-size: 18px; color: var(--text); }
+.modal-x:hover { background: var(--text); color: #fff; }
+.export-options { gap: 10px; margin: 0; }
+.export-seg { display: inline-flex; gap: 0; padding: 4px; border-radius: 999px; background: var(--neutral-soft); }
+.export-seg label { height: 40px; padding: 0 18px; border-radius: 999px; background: transparent; display: inline-flex; align-items: center; font-size: 14px; font-weight: 600; cursor: pointer; }
+.export-seg label input { position: absolute; opacity: 0; pointer-events: none; }
+.export-seg label:has(input:checked) { background: var(--text); color: #fff; }
+.export-seg label:has(input:focus-visible) { outline: 2px solid var(--primary); outline-offset: 2px; }
+#export-dialog .export-preview { border: 0; background: transparent; padding: 0; }
+#export-dialog .export-preview img { border-radius: 10px; box-shadow: 0 0 0 1px rgba(0, 0, 0, .08); }
+#export-dialog .modal-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin: 0; }
+.export-status { margin-right: auto; font-size: 13px; font-weight: 600; color: var(--primary); }
+.export-close-text { padding: 12px 14px; font-size: 15px; font-weight: 600; color: var(--text-2); text-decoration: none; }
+#export-dialog .modal-actions .btn { height: auto; padding: 12px 20px; font-size: 15px; }

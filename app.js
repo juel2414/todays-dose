@@ -6464,53 +6464,11 @@ function bindAdminEvents(container, tab) {
  *     외부 라이브러리 없이 Canvas로 직접 그린다. (16:9 가로형, 1920×1080)
  * ========================================================================= */
 
-const EXPORT_FONT = "-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif";
-const EXPORT_COLORS = {
-  bg: '#f5f6f8', surface: '#ffffff', text: '#1f2328', muted: '#6b7280', border: '#e3e5ea',
-  primary: '#2f6fed', primarySoft: '#e8f0fe', danger: '#d93025', dangerSoft: '#fdecea',
-  success: '#1a7f4b', successSoft: '#e6f4ec', neutralSoft: '#eef0f3', bar: '#4a9d6b',
-  required: '#b35c00', requiredSoft: '#fff1e0',
-};
-
-/** 이미지용 행 내용 (HTML 없이 글자만) */
-function rowTextForExport(goal, basis, row) {
-  useUnitOf(goal);
-  if (row.isRestDay) return { main: restText(goal, row.date), subs: [], rest: true };
-  if (row.amount === 0) return { main: t('휴식 (분량 없음)'), subs: [], rest: true };
-  const from = row.prevCumulative;
-  const to = row.cumulative;
-  if (basis === 'page') {
-    const a = unitsToPage(goal.book, from + 1);
-    const b = unitsToPage(goal.book, to);
-    return {
-      main: `${a === b ? `p.${a}` : `p.${a}~${b}`}  (${formatAmount(row.amount, 'page')})`,
-      subs: [describeChaptersForPages(goal.book, a, b)],
-    };
-  }
-  if (basis === 'bible') return { main: describeBibleRange(goal.bible, from, to), subs: [] };
-  if (basis === 'chapter') {
-    const chs = getChapterRanges(goal.book).slice(from, to);
-    return { main: t('{n}개 챕터', { n: chs.length }), subs: chs.map((c) => `${c.name} (p.${c.startPage}~${c.endPage})`) };
-  }
-  if (basis === 'custom') {
-    return {
-      main: `${describeCustomRange(goal, from, to)}  (${formatAmount(row.amount, 'custom')})`,
-      subs: to - from > 1 ? goal.custom.items.slice(from, to) : [],
-    };
-  }
-  const titles = goal.lecture.titles.slice(from, to);
-  const range = to - from > 1 ? t('{from}~{to}강', { from: from + 1, to }) : lectureLabel(from + 1);
-  return {
-    main: `${range}  (${formatAmount(row.amount, 'lecture')})`,
-    subs: titles.map((title, i) => `${lectureLabel(from + i + 1)} ${title}`),
-  };
-}
-
 /** 좁은 칸용 짧은 분량: "11쪽" / "11p", 영어는 "3 ch" · "2 lec" */
 function compactAmount(n, basis) {
   if (basis === 'custom') return formatAmount(n, basis);
   if (currentLang === 'en') return basis === 'page' ? `${n}p` : `${n} ${basis === 'lecture' ? 'lec' : 'ch'}`;
-  return basis === 'page' ? `${n}쪽` : formatAmount(n, basis);
+  return basis === 'page' ? `${n}p` : formatAmount(n, basis);
 }
 
 function stripTags(html) {
@@ -6574,33 +6532,104 @@ function loadImage(url) {
   });
 }
 
+/** 이미지 글꼴 (앱과 같은 글꼴, 없으면 시스템 글꼴) */
+const EXPORT_FONTS = {
+  base: "'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif",
+  num: "Hahmlet, 'Pretendard Variable', 'Apple SD Gothic Neo', serif",
+  mono: "'JetBrains Mono', 'Pretendard Variable', 'Apple SD Gothic Neo', monospace",
+  hand: "'Nanum Pen Script', 'Apple SD Gothic Neo', cursive",
+  serif: "'Cormorant Garamond', Georgia, serif",
+};
+
+/** 캔버스에 쓰기 전에 웹 글꼴을 불러온다 (최대 5초 기다림) */
+async function loadExportFonts() {
+  if (typeof document === 'undefined' || !document.fonts) return;
+  if (typeof loadLandingFonts === 'function') loadLandingFonts();
+  const sample = '가나다 오늘분량 p.123 Today';
+  const wanted = [
+    `700 54px 'Pretendard Variable'`, `500 20px 'Pretendard Variable'`, `600 46px Hahmlet`,
+    `500 20px 'JetBrains Mono'`, `400 40px 'Nanum Pen Script'`, `italic 600 30px 'Cormorant Garamond'`,
+  ];
+  const timeout = new Promise((r) => setTimeout(r, 5000));
+  await Promise.race([Promise.all(wanted.map((f) => document.fonts.load(f, sample).catch(() => null))).then(() => document.fonts.ready), timeout]);
+}
+
+/** 이미지 계획표 한 줄의 글자: 범위 · 보조 설명 · 분량 */
+function exportRowParts(goal, basis, row) {
+  useUnitOf(goal);
+  const from = row.prevCumulative;
+  const to = row.cumulative;
+  const amt = formatAmount(row.amount, basis);
+  const short = compactAmount(row.amount, basis);
+  if (basis === 'page') {
+    const a = unitsToPage(goal.book, from + 1);
+    const b = unitsToPage(goal.book, to);
+    return { main: a === b ? `p.${a}` : `p.${a}~${b}`, sub: describeChaptersForPages(goal.book, a, b), amt, short };
+  }
+  if (basis === 'chapter') {
+    const chs = getChapterRanges(goal.book).slice(from, to);
+    const names = chs.length > 2 ? `${chs[0].name} ~ ${chs.at(-1).name}` : chs.map((c) => c.name).join(', ');
+    return { main: names, sub: chs.length ? `p.${chs[0].startPage}~${chs.at(-1).endPage}` : '', amt, short };
+  }
+  if (basis === 'bible') return { main: describeBibleRange(goal.bible, from, to), sub: '', amt, short };
+  if (basis === 'custom') {
+    return { main: describeCustomRange(goal, from, to), sub: to - from > 1 ? goal.custom.items.slice(from, to).filter(Boolean).join(', ') : '', amt, short };
+  }
+  const titles = goal.lecture.titles.slice(from, to);
+  return {
+    main: to - from > 1 ? t('{from}~{to}강', { from: from + 1, to }) : lectureLabel(from + 1),
+    sub: titles.join(', '), amt, short,
+  };
+}
+
+/** 상태 글자와 색 (계획대로·앞섬·완료 = 파랑, 그 밖 = 검정) */
+function exportStatus(s) {
+  if (s.isComplete) return { text: t('완료'), blue: true };
+  if (s.isOverdue) return { text: t('종료 · 미완료'), blue: false };
+  if (s.notStarted) return { text: t('시작 전'), blue: false };
+  if (s.diff < 0) return { text: t('{amount} 밀림', { amount: formatAmount(-s.diff, s.basis) }), blue: false };
+  if (s.diff > 0) return { text: t('{amount} 앞섬', { amount: formatAmount(s.diff, s.basis) }), blue: true };
+  return { text: t('계획대로'), blue: true };
+}
+
 /**
- * 계획 이미지 그리기 → canvas (16:9 가로형, 1920×1080)
- *  - 왼쪽: 제목 · 저자 · 기간 / 현재 진도 · 진행 막대 · 핵심 숫자 · 안내
- *  - 오른쪽: 날짜별 계획 (하루 한 줄). 날짜가 많으면 2~3칸으로 나누고 줄 높이를 줄여 한 화면에 맞춘다.
+ * 계획 이미지 그리기 → canvas (16:9 가로형, 1920×1080, Claude Design "이미지 내보내기")
+ *  - 위: 제목 · 꼬리표 · 기간 / 상태 카드 (계획대로면 파랑, 밀리면 검정)
+ *  - 가운데: 숫자 카드 4개 (진도 · 오늘 할 분량 · 오늘까지 권장 · 남은 공부일)
+ *  - 아래: 날짜별 계획표. 20일 이하는 2칸 + 머리글, 그보다 많으면 5칸 이상으로 줄여 한 장에 맞춘다.
  * options: { basis, range: 'all' | 'upcoming' }
  */
 async function drawPlanImage(goal, options) {
+  await loadExportFonts();
   useUnitOf(goal);
   const today = todayStr();
   const { basis } = options;
   const s = getGoalSummary(goal, undefined, today);
   const msg = getCompareMessage(goal, s);
-  const cover = await loadImage(getCoverUrl(goal));
+  const [cover, mark] = await Promise.all([loadImage(getCoverUrl(goal)), loadImage(LP_ASSETS.markDark)]);
   let rows = buildTimeline(goal, basis);
   if (options.range === 'upcoming') rows = rows.filter((r) => diffDays(today, r.date) >= 0);
-  const done = getDoneUnits(goal, basis);
-  const C = EXPORT_COLORS;
-
+  const doneUnits = getDoneUnits(goal, basis);
+  const totalUnits = getTotalUnits(goal, basis);
+  const replanned = !!goal.plans[basis].current;
+  const F = EXPORT_FONTS;
+  const C = { bg: '#e8e8e5', ink: '#141414', ink2: '#4a4a48', muted: '#6b6b68', faint: '#8d8d8a', blue: '#3B5BA5', blueSoft: '#dfe4ef', soft: '#f3f3f1', line: '#ececea', red: '#b8432f', white: '#ffffff' };
   const W = 1920;
   const H = 1080;
-  const P = 64;
-  const font = (size, weight = 400) => `${weight} ${size}px ${EXPORT_FONT}`;
+  const PX = 64;
+  const font = (size, weight = 400, family = F.base, style = '') => `${style} ${weight} ${size}px ${family}`.trim();
   const fit = (ctx, text, maxW) => {
     if (ctx.measureText(text).width <= maxW) return text;
-    let t = String(text);
-    while (t.length > 1 && ctx.measureText(`${t}…`).width > maxW) t = t.slice(0, -1);
-    return `${t}…`;
+    let s2 = String(text);
+    while (s2.length > 1 && ctx.measureText(`${s2}…`).width > maxW) s2 = s2.slice(0, -1);
+    return `${s2}…`;
+  };
+  /** 넓이에 맞을 때까지 글자 크기를 줄인다 */
+  const fitSize = (ctx, text, size, min, maxW, weight, family) => {
+    let sz = size;
+    ctx.font = font(sz, weight, family);
+    while (sz > min && ctx.measureText(text).width > maxW) { sz -= 2; ctx.font = font(sz, weight, family); }
+    return sz;
   };
 
   const canvas = document.createElement('canvas');
@@ -6609,236 +6638,356 @@ async function drawPlanImage(goal, options) {
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, W, H);
+  ctx.textBaseline = 'alphabetic';
 
-  /* ===== 왼쪽 ===== */
-  const LW = 640;
-  let y = P;
+  /* ===== 위: 제목 블록 + 상태 카드 ===== */
+  const TOP = 50;
+  const TOPH = 214;
+  const innerW = W - PX * 2;
+  const leftW = Math.round((innerW - 20) * 1.3 / 2.3);
+  const heroX = PX + leftW + 20;
+  const heroW = W - PX - heroX;
+
+  let tx = PX;
+  if (cover) {
+    const cw = 112;
+    const ch = Math.min(160, Math.round(cw * (cover.height / cover.width)));
+    const cy = TOP + (TOPH - ch) / 2;
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(PX, cy, cw, ch, 6);
+    ctx.clip();
+    ctx.drawImage(cover, PX, cy, cw, ch);
+    ctx.restore();
+    tx = PX + cw + 26;
+  }
+  const textW = PX + leftW - tx;
+  const dd = parseDate(today);
+  const owner = t('{name} 님의 진도 보고 · {date}', {
+    name: displayName() || t('오늘분량'),
+    date: currentLang === 'en' ? `${WEEKDAYS_EN[dd.getDay()]}, ${MONTHS_EN[dd.getMonth()].slice(0, 3)} ${dd.getDate()}` : `${pad2(dd.getMonth() + 1)}/${pad2(dd.getDate())} (${weekdayLabel(today)})`,
+  });
+  // 제목: 한 줄에 맞추고, 안 되면 두 줄
+  let titleSize = fitSize(ctx, goal.title, 54, 42, textW, 700, F.base);
+  ctx.font = font(titleSize, 700);
+  let titleLines = ctx.measureText(goal.title).width <= textW ? [goal.title] : wrapText(ctx, goal.title, textW).slice(0, 2);
+  if (titleLines.length === 2 && wrapText(ctx, goal.title, textW).length > 2) titleLines[1] = fit(ctx, `${titleLines[1]}…`, textW);
+  // 꼬리표 · 저자 · 기간 · 쉬는 요일
   const libraryTag = bookTagKind(libraryBookForGoal(goal));
   const groupName = goal.groupId ? groupNameOf(goal.groupId) : '';
-  const isRequired = !!libraryTag || !!groupName;
-
-  // 표지 + 제목
-  let tx = P;
-  if (cover) {
-    const cw = 110;
-    const ch = Math.min(160, Math.round(cw * (cover.height / cover.width)));
-    ctx.save();
-    ctx.shadowColor = 'rgba(16,24,40,0.25)';
-    ctx.shadowBlur = 14;
-    ctx.drawImage(cover, P, y, cw, ch);
-    ctx.restore();
-    tx = P + cw + 28;
-  }
-  const titleW = P + LW - tx;
-  let ty = y;
-  if (isRequired) {
-    ctx.font = font(22, 700);
-    const tagText = groupName || t('배정된 책');
-    const tw = ctx.measureText(tagText).width + 26;
-    roundRect(ctx, tx, ty, tw, 38, 8, C.requiredSoft);
-    ctx.fillStyle = C.required;
-    ctx.fillText(tagText, tx + 13, ty + 27);
-    ty += 52;
-  }
-  ctx.font = font(46, 800);
-  ctx.fillStyle = C.text;
-  const titleLines = wrapText(ctx, goal.title, titleW).slice(0, 2);
-  titleLines.forEach((line, i) => ctx.fillText(line, tx, ty + 44 + i * 56));
-  ty += 44 + (titleLines.length - 1) * 56;
-  ctx.font = font(24);
-  ctx.fillStyle = C.muted;
-  if (getBookAuthor(goal)) {
-    ty += 42;
-    ctx.fillText(fit(ctx, t('{author} 지음', { author: getBookAuthor(goal) }), titleW), tx, ty);
-  }
-  const rest = getRestWeekdays(goal);
-  ty += 38;
-  ctx.fillText(fit(ctx, [
-    `${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)}`,
-    formatDday(s.dday),
-    rest.length ? t('{days} 쉼', { days: weekdayListLabel(rest) }) : '',
-  ].filter(Boolean).join('  ·  '), titleW), tx, ty);
-
-  // 현황 카드
-  const cardY = Math.max(ty + 44, cover ? y + 200 : 0);
-  const cardH = H - P - 44 - cardY;
-  roundRect(ctx, P, cardY, LW, cardH, 24, C.surface);
-  const cx = P + 36;
-  const cw = LW - 72;
-  let cy = cardY + 56;
-
-  ctx.font = font(24, 600);
-  ctx.fillStyle = C.muted;
-  ctx.fillText(t('현재 진도'), cx, cy);
-  // 상태 배지
-  const badge = s.isComplete ? [t('완료'), C.successSoft, C.success]
-    : s.isOverdue ? [t('종료 · 미완료'), '#fff4e0', '#9a5b00']
-    : s.notStarted ? [t('시작 전'), C.neutralSoft, C.muted]
-    : s.diff < 0 ? [t('{amount} 밀림', { amount: formatAmount(-s.diff, s.basis) }), C.dangerSoft, C.danger]
-    : s.diff > 0 ? [t('{amount} 앞섬', { amount: formatAmount(s.diff, s.basis) }), C.successSoft, C.success]
-    : [t('계획대로'), C.primarySoft, C.primary];
-  ctx.font = font(24, 700);
-  const bw = ctx.measureText(badge[0]).width + 36;
-  roundRect(ctx, cx + cw - bw, cy - 32, bw, 46, 23, badge[1]);
-  ctx.fillStyle = badge[2];
-  ctx.fillText(badge[0], cx + cw - bw + 18, cy - 1);
-
-  cy += 70;
-  ctx.font = font(64, 800);
-  ctx.fillStyle = C.text;
-  const doneText = formatPosition(goal, s.basis, s.done);
-  ctx.fillText(doneText, cx, cy);
-  let nx = cx + ctx.measureText(doneText).width + 14;
-  ctx.font = font(32, 600);
-  ctx.fillStyle = C.muted;
-  const totalText = `/ ${formatPosition(goal, s.basis, s.total)}`;
-  ctx.fillText(totalText, nx, cy);
-  nx += ctx.measureText(totalText).width + 20;
-  ctx.font = font(34, 800);
-  ctx.fillStyle = C.bar;
-  ctx.fillText(`${s.percent}%`, nx, cy);
-
-  // 진행 막대
-  cy += 36;
-  roundRect(ctx, cx, cy, cw, 20, 10, C.neutralSoft);
-  const donePct = s.total ? Math.min(1, s.done / s.total) : 0;
-  const targetPct = s.total ? Math.min(1, s.target / s.total) : 0;
-  roundRect(ctx, cx, cy, Math.max(20, cw * donePct), 20, 10, C.bar);
-  ctx.fillStyle = C.text;
-  ctx.fillRect(cx + cw * targetPct - 2, cy - 8, 4, 36);
-  ctx.font = font(20);
-  ctx.fillStyle = C.muted;
-  ctx.fillText(t('초록 = 실제 진도   |   검정 선 = 오늘까지 권장'), cx, cy + 56);
-
-  // 핵심 숫자 (세로 목록)
-  cy += 104;
-  const facts = [
-    [t('하루 권장'), formatAmount(s.dailyPlan, s.basis)],
-    [t('오늘까지 권장'), formatPosition(goal, s.basis, s.target)],
-    [t('남은 공부일'), s.isOverdue || s.isComplete ? '-' : formatDays(s.remainingStudyDays)],
-  ];
-  facts.forEach(([label, value]) => {
-    ctx.fillStyle = C.border;
-    ctx.fillRect(cx, cy - 36, cw, 1);
-    ctx.font = font(24);
-    ctx.fillStyle = C.muted;
-    ctx.fillText(label, cx, cy);
-    ctx.font = font(30, 800);
-    ctx.fillStyle = C.text;
-    ctx.textAlign = 'right';
-    ctx.fillText(value, cx + cw, cy + 2);
-    ctx.textAlign = 'left';
-    cy += 62;
+  const tags = [];
+  if (goal.groupId) tags.push({ text: t(sharedKindOf(goal.type).label), bg: sharedKindOf(goal.type).key === 'lecture' ? C.blue : C.ink, fg: C.white });
+  else if (libraryTag) tags.push({ text: t('배정된 책'), bg: C.ink, fg: C.white });
+  if (groupName) tags.push({ text: groupName, bg: C.white, fg: C.ink });
+  const restDays = getRestWeekdays(goal);
+  const blockH = 24 + 14 + titleLines.length * (titleSize + 8) + 10 + 36;
+  let by = TOP + (TOPH - blockH) / 2;
+  ctx.fillStyle = C.blue;
+  ctx.font = font(20, 700, F.mono);
+  ctx.fillText(fit(ctx, owner, textW), tx, by + 20);
+  by += 24 + 14;
+  ctx.fillStyle = C.ink;
+  ctx.font = font(titleSize, 700);
+  titleLines.forEach((line) => { ctx.fillText(line, tx, by + titleSize - 6); by += titleSize + 8; });
+  by += 10;
+  let mx = tx;
+  const metaY = by + 25;
+  tags.forEach((tag) => {
+    ctx.font = font(20, 600);
+    const w = ctx.measureText(tag.text).width + 28;
+    if (mx + w > PX + leftW) return;
+    roundRect(ctx, mx, by, w, 36, 18, tag.bg);
+    ctx.fillStyle = tag.fg;
+    ctx.fillText(tag.text, mx + 14, metaY);
+    mx += w + 12;
+  });
+  const meta = [
+    getBookAuthor(goal) ? { text: getBookAuthor(goal), f: font(20, 400), c: C.ink2 } : null,
+    { text: `${goal.startDate} ~ ${goal.dueDate}`, f: font(20, 500, F.mono), c: C.ink },
+    restDays.length ? { text: t('{days} 쉼', { days: weekdayListLabel(restDays) }), f: font(20, 400), c: C.ink2 } : null,
+  ].filter(Boolean);
+  meta.forEach((m) => {
+    ctx.font = m.f;
+    const w = ctx.measureText(m.text).width;
+    if (mx + w > PX + leftW) return;
+    ctx.fillStyle = m.c;
+    ctx.fillText(m.text, mx + 2, metaY);
+    mx += w + 18;
   });
 
-  // 안내 문구 (카드 아래쪽에 맞춤)
-  const tone = { behind: [C.dangerSoft, '#a3261c'], ahead: [C.successSoft, C.success], done: [C.successSoft, C.success],
-    ontrack: [C.primarySoft, '#1d4ab5'], ended: ['#fff4e0', '#7a4a00'], neutral: [C.neutralSoft, C.text] }[msg.tone];
-  ctx.font = font(24, 600);
-  const msgLines = wrapText(ctx, stripTags(msg.html), cw - 44).slice(0, 3);
-  const msgH = 36 + msgLines.length * 36;
-  const msgY = Math.max(cy - 10, cardY + cardH - 36 - msgH);
-  roundRect(ctx, cx, msgY, cw, msgH, 14, tone[0]);
-  ctx.fillStyle = tone[1];
-  msgLines.forEach((line, i) => ctx.fillText(line, cx + 22, msgY + 44 + i * 36));
+  // 상태 카드
+  const st = exportStatus(s);
+  const heroBg = st.blue ? C.blue : C.ink;
+  const heroSub = st.blue ? C.blueSoft : '#c9c9c6';
+  roundRect(ctx, heroX, TOP, heroW, TOPH, 22, heroBg);
+  const hx = heroX + 32;
+  const hw = heroW - 64;
+  ctx.font = font(22, 400);
+  const guideLines = wrapText(ctx, stripTags(msg.html), hw).slice(0, 2);
+  const statusSize = fitSize(ctx, st.text, 62, 40, hw, 700, F.base);
+  const heroBlock = 22 + 12 + statusSize + 12 + guideLines.length * 32;
+  let hy = TOP + (TOPH - heroBlock) / 2;
+  ctx.fillStyle = heroSub;
+  ctx.font = font(18, 500, F.mono);
+  ctx.fillText(t('상태'), hx, hy + 18);
+  const note = s.isActive && s.diff < 0 ? t('오늘도 조금씩!') : (ddayCheer(s) || t('오늘도 조금씩!'));
+  ctx.save();
+  ctx.font = font(40, 400, F.hand);
+  const nw = ctx.measureText(note).width;
+  ctx.translate(heroX + heroW - 32 - nw / 2, hy + 14);
+  ctx.rotate(-4 * Math.PI / 180);
+  ctx.fillStyle = st.blue ? C.white : '#9fb3e0';
+  ctx.fillText(note, -nw / 2, 10);
+  ctx.restore();
+  hy += 22 + 12;
+  ctx.fillStyle = C.white;
+  ctx.font = font(statusSize, 700);
+  ctx.fillText(st.text, hx, hy + statusSize - 8);
+  hy += statusSize + 12;
+  ctx.fillStyle = heroSub;
+  ctx.font = font(22, 400);
+  guideLines.forEach((line) => { ctx.fillText(line, hx, hy + 24); hy += 32; });
 
-  // 바닥글
-  ctx.font = font(20);
-  ctx.fillStyle = C.muted;
-  ctx.fillText(t('오늘분량 · {date} ({weekday}) 기준', { date: today, weekday: weekdayLabel(today) }), P, H - P + 16);
+  /* ===== 가운데: 숫자 카드 4개 ===== */
+  const KY = TOP + TOPH + 20;
+  const KH = 176;
+  const kw = (innerW - 16 * 3) / 4;
+  const todayItem = todayItemOf(goal, s);
+  const pctW = s.total > 0 ? Math.min(1, s.done / s.total) : 0;
+  const recW = s.total > 0 ? Math.min(1, s.target / s.total) : 0;
+  const kpis = [
+    { l: t('진도'), v: `${s.percent}%`, sub: formatFraction(s.done, s.total, s.basis), bar: true, c: C.ink },
+    todayItem
+      ? { l: t('오늘 할 분량'), v: todayItem.range, sub: [todayItem.amount, todayItem.hint, todayItem.done ? t('완료') : ''].filter(Boolean).join(' · '), c: C.blue }
+      : { l: t('오늘 할 분량'), v: '—', sub: todayStatusText(goal, s), c: C.blue },
+    { l: t('오늘까지 권장'), v: formatPosition(goal, s.basis, s.target), sub: t('실제 완료 {pos}', { pos: formatPosition(goal, s.basis, s.done) }), c: C.ink },
+    { l: t('남은 공부일'), v: formatDays(s.remainingStudyDays), sub: `${formatDday(s.dday)} · ${t('{date} 마감', { date: formatShortDate(goal.dueDate) })}`, c: C.ink },
+  ];
+  kpis.forEach((k, i) => {
+    const x = PX + i * (kw + 16);
+    roundRect(ctx, x, KY, kw, KH, 22, C.white);
+    const ix = x + 24;
+    const iw = kw - 48;
+    ctx.fillStyle = C.muted;
+    ctx.font = font(20, 400);
+    ctx.fillText(k.l, ix, KY + 20 + 20);
+    const vs = fitSize(ctx, k.v, 46, 26, iw, 600, F.num);
+    ctx.fillStyle = k.c;
+    ctx.font = font(vs, 600, F.num);
+    ctx.fillText(fit(ctx, k.v, iw), ix, KY + 54 + 44);
+    if (k.bar) {
+      const bw = iw;
+      const by2 = KY + 112;
+      roundRect(ctx, ix, by2, bw, 10, 5, C.line);
+      if (pctW > 0) roundRect(ctx, ix, by2, Math.max(10, bw * pctW), 10, 5, C.blue);
+      if (!s.isComplete) { ctx.fillStyle = C.ink; ctx.fillRect(ix + bw * recW - 1.5, by2 - 6, 3, 22); }
+    }
+    ctx.fillStyle = C.ink2;
+    ctx.font = font(20, 400);
+    ctx.fillText(fit(ctx, k.sub, iw), ix, KY + KH - 22);
+  });
 
-  /* ===== 오른쪽: 날짜별 계획 ===== */
-  const RX = P + LW + 40;
-  const RW = W - P - RX;
-  const RY = P;
-  const RH = H - P * 2;
-  roundRect(ctx, RX, RY, RW, RH, 24, C.surface);
-  ctx.font = font(30, 800);
-  ctx.fillStyle = C.text;
-  ctx.fillText(goal.type === 'lecture' ? t('매일 들을 분량') : goal.type === 'custom' ? t('매일 할 분량') : t('매일 읽을 분량'), RX + 36, RY + 56);
-  ctx.font = font(21);
-  ctx.fillStyle = C.muted;
-  ctx.textAlign = 'right';
-  const basisLabel = basis === 'custom' ? t('{unit} 단위', { unit: getUnitLabel('custom') })
-    : t({ page: '페이지 기준', chapter: '챕터 기준', lecture: '강의', bible: '장 단위' }[basis]);
-  ctx.fillText(`${basisLabel} · ${options.range === 'upcoming' ? t('오늘부터') : t('전체 기간')}   ✓ ${t('완료')}`, RX + RW - 36, RY + 54);
-  ctx.textAlign = 'left';
+  /* ===== 아래: 날짜별 계획표 ===== */
+  const LY = KY + KH + 20;
+  const FOOT = 40;
+  const LH = H - 32 - FOOT - 16 - LY;
+  roundRect(ctx, PX, LY, innerW, LH, 22, C.white);
+  const lx = PX + 30;
+  const lw = innerW - 60;
+  // 머리: 제목 · 기준 / 범례
+  const listTitle = goal.type === 'lecture' ? t('매일 들을 분량') : goal.type === 'custom' ? t('매일 할 분량') : t('매일 읽을 분량');
+  const basisLabel = `${goal.type === 'book' ? basisTabLabel(basis) : t('{unit} 단위', { unit: getUnitLabel(basis) })} · ${options.range === 'upcoming' ? t('오늘부터') : t('전체 기간')}`;
+  const headY = LY + 22;
+  ctx.fillStyle = C.ink;
+  ctx.font = font(30, 700);
+  ctx.fillText(listTitle, lx, headY + 30);
+  const ltw = ctx.measureText(listTitle).width;
+  ctx.fillStyle = C.ink2;
+  ctx.font = font(18, 500, F.mono);
+  ctx.fillText(basisLabel, lx + ltw + 16, headY + 30);
+  // 범례 (오른쪽부터)
+  let gx = lx + lw;
+  const legend = [
+    { label: t('쉬는 날'), draw: (x) => { roundRect(ctx, x, headY + 14, 18, 18, 5, C.soft); ctx.strokeStyle = '#d4d4d0'; ctx.lineWidth = 1; ctx.beginPath(); ctx.roundRect(x + 0.5, headY + 14.5, 17, 17, 5); ctx.stroke(); }, w: 18 },
+    { label: t('못 함'), draw: null, w: 0, color: C.red, bold: true },
+    { label: t('완료'), draw: (x) => { ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(x + 10, headY + 23, 10, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = C.white; ctx.font = font(12, 700); ctx.textAlign = 'center'; ctx.fillText('✓', x + 10, headY + 27); ctx.textAlign = 'left'; }, w: 20 },
+    { label: t('오늘'), draw: (x) => roundRect(ctx, x, headY + 14, 18, 18, 5, C.ink), w: 18 },
+  ];
+  legend.forEach((it) => {
+    ctx.font = font(18, it.bold ? 700 : 400);
+    const tw2 = ctx.measureText(it.label).width;
+    gx -= tw2;
+    ctx.fillStyle = it.color || C.ink2;
+    ctx.fillText(it.label, gx, headY + 30);
+    if (it.draw) { gx -= it.w + 6; it.draw(gx); }
+    gx -= 16;
+  });
+  ctx.fillStyle = C.ink;
+  ctx.fillRect(lx, headY + 52, lw, 3);
 
-  const listTop = RY + 88;
-  const listH = RH - 88 - 28;
-  const listW = RW - 72;
-  const MAX_ROW_H = 58;
-  const MIN_ROW_H = 40; // 이보다 줄이 낮아지면 칸을 늘린다
-  let cols = Math.max(1, Math.ceil(rows.length / Math.floor(listH / MIN_ROW_H)));
-  cols = Math.min(cols, 3);
-  const perCol = Math.max(1, Math.ceil(rows.length / cols));
-  const rowH = Math.min(MAX_ROW_H, listH / perCol);
-  const colGap = 28;
-  const colW = (listW - colGap * (cols - 1)) / cols;
-  const fs = rowH >= 50 ? 24 : rowH >= 40 ? 21 : 18; // 줄 높이에 맞춘 글자 크기
+  // 칸 나누기
+  const n = rows.length;
+  const dense = n > 20;
+  const areaTop = headY + 52 + 3 + 12;
+  const areaBottom = LY + LH - 18;
+  const headH = dense ? 0 : 30;
+  let cols = dense ? 5 : 2;
+  let perCol = Math.ceil(n / cols);
+  let rowH = (areaBottom - areaTop - headH) / Math.max(1, perCol);
+  while (dense && rowH < 22 && cols < 8) { cols += 1; perCol = Math.ceil(n / cols); rowH = (areaBottom - areaTop - headH) / perCol; }
+  rowH = Math.min(rowH, dense ? 44 : 64);
+  const colGap = dense ? 16 : 30;
+  const colW = (lw - colGap * (cols - 1)) / cols;
+  const fs = dense ? Math.max(11, Math.min(20, Math.floor(rowH * 0.58))) : Math.max(14, Math.min(24, Math.floor(rowH * 0.5)));
+  const smallFs = Math.max(11, Math.min(20, fs - 4));
+  // 줄 안의 칸 넓이
+  const grid = dense
+    ? { date: fs * 3.15, wd: currentLang === 'en' ? fs * 2.1 : fs * 1.1, amt: fs * 1.9, pct: 0, mark: fs * 2.4 }
+    : { date: 64 * fs / 24, wd: (currentLang === 'en' ? 56 : 40) * fs / 24, amt: 150, pct: 140, mark: 92 };
+  const pad = dense ? 6 : 12;
+  const gap = dense ? 6 : 10;
+  // 분량 칸은 실제 글자 넓이에 맞춘다 (예: "1챕터"가 "22p"보다 넓다)
+  const parts = rows.map((row) => (row.isRestDay || row.amount === 0 ? null : exportRowParts(goal, basis, row)));
+  ctx.font = font(dense ? fs : Math.min(22, fs), 600, F.num);
+  const amtMax = Math.max(0, ...parts.filter(Boolean).map((p) => ctx.measureText(dense ? p.short : p.amt).width));
+  grid.amt = Math.max(grid.amt, amtMax + 4);
+  const mainW = colW - pad * 2 - grid.date - grid.wd - grid.amt - grid.pct - grid.mark - gap * (dense ? 4 : 5);
 
-  rows.forEach((row, i) => {
-    const col = Math.floor(i / perCol);
-    const rx = RX + 36 + col * (colW + colGap);
-    const ry = listTop + (i - col * perCol) * rowH;
-    const txt = rowTextForExport(goal, basis, row);
-    const dayDiff = diffDays(today, row.date);
-    const checked = !txt.rest && done >= row.cumulative;
-    const behind = dayDiff < 0 && !checked && !txt.rest;
-
-    if (dayDiff === 0) roundRect(ctx, rx - 10, ry + 3, colW + 20, rowH - 6, 10, C.primarySoft);
-    else if (behind) roundRect(ctx, rx - 10, ry + 3, colW + 20, rowH - 6, 10, C.dangerSoft);
-    ctx.globalAlpha = checked && dayDiff !== 0 ? 0.4 : 1;
-    const base = ry + rowH / 2 + fs * 0.36;
-
-    const d = parseDate(row.date);
-    const dow = d.getDay();
-    ctx.font = font(fs, 700);
-    ctx.fillStyle = behind ? C.danger : C.text;
-    ctx.fillText(`${d.getMonth() + 1}/${d.getDate()}`, rx, base);
-    ctx.font = font(fs - 2, 600);
-    ctx.fillStyle = dow === 0 ? C.danger : dow === 6 ? C.primary : C.muted;
-    ctx.fillText(weekdayName(dow), rx + fs * 3, base);
-
-    const en = currentLang === 'en';
-    const rangeX = rx + fs * (en ? 5.2 : 4.3); // 영어 요일(Wed)은 한 글자보다 넓다
-    const checkW = fs * 1.4;
-    const compact = cols > 1; // 여러 칸이면 분량을 짧게 (11쪽 / 11p)
-    const amountW = compact ? fs * (en ? 3.6 : 3.2) : fs * (en ? 6 : 4.6);
-    const rangeMaxW = colW - (rangeX - rx) - amountW - checkW;
-    if (txt.rest) {
-      ctx.font = font(fs - 2);
+  if (!dense) {
+    const contentLabel = goal.type === 'lecture' ? t('강의') : goal.type === 'custom' ? t('할 내용') : t('읽을 범위');
+    const amtLabel = basis === 'page' ? t('읽어야 할 페이지') : basis === 'lecture' ? t('들어야 할 강의') : t('분량');
+    for (let c = 0; c < cols; c++) {
+      const cx = lx + c * (colW + colGap) + pad;
       ctx.fillStyle = C.muted;
-      ctx.fillText(fit(ctx, txt.main, colW - (rangeX - rx) - checkW), rangeX, base);
-    } else {
-      const range = basis === 'chapter'
-        ? getChapterRanges(goal.book).slice(row.prevCumulative, row.cumulative).map((c) => c.name).join(', ')
-        : txt.main.replace(/\s*\(.*\)$/, '');
-      ctx.font = font(fs, 700);
-      ctx.fillStyle = C.text;
-      const rangeText = fit(ctx, range, basis === 'page' && cols === 1 ? Math.min(rangeMaxW, fs * 8) : rangeMaxW);
-      ctx.fillText(rangeText, rangeX, base);
-      if (cols === 1 && basis === 'page' && txt.subs[0]) {
-        const subX = rangeX + ctx.measureText(rangeText).width + 18;
-        ctx.font = font(fs - 3);
-        ctx.fillStyle = C.muted;
-        ctx.fillText(fit(ctx, txt.subs[0], rangeX + rangeMaxW - subX), subX, base);
-      }
+      ctx.font = font(18, 600);
+      ctx.fillText(t('날짜'), cx, areaTop + 18);
+      ctx.fillText(t('요일'), cx + grid.date + 10, areaTop + 18);
+      ctx.fillText(contentLabel, cx + grid.date + grid.wd + 20, areaTop + 18);
       ctx.textAlign = 'right';
-      ctx.font = font(fs - 2, 700);
-      ctx.fillStyle = C.text;
-      ctx.fillText(compact ? compactAmount(row.amount, basis) : formatAmount(row.amount, basis), rx + colW - checkW, base);
+      const rx = lx + c * (colW + colGap) + colW - pad - grid.mark - 10;
+      ctx.fillText(t('완료 시 진도'), rx, areaTop + 18);
+      ctx.fillText(fit(ctx, amtLabel, grid.amt), rx - grid.pct - 10, areaTop + 18);
       ctx.textAlign = 'left';
     }
-    if (checked) {
-      ctx.font = font(fs + 2, 800);
-      ctx.fillStyle = C.success;
-      ctx.fillText('✓', rx + colW - fs, base + 1);
+  }
+
+  rows.forEach((row, i) => {
+    const c = Math.floor(i / perCol);
+    const r = i % perCol;
+    const x0 = lx + c * (colW + colGap);
+    const y0 = areaTop + headH + r * rowH;
+    const { dayDiff, checked } = getRowState(row, doneUnits, today, replanned);
+    const rest = row.isRestDay || row.amount === 0;
+    const isToday = dayDiff === 0;
+    const missed = dayDiff < 0 && !checked && !rest;
+    const done = checked && !rest;
+    const fg = isToday ? C.white : missed ? C.red : rest ? C.muted : C.ink;
+    ctx.save();
+    if (done && !isToday) ctx.globalAlpha = 0.42;
+    if (isToday || rest) {
+      roundRect(ctx, x0, y0 + 1, colW, rowH - 2, 10, isToday ? C.ink : C.soft);
+    } else {
+      ctx.fillStyle = C.line;
+      ctx.fillRect(x0, y0 + rowH - 1, colW, 1);
     }
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = C.border;
-    ctx.fillRect(rx, ry + rowH - 1, colW, 1);
+    const base = y0 + rowH / 2 + fs * 0.36;
+    let x = x0 + pad;
+    const md = `${row.date.slice(5, 7)}/${row.date.slice(8, 10)}`;
+    ctx.fillStyle = fg;
+    ctx.font = font(Math.min(fs, 20), 500, F.mono);
+    ctx.fillText(md, x, base);
+    x += grid.date + gap;
+    ctx.font = font(Math.min(fs, 20), 400);
+    ctx.fillText(weekdayLabel(row.date), x, base);
+    x += grid.wd + gap;
+    if (rest) {
+      ctx.font = font(fs, 500);
+      ctx.fillText(fit(ctx, row.isRestDay ? restText(goal, row.date) : t('휴식'), mainW), x, base);
+    } else {
+      const part = parts[i];
+      ctx.font = font(fs, 700);
+      const mainText = fit(ctx, part.main, mainW);
+      ctx.fillText(mainText, x, base);
+      const used = ctx.measureText(mainText).width;
+      if (!dense && part.sub && used + 40 < mainW) {
+        ctx.fillStyle = isToday ? '#c9c9c6' : missed ? C.red : C.faint;
+        ctx.font = font(smallFs, 400);
+        ctx.fillText(fit(ctx, part.sub, mainW - used - 14), x + used + 14, base);
+      }
+      // 분량 · 완료 시 진도 (오른쪽 정렬)
+      ctx.textAlign = 'right';
+      const right = x0 + colW - pad - grid.mark - gap;
+      if (!dense) {
+        ctx.fillStyle = isToday ? '#9fb3e0' : C.blue;
+        ctx.font = font(Math.min(22, fs), 600, F.num);
+        ctx.fillText(`${Math.round((row.cumulative / Math.max(1, totalUnits)) * 100)}%`, right, base);
+      }
+      ctx.fillStyle = fg;
+      ctx.font = font(dense ? fs : Math.min(22, fs), 600, F.num);
+      ctx.fillText(dense ? part.short : part.amt, right - grid.pct - (dense ? 0 : 10), base);
+      ctx.textAlign = 'left';
+    }
+    // 표시: 오늘 · ✓ · 못 함
+    const markRight = x0 + colW - pad;
+    const markY = y0 + rowH / 2;
+    const chk = Math.min(dense ? 24 : 30, rowH - 6);
+    let mr = markRight;
+    if (done) {
+      ctx.fillStyle = isToday ? C.white : C.ink;
+      ctx.beginPath();
+      ctx.arc(mr - chk / 2, markY, chk / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = isToday ? C.ink : C.white;
+      ctx.font = font(Math.round(chk * 0.5), 700);
+      ctx.textAlign = 'center';
+      ctx.fillText('✓', mr - chk / 2, markY + chk * 0.18);
+      ctx.textAlign = 'left';
+      mr -= chk + 6;
+    }
+    if (isToday) {
+      const pf = dense ? Math.max(11, Math.min(14, fs - 4)) : 18;
+      ctx.font = font(pf, 700);
+      const label = t('오늘');
+      const pw = ctx.measureText(label).width + pf * 1.1;
+      const ph = pf + 10;
+      {
+        roundRect(ctx, mr - pw, markY - ph / 2, pw, ph, ph / 2, C.blue);
+        ctx.fillStyle = C.white;
+        ctx.fillText(label, mr - pw + pf * 0.55, markY + pf * 0.36);
+      }
+    }
+    if (missed) {
+      ctx.fillStyle = C.red;
+      ctx.font = font(dense ? Math.max(11, fs - 4) : 20, 700);
+      ctx.textAlign = 'right';
+      ctx.fillText(t('못 함'), mr, markY + (dense ? fs - 4 : 20) * 0.36);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
   });
+
+  /* ===== 바닥글 ===== */
+  const fy = H - 32 - 10;
+  ctx.fillStyle = C.ink2;
+  ctx.font = font(18, 500, F.mono);
+  ctx.fillText(t('오늘분량 · {date} ({weekday}) 기준', { date: today, weekday: weekdayLabel(today) }), PX, fy);
+  // Today's Dose 글자 로고 (오른쪽)
+  ctx.font = font(28, 500);
+  const seW = ctx.measureText('se').width;
+  const oW = 28 * 0.545;
+  const dW = ctx.measureText('D').width;
+  ctx.font = font(30, 600, F.serif, 'italic');
+  const todayW = ctx.measureText('Today’s').width;
+  let wx = W - PX - (todayW + 8 + dW + oW + 2 + seW);
+  ctx.fillStyle = C.ink;
+  ctx.fillText('Today’s', wx, fy);
+  wx += todayW + 8;
+  ctx.font = font(28, 500);
+  ctx.fillText('D', wx, fy);
+  wx += dW + 1;
+  if (mark) ctx.drawImage(mark, wx, fy - oW + 1, oW, oW);
+  wx += oW + 1;
+  ctx.fillText('se', wx, fy);
 
   return canvas;
 }
@@ -6865,23 +7014,24 @@ async function openExportDialog(goal, options = null) {
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="export-title">
       <div class="modal-head">
         <h2 id="export-title" class="section-title">${t('이미지로 내보내기')}</h2>
-        <button type="button" class="btn-icon" data-action="export-close" aria-label="${t('닫기')}">×</button>
+        <button type="button" class="modal-x" data-action="export-close" aria-label="${t('닫기')}">×</button>
       </div>
       <div class="export-options">
         ${bases.length > 1 ? `
-          <div class="segmented">
+          <div class="segmented export-seg">
             ${bases.map((b) => `<label><input type="radio" name="export-basis" value="${b}" ${b === exportState.options.basis ? 'checked' : ''}> ${basisTabLabel(b)}</label>`).join('')}
           </div>` : ''}
-        <div class="segmented">
+        <div class="segmented export-seg">
           <label><input type="radio" name="export-range" value="all" ${exportState.options.range === 'all' ? 'checked' : ''}> ${t('전체 기간')}</label>
           <label><input type="radio" name="export-range" value="upcoming" ${exportState.options.range === 'upcoming' ? 'checked' : ''}> ${t('오늘부터')}</label>
         </div>
       </div>
       <div class="export-preview" id="export-preview"><span class="muted">${t('그리는 중…')}</span></div>
       <div class="modal-actions">
-        <span id="export-status" class="muted"></span>
-        <button type="button" class="btn" data-action="export-copy">${t('이미지 복사')}</button>
-        <button type="button" class="btn btn-primary" data-action="export-download">${t('PNG 저장')}</button>
+        <span id="export-status" class="export-status"></span>
+        <button type="button" class="link-btn export-close-text" data-action="export-close">${t('닫기')}</button>
+        <button type="button" class="btn btn-outline" data-action="export-copy">${t('이미지 복사')}</button>
+        <button type="button" class="btn btn-dark" data-action="export-download">${t('PNG 저장')}</button>
       </div>
     </div>`;
   dialog.hidden = false;
@@ -8696,8 +8846,15 @@ const EN = {
   '보이는 대상': 'Visible to',
   '계획': 'Plans',
   '표지': 'Cover',
-  '배정 {n}명': (p) => `Assigned ${p.n}`,
   '회원 선택': 'Pick a member',
+  // 이미지 내보내기 새 디자인
+  '{name} 님의 진도 보고 · {date}': (p) => `${p.name}’s progress · ${p.date}`,
+  '실제 완료 {pos}': (p) => `Done: ${p.pos}`,
+  '{date} 마감': (p) => `due ${p.date}`,
+  '읽을 범위': 'Range',
+  '읽어야 할 페이지': 'Pages to read',
+  '들어야 할 강의': 'Lectures',
+  '완료 시 진도': 'Progress if done',
 };
 
 /* =========================================================================
