@@ -156,7 +156,16 @@ function landingWordmark(size, dark) {
 }
 
 /* 큰 글자 로고의 o (파란 반달이 있는 원) */
-const LP_BIG_O = '<svg viewBox="0 0 100 100" class="lp-big-o" aria-hidden="true"><path d="M51.62 3.68 A46.35 46.35 0 0 1 71.56 91.03" fill="none" stroke="#141414" stroke-width="7.3"/><path d="M66.89 88.45 A42 42 0 0 1 33.11 88.45" fill="none" stroke="#3B5BA5" stroke-width="16"/><path d="M28.44 91.03 A46.35 46.35 0 0 1 48.38 3.68" fill="none" stroke="#141414" stroke-width="2.4"/></svg>';
+const LP_BIG_O = '<svg viewBox="0 0 100 100" class="lp-big-o" aria-hidden="true"><path class="lp-o-ring" d="M51.62 3.68 A46.35 46.35 0 0 1 71.56 91.03" fill="none" stroke="#141414" stroke-width="7.3"/><path class="lp-o-arc" d="M66.89 88.45 A42 42 0 0 1 33.11 88.45" fill="none" stroke="#3B5BA5" stroke-width="16"/><path class="lp-o-ring" d="M28.44 91.03 A46.35 46.35 0 0 1 48.38 3.68" fill="none" stroke="#141414" stroke-width="2.4"/></svg>';
+
+/* 첫 화면 효과용: 글자 하나씩 감싸기 (아래에서 잘려 올라오는 효과) */
+function lpChars(text, start) {
+  return [...text].map((ch, i) => `<span class="lp-char" style="--i:${start + i}"><span>${ch}</span></span>`).join('');
+}
+/* 제목 단어 하나씩 감싸기 (흐림에서 또렷하게) */
+function lpWords(text) {
+  return text.split(' ').map((w, i) => `<span class="lp-word" style="--i:${i}">${w}</span>`).join(' ');
+}
 
 /**
  * 랜딩 페이지 그리기
@@ -182,6 +191,7 @@ function renderLanding(root, options) {
   <div class="landing">
     <div class="lp-page">
       <header class="lp-hero" id="lp-top">
+        <div class="lp-hero-glow" aria-hidden="true"></div>
         <div class="lp-topbar">
           <a href="#" class="lp-brand" data-lp-scroll="lp-top" aria-label="${E(T.brandLabel)}">
             <span class="lp-brand-tile"><img src="${LP_ASSETS.markLight}" alt=""></span>
@@ -197,10 +207,10 @@ function renderLanding(root, options) {
           </div>
         </div>
 
-        <h1 class="lp-hero-title"><span class="lp-dot"></span>${E(T.heroTitle)}</h1>
+        <h1 class="lp-hero-title"><span class="lp-dot"></span><span>${lpWords(E(T.heroTitle))}</span></h1>
         <div class="lp-big-wordmark" aria-hidden="true">
-          <span class="lp-big-today">Today<span class="lp-apos">’</span>s</span>
-          <span class="lp-big-dose">D${LP_BIG_O}se</span>
+          <span class="lp-big-today">${lpChars('Today', 0)}<span class="lp-char" style="--i:5"><span class="lp-apos">’</span></span>${lpChars('s', 6)}</span>
+          <span class="lp-big-dose">${lpChars('D', 7)}<span class="lp-char lp-char-o" style="--i:8"><span>${LP_BIG_O}</span></span>${lpChars('se', 9)}</span>
           <img class="lp-hero-mini" src="${LP_ASSETS.hero}" alt="">
         </div>
 
@@ -319,6 +329,7 @@ function renderLanding(root, options) {
     </div>
   </div>`;
   const landing = root.querySelector('.landing');
+  initLandingHeroFx(landing);
 
   // 메뉴: 주소(#)를 바꾸지 않고 해당 칸으로 스크롤 (앱이 # 주소를 화면 이동에 쓴다)
   landing.addEventListener('click', (e) => {
@@ -388,4 +399,90 @@ function renderLanding(root, options) {
 
 function escapeLandingHtml(value) {
   return String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+
+/* =========================================================================
+ * 첫 화면 효과 (21st 참고 · 순수 JS/CSS, React·애니메이션 라이브러리 없음)
+ *  - 등장: 큰 글자 아래에서 잘려 올라오기 · 제목 단어 흐림→또렷 · 나머지 차례로 떠오르기 · o의 파란 반달 그리기
+ *  - 오늘 분량 카드: 항목이 하나씩 체크되고 막대가 차오름
+ *  - 마우스: 손그림·카드·큰 글자가 깊이를 달리해 살짝 움직임(시차) · 배경 점무늬가 커서를 따라 비침 · 시작 버튼이 커서를 따라옴
+ *  - 스크롤: 큰 글자가 위로 떠오르며 옅어짐
+ *  움직임 줄이기 설정이면 아무 효과도 넣지 않는다.
+ * ========================================================================= */
+function initLandingHeroFx(landing) {
+  const hero = landing && landing.querySelector('.lp-hero');
+  if (!hero) return;
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) return;
+  hero.classList.add('lp-fx');
+
+  // 오늘 분량 카드: 처음엔 비워 두었다가 하나씩 체크
+  const items = [...hero.querySelectorAll('.lp-today-item')];
+  const doneIdx = items.map((el, i) => (el.classList.contains('is-done') ? i : -1)).filter((i) => i >= 0);
+  items.forEach((el) => el.classList.remove('is-done'));
+  const bar = hero.querySelector('.lp-today-bar div');
+  if (bar) bar.style.width = '0%';
+
+  const start = () => requestAnimationFrame(() => requestAnimationFrame(() => hero.classList.add('is-in')));
+  if (document.fonts && document.fonts.ready) {
+    Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 1200))]).then(start);
+  } else start();
+
+  const timers = [];
+  doneIdx.forEach((i, n) => {
+    timers.push(setTimeout(() => {
+      if (!hero.isConnected) return;
+      items[i].classList.add('is-done');
+      if (bar) bar.style.width = `${Math.round(((n + 1) / items.length) * 100 * 0.93)}%`;
+    }, 1900 + n * 750));
+  });
+
+  // 마우스 시차 · 점무늬 빛
+  let raf = 0;
+  let px = 0;
+  let py = 0;
+  hero.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'touch') return;
+    const r = hero.getBoundingClientRect();
+    px = ((e.clientX - r.left) / r.width) * 2 - 1;
+    py = ((e.clientY - r.top) / r.height) * 2 - 1;
+    hero.style.setProperty('--gx', `${e.clientX - r.left}px`);
+    hero.style.setProperty('--gy', `${e.clientY - r.top}px`);
+    if (!raf) raf = requestAnimationFrame(() => {
+      raf = 0;
+      hero.style.setProperty('--px', px.toFixed(3));
+      hero.style.setProperty('--py', py.toFixed(3));
+    });
+  });
+  hero.addEventListener('pointerleave', () => {
+    hero.style.setProperty('--px', '0');
+    hero.style.setProperty('--py', '0');
+  });
+
+  // 시작 버튼: 커서를 살짝 따라온다
+  const cta = hero.querySelector('.lp-cta');
+  if (cta) {
+    cta.addEventListener('pointermove', (e) => {
+      const r = cta.getBoundingClientRect();
+      const dx = (e.clientX - (r.left + r.width / 2)) / r.width;
+      const dy = (e.clientY - (r.top + r.height / 2)) / r.height;
+      cta.style.transform = `translate(${(dx * 10).toFixed(1)}px, ${(dy * 8).toFixed(1)}px)`;
+    });
+    cta.addEventListener('pointerleave', () => { cta.style.transform = ''; });
+  }
+
+  // 스크롤: 첫 화면을 지나는 만큼 0 → 1
+  let sraf = 0;
+  const onScroll = () => {
+    if (!hero.isConnected) { window.removeEventListener('scroll', onScroll); timers.forEach(clearTimeout); return; }
+    if (sraf) return;
+    sraf = requestAnimationFrame(() => {
+      sraf = 0;
+      const h = hero.offsetHeight || window.innerHeight;
+      const sy = Math.min(1, Math.max(0, window.scrollY / h));
+      hero.style.setProperty('--sy', sy.toFixed(3));
+    });
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
 }

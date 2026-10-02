@@ -347,3 +347,65 @@ body.is-landing #app { max-width: none; padding: 0; }
   .lp-footer-nav { flex-wrap: wrap; gap: 4px 18px; }
   .lp-footer-nav a { padding: 10px 0; }
 }
+
+/* ===== 첫 화면 효과 (21st 참고 · CSS 트랜지션) — .lp-fx는 움직임 줄이기 설정이 아닐 때만 붙는다 ===== */
+.lp-char { display: inline-block; }
+.lp-char > span { display: inline-block; }
+.lp-char-o > span { display: inline; }
+.lp-hero { position: relative; }
+.lp-hero > *:not(.lp-hero-glow) { position: relative; z-index: 1; }
+.lp-hero-glow { position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: 0; transition: opacity .5s ease;
+  background-image: radial-gradient(rgba(20, 20, 20, .22) 1px, transparent 1.5px); background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(300px circle at var(--gx, 50%) var(--gy, 40%), #000 0%, transparent 70%);
+  mask-image: radial-gradient(300px circle at var(--gx, 50%) var(--gy, 40%), #000 0%, transparent 70%); }
+.lp-fx:hover .lp-hero-glow { opacity: 1; }
+
+/* 1. 큰 글자: 아래에서 잘려 올라오기 (Vertical Cut Reveal) */
+.lp-fx .lp-char > span { transform: translateY(.42em); clip-path: inset(100% -40% -60% -40%); opacity: 0;
+  transition: transform .95s cubic-bezier(.2, .8, .2, 1), clip-path .95s cubic-bezier(.2, .8, .2, 1), opacity .5s ease;
+  transition-delay: calc(260ms + var(--i) * 60ms); }
+.lp-fx.is-in .lp-char > span { transform: none; clip-path: inset(-60% -40% -60% -40%); opacity: 1; }
+/* o의 파란 반달은 글자가 다 올라온 뒤 그려진다 · 고리는 살짝 돌며 자리 잡기 */
+.lp-fx .lp-o-arc { stroke-dasharray: 60; stroke-dashoffset: 60; transition: stroke-dashoffset .9s cubic-bezier(.6, 0, .2, 1) 1.15s; }
+.lp-fx.is-in .lp-o-arc { stroke-dashoffset: 0; }
+.lp-fx .lp-big-o { transform: rotate(-120deg); transform-origin: 50% 50%; transition: transform 1.4s cubic-bezier(.2, .8, .2, 1) .7s; }
+.lp-fx.is-in .lp-big-o { transform: none; }
+
+/* 2. 제목: 단어가 흐림에서 또렷하게 */
+.lp-fx .lp-word { display: inline-block; opacity: 0; filter: blur(10px); transform: translateY(10px);
+  transition: opacity .7s ease, filter .7s ease, transform .7s cubic-bezier(.2, .8, .2, 1); transition-delay: calc(80ms + var(--i) * 90ms); }
+.lp-fx.is-in .lp-word { opacity: 1; filter: none; transform: none; }
+.lp-fx .lp-dot { transform: scale(0); transition: transform .5s cubic-bezier(.3, 1.6, .5, 1) .05s; }
+.lp-fx.is-in .lp-dot { transform: none; }
+
+/* 3. 나머지: 차례로 떠오르기 */
+.lp-fx .lp-hero-sub, .lp-fx .lp-cta, .lp-fx .lp-hero-illus, .lp-fx .lp-today-card, .lp-fx .lp-topbar { opacity: 0; translate: 0 18px;
+  transition: opacity .8s ease, translate .9s cubic-bezier(.2, .8, .2, 1), transform .25s ease-out, background .15s; }
+.lp-fx .lp-topbar { translate: 0 -10px; transition-delay: 0s; }
+.lp-fx .lp-hero-sub { transition-delay: .95s, .95s, 0s, 0s; }
+.lp-fx .lp-cta { transition-delay: 1.05s, 1.05s, 0s, 0s; }
+.lp-fx .lp-hero-illus { transition-delay: 1.15s, 1.15s, 0s, 0s; }
+.lp-fx .lp-today-card { transition-delay: 1.3s, 1.3s, 0s, 0s; }
+.lp-fx.is-in .lp-hero-sub, .lp-fx.is-in .lp-cta, .lp-fx.is-in .lp-hero-illus, .lp-fx.is-in .lp-today-card, .lp-fx.is-in .lp-topbar { opacity: 1; translate: 0 0; }
+
+/* 4. 오늘 분량 카드: 하나씩 체크 · 막대 차오름 */
+.lp-fx .lp-today-bar div { transition: width .7s cubic-bezier(.2, .8, .2, 1); }
+.lp-fx .lp-check { transition: background .25s ease, border-color .25s ease, transform .35s cubic-bezier(.3, 1.8, .5, 1); }
+.lp-fx .lp-today-item { transition: color .3s ease; }
+.lp-fx .lp-today-item.is-done .lp-check { transform: scale(1.12); animation: lpPop .4s cubic-bezier(.3, 1.8, .5, 1); }
+@keyframes lpPop { 0% { transform: scale(.6); } 100% { transform: scale(1); } }
+
+/* 5. 마우스 시차 (깊이: 카드 > 손그림 > 큰 글자) · 6. 스크롤하면 큰 글자가 떠오르며 옅어짐 */
+.lp-fx .lp-big-wordmark { transform: translate3d(calc(var(--px, 0) * -6px), calc(var(--py, 0) * -4px + var(--sy, 0) * -70px), 0) scale(calc(1 - var(--sy, 0) * .05));
+  opacity: calc(1 - var(--sy, 0) * .55); transition: transform .35s ease-out; }
+.lp-fx.is-in .lp-hero-illus { transform: translate3d(calc(var(--px, 0) * 14px), calc(var(--py, 0) * 10px), 0); }
+.lp-fx.is-in .lp-today-card { transform: translate3d(calc(var(--px, 0) * 22px), calc(var(--py, 0) * 16px), 0) rotateX(calc(var(--py, 0) * -4deg)) rotateY(calc(var(--px, 0) * 5deg)); transform-style: preserve-3d; }
+.lp-fx .lp-hero-right { perspective: 900px; }
+.lp-fx .lp-cta { transition-property: opacity, translate, transform, background; }
+.lp-fx.is-in .lp-cta:hover { box-shadow: 0 10px 26px -12px rgba(20, 20, 20, .6); }
+
+@media (max-width: 760px) {
+  .lp-fx .lp-big-wordmark { transform: translate3d(0, calc(var(--sy, 0) * -40px), 0); }
+  .lp-fx.is-in .lp-today-card, .lp-fx.is-in .lp-hero-illus { transform: none; }
+  .lp-hero-glow { display: none; }
+}
