@@ -5383,20 +5383,40 @@ function renderAdmin(root, tab, route = {}) {
     body = renderAdminProgress();
   }
 
+  const pendingCount = libraryRows.filter((b) => b.status === 'pending').length;
+  const behindCount = adminState.goals.filter(({ goal }) => {
+    const s = getGoalSummary(goal);
+    return s.isActive && !s.notStarted && s.diff < 0;
+  }).length;
+  const summary = adminState.loaded && !adminState.error ? `
+      <div class="admin-summary">
+        <div class="summary-card"><span class="mono-label">${t('전체 회원')}</span><b class="num-font">${t('{n}명', { n: adminState.profiles.length })}</b></div>
+        <div class="summary-card"><span class="mono-label">${t('그룹')}</span><b class="num-font">${t('{n}개', { n: adminState.groups.length })}</b></div>
+        <div class="summary-card"><span class="mono-label">${t('오늘 밀린 목표')}</span><b class="num-font">${t('{n}개', { n: behindCount })}</b></div>
+        <button type="button" class="summary-card is-link ${pendingCount ? 'is-hot' : ''}" data-action="summary-review">
+          <span class="mono-label">${t('도서관 검토 대기')}</span>
+          <span class="summary-card-row"><b class="num-font">${t('{n}권', { n: pendingCount })}</b><span aria-hidden="true">→</span></span>
+        </button>
+      </div>` : '';
+  const editingBook = tab === 'books' && adminState.editingBookId && adminState.loaded;
+
   root.innerHTML = `
-    <div id="admin">
-      <header class="page-header">
-        <div>
-          <a class="back-link" href="#/">← ${t('내 계획')}</a>
+    <div id="admin" class="admin">
+      ${editingBook || tab === 'member' ? '' : `
+      <div class="admin-head">
+        <div class="admin-head-text">
           <h1>${t('관리자')}</h1>
+          <p>${t('회원·그룹·도서관을 관리해요.')}</p>
         </div>
-        <div class="header-actions">
-          <button type="button" class="btn" data-action="admin-refresh" ${adminState.loading ? 'disabled' : ''}>${t('새로고침')}</button>
-        </div>
-      </header>
-      <nav class="tabs admin-tabs" aria-label="${t('관리자 메뉴')}">
-        ${ADMIN_TABS.map(([key, label]) => `<a class="tab ${key === tab || (tab === 'member' && key === 'plans') ? 'is-active' : ''}" href="#/admin/${key}">${t(label)}</a>`).join('')}
-      </nav>
+        <span class="hand-note">${t('오늘도 다들 잘하고 있어요')}</span>
+      </div>
+      ${tab === 'member' ? '' : summary}
+      <div class="admin-tabbar">
+        <nav class="admin-tabs" aria-label="${t('관리자 메뉴')}">
+          ${ADMIN_TABS.map(([key, label]) => `<a class="admin-tab ${key === tab || (tab === 'member' && key === 'plans') ? 'is-active' : ''}" href="#/admin/${key}">${t(label)}</a>`).join('')}
+        </nav>
+        <button type="button" class="btn btn-small btn-outline-muted" data-action="admin-refresh" ${adminState.loading ? 'disabled' : ''}>${t('새로고침')}</button>
+      </div>`}
       ${body}
     </div>`;
   bindAdminEvents(root.querySelector('#admin'), tab);
@@ -5423,7 +5443,7 @@ function renderAdminProgress() {
     return `<div class="empty">${t('아직 그룹의 필독서·필수 시청이나 회원 목표가 없습니다.')}</div>`;
   }
   return `
-    ${groups ? `<div class="progress-section-head"><h2 class="section-title">${t('그룹')}</h2></div>${groups}` : ''}
+    ${groups ? `<div class="progress-section-head"><h2 class="section-title">${t('그룹별 진도')}</h2></div>${groups}` : ''}
     ${books.length ? `
     <div class="progress-section-head"><h2 class="section-title">${t('배정된 책')} <span class="count">${books.length}</span></h2></div>
     ${renderAssignedProgress(books)}` : ''}
@@ -5456,9 +5476,10 @@ function renderAdminPersonalProgress() {
     return `
       <details class="panel progress-toggle" data-progress-key="${escapeHtml(key)}" ${isProgressOpen(key, false) ? 'open' : ''}>
         <summary>
-          <span class="admin-group-name">${escapeHtml(profileName(p))}</span>
-          <span class="muted">${summarizeGoalTypes(items.map((x) => x.goal), active)}</span>
-          ${behind ? `<b class="text-danger small">${t('밀림 {n}개', { n: behind })}</b>` : ''}
+          <b class="toggle-name">${escapeHtml(profileName(p))}</b>
+          <span class="toggle-meta">${summarizeGoalTypes(items.map((x) => x.goal), active)}</span>
+          ${behind ? `<b class="toggle-behind">${t('밀림 {n}개', { n: behind })}</b>` : ''}
+          <span class="chev" aria-hidden="true"></span>
         </summary>
         <div class="progress-toggle-body">
           <table class="admin-table">
@@ -5472,8 +5493,8 @@ function renderAdminPersonalProgress() {
   }).join('');
   return `
     <div class="progress-section-head">
-      <h2 class="section-title">${t('개별 진행')} <span class="count">${people.length}</span></h2>
-      <span class="muted small">${t('그룹과 상관없이 회원이 스스로 세운 목표입니다.')}</span>
+      <h2 class="section-title">${t('개별 진행')}</h2>
+      <span class="muted">${t('그룹과 상관없이 회원이 스스로 세운 목표예요.')}</span>
     </div>
     ${blocks}`;
 }
@@ -5488,7 +5509,6 @@ function renderAdminGroupProgress() {
     const memberIds = new Set(members.map((m) => m.user_id));
     const memberGoals = adminState.goals.filter((x) => x.goal.groupId === g.id && memberIds.has(x.userId));
     const key = `g:${g.id}`;
-    const planned = new Set(memberGoals.filter((x) => x.goal.groupItemId).map((x) => x.userId)).size;
     const behind = new Set(memberGoals.filter((x) => {
       if (!x.goal.groupItemId) return false;
       const s = getGoalSummary(x.goal);
@@ -5497,11 +5517,11 @@ function renderAdminGroupProgress() {
     return `
       <details class="panel progress-toggle" data-progress-key="${escapeHtml(key)}" ${isProgressOpen(key, true) ? 'open' : ''}>
         <summary>
-          <span class="admin-group-name">${escapeHtml(g.name)}</span>
-          <span class="muted">${t('리더 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })} · ${t('멤버 {n}명', { n: members.length })}</span>
-          <span class="muted">${summarizeShared(items)}</span>
-          <span class="muted">${t('계획 세운 멤버 {n}/{total}명', { n: planned, total: members.length })}</span>
-          ${behind ? `<b class="text-danger small">${t('밀림 {n}명', { n: behind })}</b>` : ''}
+          <b class="toggle-name is-big">${escapeHtml(g.name)}</b>
+          <span class="toggle-meta">${t('리더 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })}</span>
+          <span class="toggle-meta">${t('멤버')} <b class="num-font is-ink">${t('{n}명', { n: members.length })}</b></span>
+          ${behind ? `<b class="toggle-behind">${t('밀림 {n}명', { n: behind })}</b>` : ''}
+          <span class="chev" aria-hidden="true"></span>
         </summary>
         <div class="progress-toggle-body">
           ${groupItemsByKind(items).map(({ items: list }) => list.map((item) => renderGroupItemProgress(item, members, memberGoals, '',
@@ -5568,7 +5588,7 @@ function renderAssignedProgress(books) {
           </tbody>
         </table>
       </section>`;
-  }).join('') + `<p class="muted admin-legend">${t('진도 막대: 초록 = 실제 진도, 검정 선 = 오늘까지 권장 · 각자 정한 기간 기준입니다.')}</p>`;
+  }).join('') + `<p class="muted admin-legend">${t('진도 막대: 파랑 = 실제 진도, 검정 선 = 오늘까지 권장 · 각자 정한 기간 기준입니다.')}</p>`;
 }
 
 /* ----- 회원 계획 (개인 목표 포함, 읽기 전용) ----- */
@@ -5588,30 +5608,38 @@ function renderAdminPlans() {
     const items = byUser.get(p.user_id)
       .map((goal) => ({ goal, s: getGoalSummary(goal, undefined, today) }))
       .sort((a, b) => (a.s.isActive === b.s.isActive ? diffDays(b.goal.dueDate, a.goal.dueDate) : a.s.isActive ? -1 : 1));
+    const key = `p:${p.user_id}`;
     return `
-      <section class="panel admin-book" data-plan-person data-search="${escapeHtml(`${p.name || ''} ${p.email || ''}`.toLowerCase())}">
-        <div class="admin-book-head">
-          <div>
-            <h2 class="section-title">${escapeHtml(profileName(p))} ${renderAdminGroupTags(p.user_id)}</h2>
-            <span class="muted">${escapeHtml(p.email)}</span>
-          </div>
-          <span class="muted">${summarizeGoalTypes(items.map((x) => x.goal), items.filter((x) => x.s.isActive).length)}</span>
+      <details class="panel progress-toggle" data-progress-key="${escapeHtml(key)}" data-plan-person
+        data-search="${escapeHtml(`${p.name || ''} ${p.email || ''}`.toLowerCase())}" ${isProgressOpen(key, false) ? 'open' : ''}>
+        <summary>
+          <span class="toggle-person"><b class="toggle-name">${escapeHtml(profileName(p))}</b><span class="mono-cell">${escapeHtml(p.email || '')}</span>${renderAdminGroupTags(p.user_id)}</span>
+          <span class="toggle-meta">${summarizeGoalTypes(items.map((x) => x.goal), items.filter((x) => x.s.isActive).length)}</span>
+          <span class="chev" aria-hidden="true"></span>
+        </summary>
+        <div class="progress-toggle-body">
+          <div class="table-scroll"><div class="plan-rows">
+            <div class="plan-row is-head"><span>${t('목표')}</span><span>${t('기간')}</span><span>${t('진도')}</span><span>${t('상태')}</span><span></span></div>
+            ${items.map(({ goal, s }) => {
+              const lib = goal.requiredBookId && requiredBooks.some((b) => b.id === goal.requiredBookId);
+              return `
+              <a class="plan-row ${s.isActive ? '' : 'is-finished-row'}" href="#/admin/member/${escapeHtml(p.user_id)}/${escapeHtml(goal.id)}">
+                <span class="plan-row-title"><b>${escapeHtml(goal.title)}</b>${lib ? `<span class="lib-tag">${t('도서관')}</span>` : `<span class="muted small">${typeLabel(goal.type)}</span>`}</span>
+                <span class="mono-cell">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)}</span>
+                <span class="member-bar"><span class="bar"><span class="${s.diff < 0 && s.isActive ? 'is-behind' : ''}" style="width:${s.percent}%"></span></span><span class="num-font pct">${s.percent}%</span></span>
+                <span>${renderStatusBadge(s)}</span>
+                <span class="muted" aria-hidden="true">→</span>
+              </a>`;
+            }).join('')}
+          </div></div>
         </div>
-        <table class="admin-table">
-          <thead>
-            <tr><th>${t('목표')}</th><th>${t('기간')}</th><th class="num">${t('오늘까지 권장')}</th><th class="num">${t('실제 완료')}</th><th class="num">${t('끝')}</th><th class="col-bar">${t('진도')}</th><th>${t('상태')}</th></tr>
-          </thead>
-          <tbody>
-            ${items.map(({ goal, s }) => renderAdminGoalRow(p, goal, s)).join('')}
-          </tbody>
-        </table>
-      </section>`;
+      </details>`;
   }).join('');
 
   return `
     <div class="plans-toolbar">
-      <p class="muted admin-intro">${t('회원들이 만든 모든 목표입니다. 목표를 누르면 날짜별 계획표를 볼 수 있습니다. (읽기 전용)')}</p>
-      <input type="search" id="plan-search" class="input member-search" placeholder="${t('이름 또는 이메일 검색…')}" value="${escapeHtml(adminState.planSearch)}">
+      <input type="search" id="plan-search" class="pill-search" placeholder="${t('이름 또는 이메일 검색…')}" value="${escapeHtml(adminState.planSearch)}">
+      <span class="muted small">${t('회원들이 만든 모든 목표입니다. 목표를 누르면 날짜별 계획표를 볼 수 있습니다. (읽기 전용)')}</span>
     </div>
     ${sections}
     <p class="empty" id="plan-empty" hidden>${t('조건에 맞는 회원이 없습니다.')}</p>
@@ -5628,7 +5656,7 @@ function renderAdminGoalRow(p, goal, s) {
         <a class="member-link" href="#/admin/member/${escapeHtml(p.user_id)}/${escapeHtml(goal.id)}">${escapeHtml(goal.title)}</a>
         <div class="muted small">${book ? t('도서관') : typeLabel(goal.type)}${getBookAuthor(goal) ? ` · ${escapeHtml(getBookAuthor(goal))}` : ''}</div>
       </td>
-      <td class="muted">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
+      <td class="mono-cell">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
       <td class="num">${formatPosition(goal, s.basis, s.target)}</td>
       <td class="num">${formatPosition(goal, s.basis, s.done)}</td>
       <td class="num">${formatPosition(goal, s.basis, s.total)}</td>
@@ -5653,14 +5681,19 @@ function renderAdminMemberGoal(userId, goalId) {
   const rest = getRestWeekdays(goal);
 
   return `
+    <div class="readonly-page">
     <a class="back-link" href="#/admin/plans">← ${t('회원 계획')}</a>
-    <div class="member-goal-head">
-      ${renderCoverThumb(getCoverUrl(goal), 'lg')}
-      <div>
-        <p class="muted">${t('{name}님의 계획', { name: escapeHtml(profileName(p)) })}</p>
-        <h2 class="member-goal-title">${escapeHtml(goal.title)}</h2>
-        ${getBookAuthor(goal) ? `<p class="detail-author">${t('{author} 지음', { author: escapeHtml(getBookAuthor(goal)) })}</p>` : ''}
-        <p class="muted">${goal.startDate} ~ ${goal.dueDate} · ${formatDday(s.dday)}${rest.length ? ` · ${t('쉬는 요일 {days}', { days: weekdayListLabel(rest) })}` : ''}</p>
+    <div class="detail-title">
+      ${getCoverUrl(goal) ? renderCoverThumb(getCoverUrl(goal), 'lg') : ''}
+      <div class="detail-title-text">
+        <div class="detail-tags"><span class="readonly-pill">● ${t('읽기 전용')}</span><span>${t('{name}님의 계획', { name: escapeHtml(profileName(p)) })}</span>${renderGoalTypeTag(goal)}</div>
+        <h1>${escapeHtml(goal.title)}</h1>
+        <div class="detail-meta">
+          ${getBookAuthor(goal) ? `<span>${escapeHtml(getBookAuthor(goal))}</span>` : ''}
+          <span class="mono">${goal.startDate} ~ ${goal.dueDate}</span>
+          <b class="mono">${formatDday(s.dday)}</b>
+          ${rest.length ? `<span>${t('쉬는 요일 · {days}', { days: weekdayListLabel(rest) })}</span>` : ''}
+        </div>
       </div>
     </div>
 
@@ -5681,7 +5714,8 @@ function renderAdminMemberGoal(userId, goalId) {
           </div>` : ''}
       </div>
       ${renderPlanTable(goal, basis, true)}
-    </section>`;
+    </section>
+    </div>`;
 }
 
 /* ----- 도서관 (필독서 · 공개 · 배정 · 검토) ----- */
@@ -5720,12 +5754,14 @@ function renderAdminBooks() {
   const assigned = book ? bookAssignees(book.id) : [];
 
   const editor = editing ? `
+    <a class="back-link editor-back" href="#/admin/books" data-action="book-cancel">← ${t('도서관')}</a>
+    <div class="editor-title"><h1>${reviewing ? t('제출된 책 검토') : book ? t('도서관 책 수정') : t('도서관에 책 추가')}</h1>${reviewing ? `<span class="pill-soft">${t('검토 중')}</span>` : ''}</div>
     <form id="book-form" class="panel admin-editor" novalidate>
-      <h2 class="section-title">${reviewing ? t('제출된 책 검토') : book ? t('도서관 책 수정') : t('도서관에 책 추가')}</h2>
       ${reviewing ? `<p class="notice notice-info">${t('{name}님이 {date}에 만든 계획에서 제출된 책입니다. 필요하면 고친 뒤 승인하세요. 고친 내용은 제출한 사람에게 적용 여부를 묻습니다.', { name: escapeHtml(submitterName(book)), date: timestampToDate(book.createdAt) })}</p>`
-        : book ? `<p class="notice">${t('저장하면 이미 계획을 세운 사람에게 "내용 변경됨"이 표시되고, 각자 미리보기를 확인한 뒤 자기 계획에 적용합니다.')}</p>` : ''}
+        : ''}
       ${editing === 'new' ? `
       <div class="book-search">
+        <span class="mono-label">${t('책 검색')}</span>
         <div class="book-search-row">
           <input id="f-book-q" type="search" class="input" placeholder="${t('책 제목이나 ISBN으로 찾기')}" aria-label="${t('책 검색')}">
           <button type="button" class="btn" data-action="book-search">${t('책 검색')}</button>
@@ -5756,11 +5792,16 @@ function renderAdminBooks() {
       </div>
       ${renderChapterEditorHtml(book ? book.lastPage : '')}
       <fieldset class="field distribution">
-        <legend class="field-label">${t('누구에게 보일까요?')} <span class="muted">${t('(아무것도 고르지 않으면 도서관에 보관만 합니다)')}</span></legend>
-        <label class="check-line"><input type="checkbox" id="f-public" ${book && book.isPublic ? 'checked' : ''}>
-          <span><b>${t('공개')}</b> <span class="muted">${t('누구나 새 목표에서 "도서관에서 고르기"로 고를 수 있습니다')}</span></span></label>
-        <div class="assign-picker">
-          <span class="check-line-title"><b>${t('특정 사람에게 배정')}</b> <span class="muted" id="assign-count">${t('{n}명 선택', { n: assigned.length })}</span></span>
+        <legend class="field-label">${t('누구에게 보일까요?')}</legend>
+        <div class="vis-cards">
+          <label class="vis-card"><input type="checkbox" id="f-public" ${book && book.isPublic ? 'checked' : ''}>
+            <b>${t('공개')}</b><span>${t('누구나 새 목표에서 "도서관에서 고르기"로 고를 수 있습니다')}</span></label>
+          <label class="vis-card"><input type="checkbox" id="f-assign-on" ${assigned.length ? 'checked' : ''}>
+            <b>${t('특정 사람에게 배정')}</b><span>${t('고른 사람에게만 보여요')}</span></label>
+        </div>
+        <p class="muted small vis-none">${t('(아무것도 고르지 않으면 도서관에 보관만 합니다)')}</p>
+        <div class="assign-picker" ${assigned.length ? '' : 'hidden'}>
+          <span class="check-line-title"><b id="assign-count">${t('{n}명 선택', { n: assigned.length })}</b></span>
           <input type="search" id="assign-search" class="input" placeholder="${t('이름이나 이메일로 찾기')}" aria-label="${t('회원 찾기')}">
           <div class="assign-list" id="assign-list">
             ${adminState.profiles.map((p) => `
@@ -5772,35 +5813,36 @@ function renderAdminBooks() {
           </div>
         </div>
       </fieldset>
+      ${book && !reviewing ? `<p class="notice notice-row-soft">${t('저장하면 이미 계획을 세운 사람에게 "내용 변경됨"이 표시되고, 각자 미리보기를 확인한 뒤 자기 계획에 적용합니다.')}</p>` : ''}
       <div id="form-errors" class="errors" hidden></div>
       <div class="form-actions">
-        <button type="button" class="btn" data-action="book-cancel">${t('취소')}</button>
+        <button type="button" class="btn btn-outline" data-action="book-cancel">${t('취소')}</button>
         ${reviewing ? `
-          <button type="button" class="btn btn-danger" data-action="review-reject" data-id="${escapeHtml(book.id)}">${t('반려')}</button>
+          <button type="button" class="btn btn-outline-muted is-danger" data-action="review-reject" data-id="${escapeHtml(book.id)}">${t('반려')}</button>
           <button type="submit" class="btn btn-primary">${t('승인하고 저장')}</button>`
           : `<button type="submit" class="btn btn-primary">${t('저장')}</button>`}
       </div>
     </form>` : '';
 
+  if (editing) return `<div class="book-editor-page">${editor}</div>`;
+
   const segments = `
-    <div class="tabs library-filter" role="tablist">
+    <div class="filter-pills" role="tablist">
       ${LIBRARY_FILTERS.map(([key, label]) => {
         const count = key === 'pending' ? pending.length : filterLibrary(key).length;
-        return `<button type="button" role="tab" class="tab ${key === filter ? 'is-active' : ''}" data-action="library-filter" data-filter="${key}">
-          ${t(label)} <span class="${key === 'pending' && count ? 'count-badge' : 'muted'}">${count}</span></button>`;
+        return `<button type="button" role="tab" class="filter-pill ${key === filter ? 'is-active' : ''}" data-action="library-filter" data-filter="${key}">${t(label)} ${count}</button>`;
       }).join('')}
     </div>`;
-
-  const body = filter === 'pending' ? renderReviewQueue(pending, editing) : renderLibraryTable(filterLibrary(filter), editing);
+  const showReview = filter === 'pending' || (filter === 'all' && pending.length > 0);
 
   return `
-    <div class="admin-toolbar">
-      <p class="muted">${t('도서관의 책 정보(제목·챕터·페이지)는 고른 사람 모두에게 공유됩니다. 기간은 각자 정합니다. 회원이 직접 만든 책 목표는 검토 대기로 들어옵니다.')}</p>
-      <button type="button" class="btn btn-primary" data-action="book-new" ${editing ? 'disabled' : ''}>${t('+ 책 추가')}</button>
+    <div class="library-toolbar">
+      ${segments}
+      <button type="button" class="btn btn-dark" data-action="book-new">${t('+ 책 추가')}</button>
     </div>
-    ${editor}
-    ${segments}
-    ${body}`;
+    <p class="muted small">${t('도서관의 책 정보(제목·챕터·페이지)는 고른 사람 모두에게 공유됩니다. 기간은 각자 정합니다. 회원이 직접 만든 책 목표는 검토 대기로 들어옵니다.')}</p>
+    ${showReview ? renderReviewQueue(pending, editing) : ''}
+    ${filter === 'pending' ? '' : renderLibraryTable(filterLibrary(filter), editing)}`;
 }
 
 /** 승인된 책 중 필터에 맞는 것 */
@@ -5818,73 +5860,75 @@ function submitterName(book) {
 function renderLibraryTable(books, editing) {
   if (!books.length) return `<div class="empty">${t('해당하는 책이 없습니다.')}</div>`;
   return `
-    <table class="admin-table panel-table">
-      <thead><tr><th>${t('책 제목')}</th><th class="num">${t('챕터')}</th><th class="num">${t('페이지')}</th><th class="num">${t('계획 세운 사람')}</th><th></th></tr></thead>
+    <div class="panel library-panel"><div class="table-scroll">
+    <table class="admin-table library-table">
+      <thead><tr><th>${t('표지')}</th><th>${t('책 제목')}</th><th class="num">${t('페이지')}</th><th class="num">${t('챕터')}</th><th>${t('보이는 대상')}</th><th class="num">${t('계획')}</th><th></th></tr></thead>
       <tbody>
         ${books.map((b) => {
           const planned = new Set(adminState.goals.filter((x) => x.goal.requiredBookId === b.id).map((x) => x.userId)).size;
           const mine = findGoalForBook(appData.goals, b.id);
+          const assignedN = bookAssignees(b.id).length;
+          const vis = [b.isPublic ? `<span class="badge badge-ontrack">${t('공개')}</span>` : '',
+            assignedN ? `<span class="badge badge-ahead">${t('배정 {n}명', { n: assignedN })}</span>` : ''].join(' ').trim()
+            || `<span class="pill-outline">${t('보관만')}</span>`;
           return `
             <tr>
-              <td>
-                <div class="book-cell">
-                  ${renderCoverThumb(b.coverUrl, 'sm')}
-                  <div>
-                    <strong>${escapeHtml(b.title)}</strong>${b.author ? `<div class="muted">${escapeHtml(b.author)}</div>` : ''}
-                    <div class="library-badges">${renderLibraryBadges(b) || `<span class="muted small">${t('보관만')}</span>`}</div>
-                  </div>
-                </div>
-              </td>
-              <td class="num">${t('{n}개', { n: b.chapters.length })}</td>
-              <td class="num">${formatAmount(bookPages(b), 'page')}</td>
-              <td class="num">${t('{n}명', { n: planned })}</td>
+              <td>${b.coverUrl ? renderCoverThumb(b.coverUrl, 'sm') : '<span class="cover cover-sm cover-blank"></span>'}</td>
+              <td><b>${escapeHtml(b.title)}</b>${b.author ? `<div class="muted small">${escapeHtml(b.author)}</div>` : ''}</td>
+              <td class="num num-font">${formatAmount(bookPages(b), 'page')}</td>
+              <td class="num num-font">${t('{n}개', { n: b.chapters.length })}</td>
+              <td>${vis}</td>
+              <td class="num num-font">${t('{n}명', { n: planned })}</td>
               <td class="row-actions">
                 ${mine
-                  ? `<a class="btn btn-small" href="#/goal/${escapeHtml(mine.id)}">${t('내 계획 보기')}</a>`
-                  : `<a class="btn btn-small btn-primary" href="#/new/book/${escapeHtml(b.id)}">${t('내 계획 세우기')}</a>`}
-                <button type="button" class="btn btn-small" data-action="book-edit" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>${t('수정')}</button>
-                <button type="button" class="btn btn-small btn-danger" data-action="book-delete" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>${t('삭제')}</button>
+                  ? `<a class="link-btn small" href="#/goal/${escapeHtml(mine.id)}">${t('내 계획 보기')}</a>`
+                  : `<a class="link-btn small" href="#/new/book/${escapeHtml(b.id)}">${t('내 계획 세우기')}</a>`}
+                <button type="button" class="btn btn-small btn-outline" data-action="book-edit" data-id="${escapeHtml(b.id)}">${t('수정')}</button>
+                <button type="button" class="btn btn-small btn-outline-muted is-danger" data-action="book-delete" data-id="${escapeHtml(b.id)}">${t('삭제')}</button>
               </td>
             </tr>`;
         }).join('')}
       </tbody>
-    </table>`;
+    </table>
+    </div></div>`;
 }
 
 /** 검토 대기: 회원이 만든 책 목표에서 제출된 책 */
 function renderReviewQueue(pending, editing) {
-  if (!pending.length) return `<div class="empty">${t('검토할 책이 없습니다.')}</div>`;
-  return `<div class="review-list">${pending.map((b) => {
-    const similar = requiredBooks.filter((x) => isSimilarBookTitle(x.title, b.title));
-    const merging = adminState.mergingId === b.id;
-    const choices = [...similar, ...requiredBooks.filter((x) => !similar.includes(x))];
-    return `
-      <div class="panel review-item">
-        <div class="review-main">
-          <div>
-            <strong>${escapeHtml(b.title)}</strong>${b.author ? ` <span class="muted">· ${escapeHtml(b.author)}</span>` : ''}
-            <div class="muted small">${t('{name} · {date} 제출', { name: escapeHtml(submitterName(b)), date: timestampToDate(b.createdAt) })}
-              · ${t('{pages}페이지 · {n}개 챕터', { pages: bookPages(b), n: b.chapters.length })}</div>
-            ${similar.length ? `<div class="similar-hint">${t('비슷한 책이 이미 있음: {titles}', { titles: similar.map((x) => `'${escapeHtml(x.title)}'`).join(', ') })}</div>` : ''}
+  return `
+    <section class="review-card">
+      <div class="review-card-head"><h2>${t('제출된 책 검토')}</h2><span class="num-font">${pending.length}</span></div>
+      ${!pending.length ? `<span class="review-empty">${t('검토할 책이 없습니다.')}</span>` : pending.map((b) => {
+        const similar = requiredBooks.filter((x) => isSimilarBookTitle(x.title, b.title));
+        const merging = adminState.mergingId === b.id;
+        const choices = [...similar, ...requiredBooks.filter((x) => !similar.includes(x))];
+        return `
+        <div class="review-item">
+          <div class="review-main">
+            <div class="review-info">
+              <b>${escapeHtml(b.title)}${b.author ? ` <span class="review-author">· ${escapeHtml(b.author)}</span>` : ''}</b>
+              <span class="review-sub">${escapeHtml(submitterName(b))} · <span class="mono">${timestampToDate(b.createdAt)}</span> · <b class="num-font">${t('{pages}페이지 · {n}개 챕터', { pages: bookPages(b), n: b.chapters.length })}</b></span>
+              ${similar.length ? `<span class="review-warn">⚠ ${t('비슷한 책이 이미 있음: {titles}', { titles: similar.map((x) => `'${escapeHtml(x.title)}'`).join(', ') })}</span>` : ''}
+            </div>
+            <div class="review-actions">
+              <button type="button" class="btn btn-small btn-white" data-action="book-edit" data-id="${escapeHtml(b.id)}">${t('검토')}</button>
+              <button type="button" class="btn btn-small btn-outline-light" data-action="review-approve" data-id="${escapeHtml(b.id)}">${t('바로 승인')}</button>
+              <button type="button" class="btn btn-small btn-outline-light" data-action="review-merge-open" data-id="${escapeHtml(b.id)}" ${!requiredBooks.length ? 'disabled' : ''}>${t('기존 책과 연결')}</button>
+              <button type="button" class="btn btn-small btn-outline-light is-danger" data-action="review-reject" data-id="${escapeHtml(b.id)}">${t('반려')}</button>
+            </div>
           </div>
-          <div class="row-actions">
-            <button type="button" class="btn btn-small" data-action="book-edit" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>${t('검토')}</button>
-            <button type="button" class="btn btn-small btn-primary" data-action="review-approve" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>${t('바로 승인')}</button>
-            <button type="button" class="btn btn-small" data-action="review-merge-open" data-id="${escapeHtml(b.id)}" ${editing || !requiredBooks.length ? 'disabled' : ''}>${t('기존 책과 연결')}</button>
-            <button type="button" class="btn btn-small btn-danger" data-action="review-reject" data-id="${escapeHtml(b.id)}" ${editing ? 'disabled' : ''}>${t('반려')}</button>
-          </div>
-        </div>
-        ${merging ? `
-          <div class="merge-row">
-            <select class="input" id="merge-target" aria-label="${t('연결할 도서관 책')}">
-              ${choices.map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.title)}${x.author ? ` · ${escapeHtml(x.author)}` : ''}</option>`).join('')}
-            </select>
-            <button type="button" class="btn btn-small btn-primary" data-action="review-merge" data-id="${escapeHtml(b.id)}">${t('연결')}</button>
-            <button type="button" class="btn btn-small" data-action="review-merge-cancel">${t('취소')}</button>
-            <span class="field-hint">${t('제출한 사람의 계획이 고른 책과 연결되고, 다른 내용은 적용 여부를 묻습니다.')}</span>
-          </div>` : ''}
-      </div>`;
-  }).join('')}</div>`;
+          ${merging ? `
+            <div class="merge-row">
+              <select class="input" id="merge-target" aria-label="${t('연결할 도서관 책')}">
+                ${choices.map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.title)}${x.author ? ` · ${escapeHtml(x.author)}` : ''}</option>`).join('')}
+              </select>
+              <button type="button" class="btn btn-small btn-white" data-action="review-merge" data-id="${escapeHtml(b.id)}">${t('연결')}</button>
+              <button type="button" class="btn btn-small btn-outline-light" data-action="review-merge-cancel">${t('취소')}</button>
+              <span class="review-sub">${t('제출한 사람의 계획이 고른 책과 연결되고, 다른 내용은 적용 여부를 묻습니다.')}</span>
+            </div>` : ''}
+        </div>`;
+      }).join('')}
+    </section>`;
 }
 
 /** 검토 상태 변경 후 목록 갱신 */
@@ -5989,24 +6033,17 @@ function renderAdminMembers() {
   const profiles = adminState.profiles;
   if (!profiles.length) return `<div class="empty">${t('아직 로그인한 사람이 없습니다.')}</div>`;
   return `
-    <div class="section-head">
-      <h2 class="section-title">${t('그룹')} <span class="count">${adminState.groups.length}</span></h2>
-      <span class="muted small">${t('그룹을 누르면 멤버·공유 목표·진도를 펼쳐 볼 수 있어요. 새 그룹은 상단 [그룹] 메뉴에서 만듭니다.')}</span>
+    <div class="member-toolbar">
+      <input type="search" id="member-search" class="pill-search" placeholder="${t('이름 또는 이메일 검색…')}" value="${escapeHtml(adminState.memberSearch)}">
+      <select id="member-group-filter" class="pill-select" aria-label="${t('그룹으로 거르기')}">
+        <option value="">${t('전체 그룹')}</option>
+        <option value="none" ${adminState.memberGroupFilter === 'none' ? 'selected' : ''}>${t('그룹 없음')}</option>
+        ${adminState.groups.map((g) => `<option value="${escapeHtml(g.id)}" ${adminState.memberGroupFilter === g.id ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('')}
+      </select>
+      <span class="muted small">${t('전체 회원')} <b class="num-font is-ink" id="member-count">${profiles.length}</b> · ${t('앱에 한 번이라도 로그인한 사람들입니다.')}</span>
     </div>
-    ${adminState.groups.length ? adminState.groups.map(renderAdminGroup).join('') : `<div class="empty">${t('아직 그룹이 없습니다.')}</div>`}
-
-    <div class="panel member-panel">
-      <div class="member-toolbar">
-        <h2 class="section-title">${t('전체 회원')} <span class="count" id="member-count">${profiles.length}</span></h2>
-        <span class="muted small">${t('앱에 한 번이라도 로그인한 사람들입니다.')}</span>
-        <input type="search" id="member-search" class="input member-search" placeholder="${t('이름 또는 이메일 검색…')}" value="${escapeHtml(adminState.memberSearch)}">
-        <select id="member-group-filter" class="input member-filter" aria-label="${t('그룹으로 거르기')}">
-          <option value="">${t('전체 그룹')}</option>
-          <option value="none" ${adminState.memberGroupFilter === 'none' ? 'selected' : ''}>${t('그룹 없음')}</option>
-          ${adminState.groups.map((g) => `<option value="${escapeHtml(g.id)}" ${adminState.memberGroupFilter === g.id ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('')}
-        </select>
-      </div>
-      <table class="admin-table member-table">
+    <div class="panel member-panel"><div class="table-scroll">
+      <table class="admin-table admin-member-table">
         <thead><tr><th>${t('이름 / 이메일')}</th><th>${t('그룹')}</th><th>${t('처음 로그인')}</th><th>${t('마지막 접속')}</th></tr></thead>
         <tbody>
           ${profiles.map((p) => {
@@ -6014,32 +6051,38 @@ function renderAdminMembers() {
             return `
             <tr data-member-row data-search="${escapeHtml(`${p.name || ''} ${p.email || ''}`.toLowerCase())}" data-groups="${escapeHtml(groups.map((g) => g.id).join(' '))}">
               <td>
-                <strong>${escapeHtml(p.name || '-')}</strong>${p.user_id === currentUser.id ? ` <span class="muted">${t('(나)')}</span>` : ''}
-                <div class="muted small">${escapeHtml(p.email)}</div>
+                <b>${escapeHtml(p.name || '-')}</b>${p.user_id === currentUser.id ? ` <span class="muted">${t('(나)')}</span>` : ''}
+                <div class="mono-cell">${escapeHtml(p.email)}</div>
               </td>
               <td>${renderMemberGroupCell(p, groups)}</td>
-              <td class="muted nowrap">${timestampToDateTime(p.created_at)}</td>
-              <td class="muted nowrap">${timestampToDateTime(p.last_seen_at)}</td>
+              <td class="mono-cell nowrap">${timestampToDateTime(p.created_at)}</td>
+              <td class="mono-cell nowrap">${timestampToDateTime(p.last_seen_at)}</td>
             </tr>`;
           }).join('')}
         </tbody>
       </table>
       <p class="empty" id="member-empty" hidden>${t('조건에 맞는 회원이 없습니다.')}</p>
-    </div>`;
+    </div></div>
+
+    <div class="progress-section-head">
+      <h2 class="section-title">${t('그룹')}</h2>
+      <span class="muted small">${t('그룹을 누르면 멤버·공유 목표·진도를 펼쳐 볼 수 있어요. 새 그룹은 상단 [그룹] 메뉴에서 만듭니다.')}</span>
+    </div>
+    ${adminState.groups.length ? adminState.groups.map(renderAdminGroup).join('') : `<div class="empty">${t('아직 그룹이 없습니다.')}</div>`}`;
 }
 
 /** 전체 회원 표의 그룹 칸: 속한 그룹(× 로 빼기) + 드롭다운으로 그룹 추가 */
 function renderMemberGroupCell(p, groups) {
   const others = adminState.groups.filter((g) => !groups.includes(g));
   const tags = groups.map((g) => g.leader_id === p.user_id
-    ? `<span class="type-tag type-leader" title="${t('리더는 그룹에서 뺄 수 없습니다')}">${escapeHtml(g.name)} · ${t('리더')}</span>`
-    : `<span class="type-tag type-group group-chip">${escapeHtml(g.name)}<button type="button" class="chip-x" data-action="ag-remove-member"
+    ? `<span class="group-chip" title="${t('리더는 그룹에서 뺄 수 없습니다')}">${escapeHtml(g.name)}<span class="chip-leader">${t('리더')}</span></span>`
+    : `<span class="group-chip">${escapeHtml(g.name)}<button type="button" class="chip-x" data-action="ag-remove-member"
         data-group="${escapeHtml(g.id)}" data-user="${escapeHtml(p.user_id)}" data-name="${escapeHtml(profileName(p))}"
         aria-label="${t('{group}에서 빼기', { group: escapeHtml(g.name) })}">×</button></span>`).join('');
   return `
     <div class="member-groups">
       ${tags}
-      ${others.length ? `<select class="input input-small member-group-add" data-member-group-add="${escapeHtml(p.user_id)}" aria-label="${t('그룹에 추가')}">
+      ${others.length ? `<select class="chip-add member-group-add" data-member-group-add="${escapeHtml(p.user_id)}" aria-label="${t('그룹에 추가')}">
         <option value="">${groups.length ? t('+ 그룹 추가') : t('그룹 선택')}</option>
         ${others.map((g) => `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name)}</option>`).join('')}
       </select>` : ''}
@@ -6126,30 +6169,29 @@ function renderAdminGroup(g) {
   const open = adminState.openGroups.has(g.id);
 
   return `
-    <details class="panel admin-group" data-group="${escapeHtml(g.id)}" ${open ? 'open' : ''}>
+    <details class="panel progress-toggle admin-group" data-group="${escapeHtml(g.id)}" ${open ? 'open' : ''}>
       <summary>
-        <span class="admin-group-name">${escapeHtml(g.name)}</span>
-        <span class="muted">${t('리더 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })}</span>
-        <span class="muted">${t('멤버 {n}명', { n: members.length })}</span>
-        <span class="muted">${summarizeShared(items)}</span>
+        <span class="chev is-left" aria-hidden="true"></span>
+        <b class="toggle-name is-big">${escapeHtml(g.name)}</b>
+        <span class="toggle-meta">${t('리더 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })}</span>
+        <span class="toggle-meta">${t('멤버')} <b class="num-font is-ink">${t('{n}명', { n: members.length })}</b></span>
+        <span class="code-chip" title="${t('초대 코드')}">${escapeHtml(g.invite_code)}</span>
+        <span class="toggle-actions">
+          <button type="button" class="btn btn-small btn-outline" data-action="ag-rename" data-group="${escapeHtml(g.id)}">${t('이름 바꾸기')}</button>
+          <button type="button" class="btn btn-small btn-outline-muted is-danger" data-action="ag-delete" data-group="${escapeHtml(g.id)}">${t('그룹 삭제')}</button>
+        </span>
       </summary>
       ${open ? `
-      <div class="admin-group-body">
-        <div class="admin-group-actions">
-          <span class="muted small">${t('초대 코드')} <b class="invite-code-small">${escapeHtml(g.invite_code)}</b></span>
-          <button type="button" class="btn btn-small" data-action="ag-rename" data-group="${escapeHtml(g.id)}">${t('이름 바꾸기')}</button>
-          <button type="button" class="btn btn-small btn-danger" data-action="ag-delete" data-group="${escapeHtml(g.id)}">${t('그룹 삭제')}</button>
-        </div>
+      <div class="progress-toggle-body admin-group-body">
 
-        <h3 class="admin-group-sub">${t('멤버')}</h3>
-        <div class="group-form-row admin-group-add">
-          <select class="input" data-add-member="${escapeHtml(g.id)}">
-            <option value="">${t('회원을 골라 이 그룹에 추가')}</option>
-            ${candidates.map((p) => `<option value="${escapeHtml(p.user_id)}">${escapeHtml(p.name || '-')} (${escapeHtml(p.email)})</option>`).join('')}
-          </select>
-          <button type="button" class="btn btn-small" data-action="ag-add-member" data-group="${escapeHtml(g.id)}">${t('추가')}</button>
-        </div>
+        ${items.length ? groupItemsByKind(items).map(({ items: list }) => list.map((item) => renderGroupItemProgress(item, members, memberGoals,
+          `<button type="button" class="btn btn-small btn-outline-muted is-danger" data-action="ag-item-delete" data-item="${escapeHtml(item.id)}">${t('공유 취소')}</button>`,
+          (m, goal) => `#/admin/member/${m.user_id}/${goal.id}`)).join('')).join('')
+          : `<p class="muted small">${t('리더가 아직 필독서나 필수 시청을 정하지 않았습니다.')}</p>`}
+
+        <h3 class="admin-group-sub">${t('멤버')} <span class="num-font is-blue">${members.length}</span></h3>
         ${members.length ? `
+        <div class="table-scroll">
         <table class="admin-table">
           <thead><tr><th>${t('이름')}</th><th>${t('이메일')}</th><th>${t('참여일')}</th><th></th></tr></thead>
           <tbody>
@@ -6157,20 +6199,23 @@ function renderAdminGroup(g) {
               const row = adminState.groupMembers.find((x) => x.group_id === g.id && x.user_id === m.user_id);
               return `<tr>
                 <td>${escapeHtml(m.name || '-')}</td>
-                <td class="muted">${escapeHtml(m.email)}</td>
-                <td class="muted nowrap">${timestampToDate(row && row.joined_at)}</td>
-                <td class="num"><button type="button" class="btn btn-small btn-danger" data-action="ag-remove-member" data-group="${escapeHtml(g.id)}"
+                <td class="mono-cell">${escapeHtml(m.email)}</td>
+                <td class="mono-cell nowrap">${timestampToDate(row && row.joined_at)}</td>
+                <td class="num"><button type="button" class="btn btn-small btn-outline-muted is-danger" data-action="ag-remove-member" data-group="${escapeHtml(g.id)}"
                   data-user="${escapeHtml(m.user_id)}" data-name="${escapeHtml(profileName(m))}">${t('내보내기||member')}</button></td>
               </tr>`;
             }).join('')}
           </tbody>
-        </table>` : `<p class="muted small">${t('아직 참여한 멤버가 없습니다.')}</p>`}
-
-        ${items.length ? groupItemsByKind(items).map(({ kind, items: list }) => `<h3 class="admin-group-sub">${t(kind.label)} <span class="count">${list.length}</span></h3>`
-          + list.map((item) => renderGroupItemProgress(item, members, memberGoals,
-          `<button type="button" class="btn btn-small btn-danger" data-action="ag-item-delete" data-item="${escapeHtml(item.id)}">${t('공유 취소')}</button>`,
-          (m, goal) => `#/admin/member/${m.user_id}/${goal.id}`)).join('')).join('')
-          : `<p class="muted small">${t('리더가 아직 필독서나 필수 시청을 정하지 않았습니다.')}</p>`}
+        </table>
+        </div>` : `<p class="muted small">${t('아직 참여한 멤버가 없습니다.')}</p>`}
+        <div class="admin-group-add">
+          <span>${t('회원을 골라 이 그룹에 추가')}</span>
+          <select class="pill-select" data-add-member="${escapeHtml(g.id)}" aria-label="${t('회원을 골라 이 그룹에 추가')}">
+            <option value="">${t('회원 선택')}</option>
+            ${candidates.map((p) => `<option value="${escapeHtml(p.user_id)}">${escapeHtml(p.name || '-')} (${escapeHtml(p.email)})</option>`).join('')}
+          </select>
+          <button type="button" class="btn btn-small btn-dark" data-action="ag-add-member" data-group="${escapeHtml(g.id)}">${t('추가')}</button>
+        </div>
       </div>` : ''}
     </details>`;
 }
@@ -6298,11 +6343,19 @@ function bindAdminEvents(container, tab) {
   container.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
+    // 접는 줄(summary) 안의 버튼은 펼치기/접기를 하지 않는다
+    if (btn.closest('summary')) e.preventDefault();
     const action = btn.dataset.action;
     if (await handleAdminGroupAction(action, btn, container)) return;
     if (action === 'admin-basis') {
       adminState.viewBasis = btn.dataset.basis;
       render();
+      return;
+    }
+    if (action === 'summary-review') {
+      adminState.libraryFilter = 'pending';
+      adminState.editingBookId = null;
+      navigate('#/admin/books');
       return;
     }
     if (action === 'admin-refresh') {
@@ -6383,6 +6436,14 @@ function bindAdminEvents(container, tab) {
         refreshChapterEditor();
       });
       form.addEventListener('change', (e) => {
+        if (e.target.id === 'f-assign-on') {
+          // 배정 끄기: 고른 사람을 모두 풀고 목록을 숨긴다
+          const picker = form.querySelector('.assign-picker');
+          picker.hidden = !e.target.checked;
+          if (!e.target.checked) form.querySelectorAll('input[name="assign"]:checked').forEach((el) => { el.checked = false; });
+          form.querySelector('#assign-count').textContent = t('{n}명 선택', { n: form.querySelectorAll('input[name="assign"]:checked').length });
+          return;
+        }
         if (e.target.name === 'assign') {
           form.querySelector('#assign-count').textContent = t('{n}명 선택', { n: form.querySelectorAll('input[name="assign"]:checked').length });
         }
@@ -7453,33 +7514,37 @@ function renderGroupItemProgress(item, members, memberGoals, actionsHtml, linkFo
     return `
       <tr class="${s.isActive ? '' : 'is-finished-row'}">
         <td><a class="member-link" href="${escapeHtml(linkFor(m, goal))}">${escapeHtml(profileName(m))}</a></td>
-        <td class="muted">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
+        <td class="mono-cell">${formatShortDate(goal.startDate)} ~ ${formatShortDate(goal.dueDate)} · ${formatDday(s.dday)}</td>
         <td class="col-bar">
           <div class="mini-bar"><div class="compare-fill" style="width:${donePct}%"></div><div class="compare-marker" style="left:${targetPct}%"></div></div>
           <span class="mini-pct">${s.percent}%</span>
         </td>
         <td>${renderStatusBadge(s)}</td>
-        <td class="muted">${last ? formatShortDate(last) : '-'}</td>
+        <td class="muted">${relativeDay(last, today)}</td>
       </tr>`;
   }).join('');
   const plannedCount = members ? members.filter((m) => entries.some((x) => x.userId === m.user_id)).length : 0;
   return `
-    <section class="panel group-share">
+    <div class="group-share">
       <div class="group-item">
-        ${renderCoverThumb(item.coverUrl, 'sm')}
+        ${item.coverUrl ? renderCoverThumb(item.coverUrl, 'sm') : '<span class="cover cover-sm cover-blank"></span>'}
         <div class="group-item-main">
-          <div>${renderSharedTag(item.type)} <strong>${escapeHtml(item.title)}</strong></div>
-          <div class="muted small">${escapeHtml(describeShareContent(item))}${members ? ` · ${t('계획 세운 멤버 {n}/{total}명', { n: plannedCount, total: members.length })}` : ''}${
-            behind ? ` · <b class="text-danger">${t('밀림 {n}명', { n: behind })}</b>` : ''}</div>
+          <span class="type-tag ${sharedKindOf(item.type).key === 'lecture' ? 'is-blue' : ''}">${t(sharedKindOf(item.type).label)}</span>
+          <b class="group-item-title">${escapeHtml(item.title)}</b>
+          <span class="muted small">${escapeHtml(describeShareContent(item))}${behind ? ` · <b class="text-danger">${t('밀림 {n}명', { n: behind })}</b>` : ''}</span>
         </div>
-        <div class="group-item-side">${actionsHtml}</div>
+        ${members ? `<span class="toggle-meta">${t('계획 세운 멤버')} <b class="num-font is-ink">${plannedCount}/${members.length}</b></span>` : ''}
+        ${actionsHtml ? `<div class="group-item-side">${actionsHtml}</div>` : ''}
       </div>
       ${!members ? '' : members.length ? `
+      <div class="table-scroll">
       <table class="admin-table">
-        <thead><tr><th>${t('멤버')}</th><th>${t('기간')}</th><th class="col-bar">${t('진도')}</th><th>${t('상태')}</th><th>${t('마지막 기록')}</th></tr></thead>
+        <thead><tr><th>${t('이름')}</th><th>${t('기간')}</th><th class="col-bar">${t('진도')}</th><th>${t('상태')}</th><th>${t('마지막 기록')}</th></tr></thead>
         <tbody>${memberRows}</tbody>
-      </table>` : `<p class="muted small">${t('아직 참여한 멤버가 없습니다. 초대 링크를 보내 주세요.')}</p>`}
-    </section>`;
+      </table>
+      </div>
+      <p class="bar-legend"><i></i>${t('세로선 = 오늘까지 권장 위치')}</p>` : `<p class="muted small">${t('아직 참여한 멤버가 없습니다. 초대 링크를 보내 주세요.')}</p>`}
+    </div>`;
 }
 
 /** 공유할 내 목표 목록 (이름으로 거르기) */
@@ -8216,7 +8281,7 @@ const EN = {
   '진도': 'Progress',
   '상태': 'Status',
   '아직 계획을 세우지 않았습니다': 'No plan yet',
-  '진도 막대: 초록 = 실제 진도, 검정 선 = 오늘까지 권장 · 각자 정한 기간 기준입니다.': "Progress bar: green = actual progress, black line = target by today · Based on each person's own period.",
+  '진도 막대: 파랑 = 실제 진도, 검정 선 = 오늘까지 권장 · 각자 정한 기간 기준입니다.': "Progress bar: blue = actual progress, black line = target by today · Based on each person's own period.",
   '아직 목표를 만든 회원이 없습니다.': 'No members have created goals yet.',
   '우리 팀': 'Team',
   '목표 {n}개 · 진행 중 {active}개': (p) => `${plural(p.n, 'goal')} · ${p.active} in progress`,
@@ -8616,6 +8681,23 @@ const EN = {
   '밀림': 'Behind',
   '앞섬': 'Ahead',
   '진행률': 'Progress',
+  // 관리자 화면 새 디자인
+  '회원·그룹·도서관을 관리해요.': 'Manage members, groups and the library.',
+  '오늘도 다들 잘하고 있어요': 'Everyone’s doing great today',
+  '오늘 밀린 목표': 'GOALS BEHIND TODAY',
+  '도서관 검토 대기': 'LIBRARY REVIEW',
+  '{n}권': (p) => `${p.n}`,
+  '그룹별 진도': 'Progress by group',
+  '그룹과 상관없이 회원이 스스로 세운 목표예요.': 'Goals members set for themselves, outside any group.',
+  '계획 세운 멤버': 'Planned',
+  '세로선 = 오늘까지 권장 위치': 'Line = where they should be by today',
+  '검토 중': 'In review',
+  '고른 사람에게만 보여요': 'Only people you pick',
+  '보이는 대상': 'Visible to',
+  '계획': 'Plans',
+  '표지': 'Cover',
+  '배정 {n}명': (p) => `Assigned ${p.n}`,
+  '회원 선택': 'Pick a member',
 };
 
 /* =========================================================================
