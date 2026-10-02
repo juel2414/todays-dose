@@ -1323,8 +1323,9 @@ function inputFromRequiredBook(goal, book) {
   };
 }
 
-/** 필독서로 만든 목표의 표지 이미지 주소 (없으면 null) */
+/** 목표의 표지 이미지 주소: 직접 올린 표지 → 도서관 책 → 그룹 항목 (없으면 null) */
 function getCoverUrl(goal) {
+  if (goal.coverUrl) return goal.coverUrl; // 내가 직접 올린 표지
   const book = goal.requiredBookId ? requiredBooks.find((b) => b.id === goal.requiredBookId) : null;
   if (book && book.coverUrl) return book.coverUrl;
   const item = groupItemForGoal(goal);
@@ -1892,6 +1893,9 @@ function checkGoalShape(goal, index) {
   if ((goal.groupId !== undefined && (typeof goal.groupId !== 'string' || !/^[\w-]{1,64}$/.test(goal.groupId)))
     || (goal.groupItemId !== undefined && (typeof goal.groupItemId !== 'string' || !/^[\w-]{1,64}$/.test(goal.groupItemId)))) {
     return fail('그룹 연결 정보가 올바르지 않습니다.');
+  }
+  if (goal.coverUrl !== undefined && (typeof goal.coverUrl !== 'string' || !/^https:\/\/\S{1,500}$/.test(goal.coverUrl))) {
+    return fail('표지 주소가 올바르지 않습니다.');
   }
   if (goal.extraDates !== undefined && (!Array.isArray(goal.extraDates)
     || !goal.extraDates.every((x) => x && isValidDateStr(x.date) && EXTRA_WEIGHTS.includes(x.weight)))) {
@@ -3189,6 +3193,88 @@ function syncLectureSource() {
   area.dataset.synced = area.value;
 }
 
+/* ----- 책 표지 (새 목표 · 더 정하기). 고르면 바로 올리고, 저장할 때 목표에 주소를 넣는다 ----- */
+
+const gfCover = { url: null, busy: false };
+
+/** 표지 사진을 줄여서(긴 변 800px JPEG) 내 폴더(users/<내 id>/)에 올리고 공개 주소를 돌려준다 */
+async function uploadMyCover(file) {
+  const base64 = await imageFileToJpegBase64(file, 800);
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  const path = `users/${currentUser.id}/${crypto.randomUUID()}.jpg`;
+  const sb = getSupabase();
+  const { error } = await sb.storage.from(COVERS_BUCKET).upload(path, new Blob([bytes], { type: 'image/jpeg' }), { contentType: 'image/jpeg', upsert: false });
+  if (error) throw error;
+  return sb.storage.from(COVERS_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
+/** 내가 올린 표지 파일 지우기 (다른 사람·도서관 표지는 건드리지 않음, 실패해도 무시) */
+async function removeMyCover(url) {
+  if (!url || !currentUser) return;
+  const marker = `/${COVERS_BUCKET}/users/${currentUser.id}/`;
+  if (!url.includes(marker)) return;
+  const path = url.slice(url.indexOf(`/${COVERS_BUCKET}/`) + COVERS_BUCKET.length + 2);
+  const { error } = await getSupabase().storage.from(COVERS_BUCKET).remove([path]);
+  if (error) console.warn('[cover] 표지 삭제 실패:', error);
+}
+
+function renderGfCover(lockedCover) {
+  if (lockedCover !== undefined) {
+    return lockedCover
+      ? `${renderCoverThumb(lockedCover, 'sm')}<span class="gf-hint">${t('공유받은 책의 표지를 써요')}</span>`
+      : `<span class="gf-hint">${t('공유받은 책이라 표지를 바꿀 수 없어요')}</span>`;
+  }
+  const url = gfCover.url;
+  return `
+    <span class="gf-cover-thumb ${url ? '' : 'is-empty'}">${url ? `<img src="${escapeHtml(url)}" alt="${t('책 표지')}">` : t('표지')}</span>
+    <span class="gf-cover-actions">
+      <label class="btn btn-small btn-outline ${gfCover.busy ? 'is-busy' : ''}">
+        ${gfCover.busy ? t('올리는 중…') : url ? t('다른 사진으로') : t('표지 사진 올리기')}
+        <input type="file" id="f-cover" accept="image/*" hidden ${gfCover.busy ? 'disabled' : ''}>
+      </label>
+      ${url && !gfCover.busy ? `<button type="button" class="link-btn" data-action="cover-remove">${t('표지 빼기')}</button>` : ''}
+      <span class="gf-hint">${t('대시보드와 목표 화면에 보여요 (선택)')}</span>
+    </span>`;
+}
+
+function bindGfCover(form) {
+  const box = form.querySelector('#gf-cover');
+  if (!box || box.dataset.locked) return;
+  const redraw = () => { box.innerHTML = renderGfCover(); };
+  box.addEventListener('change', async (e) => {
+    if (e.target.id !== 'f-cover') return;
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    gfCover.busy = true;
+    redraw();
+    try {
+      gfCover.url = await uploadMyCover(file);
+    } catch (err) {
+      console.warn('[cover] 표지 올리기 실패:', err);
+      alert(t('표지를 올리지 못했어요. 3MB 이하의 JPG·PNG 사진으로 다시 시도해 주세요.'));
+    }
+    gfCover.busy = false;
+    redraw();
+  });
+  box.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-action="cover-remove"]')) return;
+    gfCover.url = null;
+    redraw();
+  });
+}
+
+/** 저장할 때 목표에 표지 주소를 넣고, 바뀌었으면 예전 내 표지 파일은 지운다. 바뀌었으면 true */
+function applyGfCover(goal) {
+  if (goal.type !== 'book' || goal.requiredBookId || goal.groupItemId) return false;
+  const next = gfCover.url || null;
+  const prev = goal.coverUrl || null;
+  if (next === prev) return false;
+  if (next) goal.coverUrl = next;
+  else delete goal.coverUrl;
+  if (prev) removeMyCover(prev);
+  return true;
+}
+
 /** 언어를 바꿀 때 입력 중이던 목표 폼 값 (다시 그린 폼에 한 번 채운다) */
 let langFormDraft = null;
 
@@ -3212,6 +3298,7 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
     if (existing) { navigate(`#/goal/${existing.id}`); return; }
   }
   const locked = !!requiredBook || !!groupItem;
+  if (!langDraft) { gfCover.url = goal && goal.coverUrl ? goal.coverUrl : null; gfCover.busy = false; }
   const type = goal ? goal.type : groupItem ? groupItem.type : (langDraft && langDraft.type) || 'book';
   const started = isEdit && hasGoalStarted(goal);
   // 미리보기에서 "수정으로 돌아가기"를 누르면 입력하던 값(draft)으로 다시 채운다
@@ -3405,6 +3492,10 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
               ${isEdit ? '' : `<input id="f-read-page" type="number" min="1" class="gf-input" data-nav value="${v.readPage ? escapeHtml(v.readPage) : ''}" placeholder="${t('마지막으로 읽은 페이지 (선택)')}" aria-label="${t('마지막으로 읽은 페이지')}">`}
             </div>
             ${isEdit ? '' : `<span id="f-read-hint" class="gf-hint" data-section="book-more"></span>`}
+            <div class="gf-more-line" data-section="book-more">
+              <span class="gf-sub-label">${t('표지')}</span>
+              <div class="gf-cover" id="gf-cover" ${locked ? 'data-locked="1"' : ''}>${locked ? renderGfCover((requiredBook && requiredBook.coverUrl) || (groupItem && groupItem.coverUrl) || null) : renderGfCover()}</div>
+            </div>
             <div class="gf-more-line">
               <span class="gf-sub-label">${t('쉬는 날짜')}</span>
               <div class="gf-field">
@@ -3534,6 +3625,7 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
   });
   bindChapterEditor(form, updateFormView);
   bindLectureSelect(form, updateFormView);
+  bindGfCover(form);
   bindLectureAi(form, updateFormView);
   bindLibraryPicker(form);
   form.addEventListener('click', (e) => {
@@ -4785,7 +4877,7 @@ function updateFormSummary(input, info) {
   const sub = document.getElementById('gf-more-sub');
   if (sub) {
     const n = (input.restDates || []).length + (input.extraDates || []).length;
-    sub.textContent = (isBook ? t('저자 · 읽은 페이지 · 쉬는 날짜 · 여유 있는 날짜') : t('쉬는 날짜 · 여유 있는 날짜')) + (n ? ` · ${t('{n}개 정함', { n })}` : '');
+    sub.textContent = (isBook ? t('저자 · 읽은 페이지 · 표지 · 쉬는 날짜 · 여유 있는 날짜') : t('쉬는 날짜 · 여유 있는 날짜')) + (n ? ` · ${t('{n}개 정함', { n })}` : '');
   }
 }
 
@@ -4803,10 +4895,13 @@ function submitGoalForm(goal, requiredBookId = null, groupItemId = null) {
     return;
   }
   box.hidden = true;
+  if (gfCover.busy) { alert(t('표지를 올리는 중이에요. 잠시 후 다시 눌러 주세요.')); return; }
 
   if (goal) {
+    const coverChanged = applyGfCover(goal);
     if (hasGoalStarted(goal) && isPlanAffectingEdit(goal, input)) {
-      // 진행 중인 목표의 계획이 바뀌는 수정 → 상세 화면에서 미리보기 후 적용
+      // 진행 중인 목표의 계획이 바뀌는 수정 → 상세 화면에서 미리보기 후 적용 (표지는 바로 저장)
+      if (coverChanged) commit();
       openPreview(goal, { kind: 'edit', input });
     } else {
       applyGoalEdit(goal, input);
@@ -4817,6 +4912,7 @@ function submitGoalForm(goal, requiredBookId = null, groupItemId = null) {
     const created = createGoalFromInput(input, requiredBookId);
     const groupItem = groupItemId ? groupItems.find((i) => i.id === groupItemId) : null;
     if (groupItem) linkGoalToGroupItem(created, groupItem);
+    applyGfCover(created);
     appData.goals.push(created);
     commit();
     // 도서관에 없는 책이면 관리자 검토를 위해 도서관에 제출 (실패해도 목표는 그대로). 그룹에서 받은 책은 제외
@@ -5745,6 +5841,7 @@ function bindDetailEvents(container, goal) {
       if (confirm(t("'{title}' 목표를 삭제할까요?\n진도 기록과 계획이 모두 지워지며 되돌릴 수 없습니다.", { title: goal.title }))) {
         removeGoal(appData, goal.id);
         commit();
+        removeMyCover(goal.coverUrl);
         navigate('#/');
       }
     }
@@ -9331,6 +9428,18 @@ const EN = {
   '챕터 선택': 'Select chapter',
   '선택한 챕터 {n}개를 지울까요?': 'Delete {n} selected chapters?',
   '{n}개 선택': '{n} selected',
+  '표지': 'Cover',
+  '표지 주소가 올바르지 않습니다.': 'The cover address is invalid.',
+  '책 표지': 'Book cover',
+  '올리는 중…': 'Uploading…',
+  '다른 사진으로': 'Change photo',
+  '표지 사진 올리기': 'Upload cover photo',
+  '표지 빼기': 'Remove cover',
+  '대시보드와 목표 화면에 보여요 (선택)': 'Shown on your dashboard and goal page (optional)',
+  '공유받은 책의 표지를 써요': 'Uses the shared book’s cover',
+  '공유받은 책이라 표지를 바꿀 수 없어요': 'This is a shared book, so the cover can’t be changed',
+  '표지를 올리지 못했어요. 3MB 이하의 JPG·PNG 사진으로 다시 시도해 주세요.': 'Couldn’t upload the cover. Try a JPG or PNG photo under 3 MB.',
+  '표지를 올리는 중이에요. 잠시 후 다시 눌러 주세요.': 'The cover is still uploading. Please try again in a moment.',
   '강의 선택': 'Select lecture',
   '강의 모두 선택': 'Select all lectures',
   '선택한 강의 {n}개를 지울까요?': 'Delete {n} selected lectures?',
@@ -9414,6 +9523,7 @@ const EN = {
   '보이는 대상': 'Visible to',
   '계획': 'Plans',
   '표지': 'Cover',
+  '표지 주소가 올바르지 않습니다.': 'The cover address is invalid.',
   '회원 선택': 'Pick a member',
   // 이미지 내보내기 새 디자인
   '{name} 님의 진도 보고 · {date}': (p) => `${p.name}’s progress · ${p.date}`,
@@ -9465,7 +9575,7 @@ const EN = {
   '전체 개수를 입력해 주세요': 'Enter the total',
   '빠진 것 {n}개': (p) => `${p.n} missing`,
   '준비됐어요': 'Ready',
-  '저자 · 읽은 페이지 · 쉬는 날짜 · 여유 있는 날짜': 'author · pages read · days off · lighter days',
+  '저자 · 읽은 페이지 · 표지 · 쉬는 날짜 · 여유 있는 날짜': 'author · pages read · cover · days off · lighter days',
   '쉬는 날짜 · 여유 있는 날짜': 'days off · lighter days',
   '{n}개 정함': (p) => `${p.n} set`,
 };
