@@ -201,6 +201,7 @@ function renderLanding(root, options) {
         <div class="lp-big-wordmark" aria-hidden="true">
           <span class="lp-big-today">Today<span class="lp-apos">’</span>s</span>
           <span class="lp-big-dose">D${LP_BIG_O}se</span>
+          <img class="lp-hero-mini" src="${LP_ASSETS.hero}" alt="">
         </div>
 
         <div class="lp-hero-row">
@@ -242,8 +243,8 @@ function renderLanding(root, options) {
           <p class="lp-calc-sentence">
             <input type="number" min="0" class="lp-num lp-num-wide" data-lp-amount value="600" aria-label="${E(T.s1)}">${E(T.s1)}
             <input type="number" min="0" max="52" class="lp-num" data-lp-weeks value="6" aria-label="${E(T.s2)}">${E(T.s2)}
-            <span class="lp-days">${T.days.map((d, i) => `<button type="button" class="lp-day ${i === 6 ? 'is-rest' : ''}" data-lp-day="${i}" aria-pressed="${i === 6}">${E(d)}</button>`).join('')}</span>
-            ${E(T.s3)}
+            <span class="lp-days-line"><span class="lp-days">${T.days.map((d, i) => `<button type="button" class="lp-day ${i === 6 ? 'is-rest' : ''}" data-lp-day="${i}" aria-pressed="${i === 6}">${E(d)}</button>`).join('')}</span>
+            <span class="lp-days-tail">${E(T.s3)}</span></span>
           </p>
           <div class="lp-calc-result">
             <span>${E(T.r1)}</span><span class="lp-per-day" data-lp-perday>17</span><span>${E(T.r2)}</span>
