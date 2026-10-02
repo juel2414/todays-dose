@@ -2172,3 +2172,62 @@ tr.is-today .check-mark { color: #fff; }
 .gf-sum-big { font-size: 38px; white-space: nowrap; }
 .lec-row { grid-template-columns: 28px minmax(0, 1fr) 200px 28px; }
 .lec-time-box { white-space: nowrap; }
+
+/* =========================================================================
+ * 대시보드 등장 효과 — 화면에 처음 들어올 때만 (.dash-enter, app.js playDashEnter)
+ * ========================================================================= */
+@keyframes dashRise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+@keyframes dashCut { from { clip-path: inset(0 0 100% 0); transform: translateY(40%); } to { clip-path: inset(-10% -5% -20% -5%); transform: none; } }
+@keyframes dashFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dashWrite { from { clip-path: inset(-20% 100% -20% -10%); } to { clip-path: inset(-20% -10% -20% -10%); } }
+@keyframes dashPop { 0% { opacity: 0; transform: scale(.6); } 60% { opacity: 1; transform: scale(1.06); } 100% { transform: none; } }
+@keyframes dashSlide { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+@keyframes dashCircle { from { transform: scale(0); } 70% { transform: scale(1.12); } to { transform: none; } }
+@keyframes dashFill { from { width: 0; } }
+@keyframes dashFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes dashIllus { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
+
+.dash-enter .dash-date { animation: dashFade .5s ease both; }
+.dash-enter .dash-title h1 { animation: dashCut .8s cubic-bezier(.2, .8, .2, 1) .05s both; }
+.dash-enter .dash-greet { animation: dashRise .6s cubic-bezier(.2, .8, .2, 1) .25s both; }
+.dash-enter .dash-head-actions .hand-note { animation: dashWrite .7s cubic-bezier(.65, 0, .35, 1) .9s both; }
+.dash-enter .dash-head-actions .btn { animation: dashPop .55s cubic-bezier(.3, 1.4, .5, 1) .35s both; }
+
+.dash-enter .dash-today { animation: dashRise .7s cubic-bezier(.2, .8, .2, 1) .3s both; }
+.dash-enter .today-item { animation: dashSlide .5s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(.5s + var(--di, 0) * .08s); }
+.dash-enter .today-check-btn { animation: dashCircle .45s cubic-bezier(.3, 1.5, .5, 1) both; animation-delay: calc(.65s + var(--di, 0) * .08s); }
+.dash-enter .dash-aside > * { animation: dashRise .7s cubic-bezier(.2, .8, .2, 1) .42s both; }
+.dash-enter .dash-illust { animation-delay: .5s; }
+.dash-enter .dash-illust img { animation: dashIllus 1s cubic-bezier(.2, .8, .2, 1) .7s both; }
+
+.dash-enter .dash-progress h2 { animation: dashRise .6s cubic-bezier(.2, .8, .2, 1) .6s both; }
+.dash-enter .goal-card { animation: dashRise .6s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(.7s + var(--di, 0) * .07s); }
+.dash-enter .goal-card .progress-fill { animation: dashFill 1.1s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(1.05s + var(--di, 0) * .07s); }
+
+.dash-enter .dash-empty > * { animation: dashRise .7s cubic-bezier(.2, .8, .2, 1) both; }
+.dash-enter .dash-empty > :nth-child(2) { animation-delay: .15s; }
+.dash-enter .dash-empty > :nth-child(3) { animation-delay: .25s; }
+.dash-enter .dash-empty > :nth-child(4) { animation-delay: .35s; }
+
+/* 그림은 늘 천천히 둥실 */
+.dash-illust img { animation: dashFloat 6s ease-in-out 2s infinite; }
+
+/* 카드에 마우스를 올리면 살짝 떠오르기 */
+.goal-card { transition: box-shadow .15s, transform .25s cubic-bezier(.2, .8, .2, 1); }
+.goal-card:hover { transform: translateY(-3px); }
+.today-check-btn { transition: background .15s, transform .2s cubic-bezier(.3, 1.5, .5, 1); }
+.today-check-btn:hover { transform: scale(1.08); }
+.today-check-btn:active { transform: scale(.9); }
+
+/* 방금 체크한 줄: 동그라미가 톡, 취소선이 그어짐 */
+@keyframes dashCheck { 0% { transform: scale(.5); } 55% { transform: scale(1.25); } 100% { transform: none; } }
+@keyframes dashStrike { from { background-size: 0% 2px; } to { background-size: 100% 2px; } }
+@keyframes dashRing { from { box-shadow: 0 0 0 0 rgba(20, 20, 20, .35); } to { box-shadow: 0 0 0 12px rgba(20, 20, 20, 0); } }
+.today-item.is-just .today-check-btn { animation: dashCheck .45s cubic-bezier(.3, 1.5, .5, 1), dashRing .6s ease-out; }
+.today-item.is-just .today-range-main { text-decoration: none; background: linear-gradient(currentColor, currentColor) no-repeat 0 55% / 100% 2px; animation: dashStrike .45s cubic-bezier(.65, 0, .35, 1) .1s both; }
+.today-item.is-just .today-side .today-done, .today-item.is-just .today-side .hand-note { animation: dashFade .4s ease .25s both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dash-illust img, .today-item.is-just * { animation: none !important; }
+  .goal-card:hover { transform: none; }
+}

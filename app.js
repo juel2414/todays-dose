@@ -2579,7 +2579,10 @@ function render() {
   else if (route.view === 'join') renderJoinGroup(root, route.code);
   else if (route.view === 'group') renderGroupPage(root, route);
   else if (route.view === 'detail') renderGoalDetail(root, goal);
-  else renderDashboard(root);
+  else {
+    renderDashboard(root);
+    playDashEnter(root);
+  }
   renderTopbar();
   window.scrollTo(0, 0);
 }
@@ -2784,10 +2787,23 @@ function renderDashboard(root) {
       applyRowCheck(goal, s.basis, row, !done);
       commit();
       const y = window.scrollY;
+      dashState.justChecked = done ? null : goal.id;
       renderDashboard(root);
+      dashState.justChecked = null;
       window.scrollTo(0, y);
     }
   });
+}
+
+/** 대시보드에 처음 들어올 때만 등장 효과 (체크·펼치기로 다시 그릴 때는 없음) */
+function playDashEnter(root) {
+  const dash = root.querySelector('.dash');
+  if (!dash || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) return;
+  const order = (sel) => dash.querySelectorAll(sel).forEach((el, i) => el.style.setProperty('--di', i));
+  order('.today-item');
+  order('.goal-card');
+  dash.classList.add('dash-enter');
+  setTimeout(() => dash.classList.remove('dash-enter'), 2600);
 }
 
 /** 오늘 할 분량 한 줄 */
@@ -2795,7 +2811,7 @@ function renderTodayItem(x) {
   const { goal, s, done } = x;
   const groupName = goal.groupId ? groupNameOf(goal.groupId) : '';
   return `
-    <div class="today-item ${done ? 'is-done' : ''}">
+    <div class="today-item ${done ? 'is-done' : ''} ${done && dashState.justChecked === goal.id ? 'is-just' : ''}">
       <button type="button" class="today-check-btn" data-action="today-check" data-goal-id="${escapeHtml(goal.id)}"
         aria-pressed="${done}" aria-label="${done ? t('오늘 분량 완료 취소') : t('오늘 분량 완료')}">${done ? '✓' : ''}</button>
       <div class="today-body">
