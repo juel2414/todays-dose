@@ -107,7 +107,7 @@ body.is-landing #app { max-width: none; padding: 0; }
 .lp-new-steps { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
 .lp-new-step { display: flex; align-items: baseline; gap: 16px; padding: 10px 0; color: var(--light); }
 .lp-new-step .lp-serif-num { font-size: 44px; line-height: 1; width: 32px; }
-.lp-new-step > span:last-child { font-size: 36px; font-weight: 600; letter-spacing: -0.04em; }
+.lp-new-label { font-size: 36px; font-weight: 600; letter-spacing: -0.04em; }
 .lp-new-step.is-last { color: var(--blue); }
 
 /* 3. 계산기 */
@@ -168,7 +168,7 @@ body.is-landing #app { max-width: none; padding: 0; }
 .lp-apply { align-self: flex-start; padding: 10px 18px; border-radius: 99px; background: var(--ink); color: #fff; font-size: 14px; font-weight: 600; }
 
 /* 5. 이런 분들 */
-.lp-who { padding: 80px 56px 150px; display: flex; flex-direction: column; gap: 56px; }
+.lp-who { padding: 80px 56px 120px; display: flex; flex-direction: column; gap: 56px; }
 .lp-who-sentence { margin: 0; font-size: 64px; line-height: 1.75; font-weight: 600; letter-spacing: -0.05em; text-wrap: pretty; }
 .lp-pill { display: inline-block; vertical-align: middle; width: 136px; height: 88px; border-radius: 999px; background: #fff; overflow: hidden; margin: 0 10px 0 4px; }
 .lp-pill img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 30%; }
@@ -177,7 +177,7 @@ body.is-landing #app { max-width: none; padding: 0; }
 .lp-who-item { padding: 20px 20px 0 0; display: flex; flex-direction: column; gap: 8px; border-right: 1px solid var(--line); margin-right: 20px; }
 .lp-who-item:last-child { border-right: 0; margin-right: 0; }
 .lp-who-item b { font-size: 17px; }
-.lp-who-item span:not(.lp-serif-tag) { font-size: 14px; line-height: 1.5; color: var(--sub); }
+.lp-who-item > span:not(.lp-serif-tag) { font-size: 14px; line-height: 1.5; color: var(--sub); }
 .lp-serif-tag { font-size: 30px; line-height: 1.1; }
 
 /* 6. 만든 이유 · 자주 묻는 질문 */
@@ -275,7 +275,7 @@ body.is-landing #app { max-width: none; padding: 0; }
   .lp-new-steps { flex: none; }
   .lp-new-step { gap: 8px; padding: 6px 0; }
   .lp-new-step .lp-serif-num { font-size: 24px; width: 14px; }
-  .lp-new-step > span:last-child { font-size: 19px; line-height: 1.2; white-space: nowrap; }
+  .lp-new-label { font-size: 19px; line-height: 1.2; white-space: nowrap; }
 
   .lp-calc { margin: 0 12px; border-radius: 28px; display: flex; flex-direction: column; }
   .lp-calc-main { padding: 40px 20px 32px; gap: 28px; }
@@ -326,7 +326,7 @@ body.is-landing #app { max-width: none; padding: 0; }
   .lp-who-grid { grid-template-columns: 1fr 1fr; gap: 0; }
   .lp-who-item { padding: 16px 12px 16px 0; gap: 6px; border-right: 0; margin-right: 0; border-bottom: 1px solid var(--line); }
   .lp-who-item b { font-size: 15px; }
-  .lp-who-item span:not(.lp-serif-tag) { font-size: 13px; line-height: 1.45; }
+  .lp-who-item > span:not(.lp-serif-tag) { font-size: 13px; line-height: 1.45; }
   .lp-serif-tag { font-size: 24px; }
 
   .lp-faq { display: flex; flex-direction: column; align-items: stretch; padding: 72px 20px; gap: 48px; }
@@ -588,3 +588,54 @@ body.is-landing #app { max-width: none; padding: 0; }
 .lp-sfx .lp-rm-word { align-self: flex-start; justify-self: start; width: fit-content; }
 .lp-sfx .lp-accent { background-image: linear-gradient(transparent 64%, rgba(59, 91, 165, .14) 64%); }
 @media (max-width: 760px) { .lp-sfx .lp-rm-right .lp-rm-word { align-self: flex-end; } }
+
+/* =========================================================================
+ * 예전 방식 vs 오늘분량 — "3단계면 끝"이 한눈에 보이게
+ * ========================================================================= */
+.lp-old-foot { margin-top: 6px; font: 500 12px var(--mono); letter-spacing: .04em; color: var(--faint); }
+.lp-new { padding: 32px 32px 28px; }
+.lp-new-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.lp-new-time { font-size: 12px; font-weight: 600; color: var(--ink); background: var(--light); border-radius: 999px; padding: 6px 12px; white-space: nowrap; }
+.lp-new-steps { position: relative; gap: 0; }
+.lp-new-steps::before { content: ""; position: absolute; left: 15px; top: 40px; bottom: 40px; border-left: 1.5px dashed rgba(242, 242, 239, .25); }
+.lp-new-step { position: relative; align-items: center; padding: 18px 0; }
+.lp-new-step .lp-serif-num { text-align: center; background: var(--ink); padding: 4px 0; }
+.lp-new-label { flex: 1; min-width: 0; font-size: 36px; font-weight: 600; letter-spacing: -0.04em; }
+.lp-new-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; color: #cfcfcb; border: 1px solid rgba(242, 242, 239, .2); border-radius: 999px; padding: 7px 12px; white-space: nowrap; }
+.lp-new-step.is-last .lp-new-chip { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600; }
+.lp-new-chip i { font-style: normal; font-size: 12px; }
+.lp-new-foot { margin: 0; padding-top: 18px; border-top: 1px solid rgba(242, 242, 239, .14); font-size: 14px; line-height: 1.5; color: #a9a9a6; }
+
+/* 이런 분들 — 칸마다 '오늘 할 것' 미리보기 */
+.lp-who-today { margin-top: 18px; display: flex; flex-direction: column; gap: 8px; }
+.lp-who-bar { height: 6px; border-radius: 6px; background: rgba(20, 20, 20, .1); overflow: hidden; }
+.lp-who-bar i { display: block; height: 100%; width: var(--w); border-radius: 6px; background: var(--blue); }
+.lp-who-meta { display: flex; justify-content: space-between; font: 500 11px var(--mono); color: var(--faint); }
+.lp-who-check { margin-top: 6px; display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; background: #f3f3f1; border-radius: 12px; padding: 12px; }
+.lp-who-check .lp-check { background: var(--blue); border-color: var(--blue); position: relative; }
+.lp-who-check .lp-check::after { content: ""; position: absolute; left: 5px; top: 1.5px; width: 4px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.lp-who-check em { font-style: normal; font: 500 11px var(--mono); color: var(--faint); }
+
+@media (max-width: 760px) {
+  .lp-old-foot { font-size: 10px; letter-spacing: 0; }
+  .lp-new { padding: 16px 14px; }
+  .lp-new-head { flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 4px; }
+  .lp-new-time { font-size: 10px; padding: 4px 8px; }
+  .lp-new-steps::before { left: 6px; top: 26px; bottom: 26px; }
+  .lp-new-step { padding: 8px 0; }
+  .lp-new-label { font-size: 19px; line-height: 1.2; white-space: nowrap; }
+  .lp-new-chip { display: none; }
+  .lp-new-foot { font-size: 11px; padding-top: 10px; }
+  .lp-who-today { margin-top: 10px; gap: 6px; }
+  .lp-who-check { font-size: 12px; padding: 9px; gap: 6px; flex-wrap: wrap; }
+}
+
+/* 등장 효과: 칩이 톡, 진도 막대가 차오르고, 오늘 체크 */
+.lp-sfx .lp-new-chip { opacity: 0; transform: translateX(-10px) scale(.9); transition: opacity .4s ease, transform .5s cubic-bezier(.3, 1.6, .5, 1); transition-delay: calc(1.9s + var(--ri) * .22s); }
+.lp-sfx .lp-why.is-seen .lp-new-chip { opacity: 1; transform: none; }
+.lp-sfx .lp-new-foot, .lp-sfx .lp-old-foot { opacity: 0; transition: opacity .7s ease 2.6s; }
+.lp-sfx .lp-why.is-seen .lp-new-foot, .lp-sfx .lp-why.is-seen .lp-old-foot { opacity: 1; }
+.lp-sfx .lp-who-bar i { width: 0; transition: width 1.1s var(--ease-out); transition-delay: calc(1.3s + var(--ri) * .12s); }
+.lp-sfx .lp-who.is-seen .lp-who-bar i { width: var(--w); }
+.lp-sfx .lp-who-check .lp-check { transform: scale(0); transition: transform .45s cubic-bezier(.3, 1.8, .5, 1); transition-delay: calc(2s + var(--ri) * .12s); }
+.lp-sfx .lp-who.is-seen .lp-who-check .lp-check { transform: none; }

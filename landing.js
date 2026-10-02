@@ -20,6 +20,10 @@ const LANDING_TEXT = {
     oldSteps: ['목차를 펼쳐 전체 페이지 세기', '마감일까지 남은 날 세기', '쉬는 날 빼고 하루 분량 나누기', '달력에 날짜별로 옮겨 적기', '하루 밀리면 처음부터 다시'],
     newLabel: '오늘분량',
     newSteps: ['목표 만들기', '마감일', '끝'],
+    oldCount: '5단계', oldFoot: '목표마다, 밀릴 때마다 처음부터 다시',
+    newCount: '3단계', newTime: '1분이면 충분해요',
+    newChips: ['토익 RC · 600쪽', '10월 14일', '오늘 17쪽'],
+    newFoot: '세고, 나누고, 옮겨 적는 건 오늘분량이 해요.',
     calcEyebrow: '직접 넣어 보세요',
     calcTitle: '마감일만 정하면, 하루 분량은 계산해 드려요',
     s1: '쪽을', s2: '주 동안,', s3: '은 쉬면서.',
@@ -41,6 +45,8 @@ const LANDING_TEXT = {
     whoTitle: '이런 분들이 써요',
     whoPhrases: ['시험을 준비하는 사람도,', '인강을 끝까지 듣고 싶은 사람도,', '모임 필독서를 함께 읽는 사람도,', '성경을 통독하는 사람도'],
     whoEnd: '오늘 분량만 따라가면 돼요.',
+    whoToday: '오늘',
+    personaToday: [['p.205–221', 34, 'D-28'], ['37–39강', 43, 'D-16'], ['p.139–161', 43, 'D-8'], ['마태복음 14–16장', 5, 'D-86']],
     personas: [
       ['시험 준비', '토익 RC 600쪽을 6주 동안, 일요일은 쉬면서', '하루 17쪽', '손그림: 시험공부하는 사람'],
       ['인강 완강', '온라인 강의 84강을 4주 동안', '하루 3강', '손그림: 노트북으로 강의 듣는 사람'],
@@ -75,6 +81,10 @@ const LANDING_TEXT = {
     oldSteps: ['Count the pages in the contents', 'Count the days to the deadline', 'Divide it up, minus days off', 'Copy it day by day into a calendar', 'Miss a day, start over'],
     newLabel: 'Today’s Dose',
     newSteps: ['Add a goal', 'Set a deadline', 'Done'],
+    oldCount: '5 steps', oldFoot: 'Every goal, every slip — start over',
+    newCount: '3 steps', newTime: 'Takes a minute',
+    newChips: ['TOEIC RC · 600 p', 'Oct 14', '17 p today'],
+    newFoot: 'Counting, splitting, copying — we do it.',
     calcEyebrow: 'Try it',
     calcTitle: 'Set a deadline. We’ll work out each day’s dose.',
     s1: 'pages over', s2: 'weeks, with', s3: 'off.',
@@ -96,6 +106,8 @@ const LANDING_TEXT = {
     whoTitle: 'Who it’s for',
     whoPhrases: ['Studying for an exam,', 'finishing an online course,', 'reading for a book club,', 'reading through the Bible —'],
     whoEnd: 'just follow today’s dose.',
+    whoToday: 'Today',
+    personaToday: [['p.205–221', 34, 'D-28'], ['Lectures 37–39', 43, 'D-16'], ['p.139–161', 43, 'D-8'], ['Matthew 14–16', 5, 'D-86']],
     personas: [
       ['Exam prep', 'TOEIC Reading, 600 pages in 6 weeks, Sundays off', '17 pages a day', 'Sketch: person studying for an exam'],
       ['Online course', '84 lectures in 4 weeks', '3 lectures a day', 'Sketch: person watching a lecture'],
@@ -247,14 +259,16 @@ function renderLanding(root, options) {
         <h2 class="lp-h-xl">${E(T.whyTitle)}</h2>
         <div class="lp-why-grid">
           <div class="lp-old">
-            <span class="lp-eyebrow">${E(T.oldLabel)}</span>
+            <span class="lp-eyebrow">${E(T.oldLabel)} · ${E(T.oldCount)}</span>
             <ol>${T.oldSteps.map((text, i) => `<li><span class="lp-mono">${String(i + 1).padStart(2, '0')}</span><span class="lp-old-text">${E(text)}</span></li>`).join('')}</ol>
+            <span class="lp-old-foot">↻ ${E(T.oldFoot)}</span>
           </div>
           <div class="lp-new">
-            <span class="lp-eyebrow lp-eyebrow-dark">${E(T.newLabel)}</span>
+            <div class="lp-new-head"><span class="lp-eyebrow lp-eyebrow-dark">${E(T.newLabel)} · ${E(T.newCount)}</span><span class="lp-new-time">${E(T.newTime)}</span></div>
             <div class="lp-new-steps">
-              ${T.newSteps.map((text, i) => `<div class="lp-new-step ${i === 2 ? 'is-last' : ''}"><span class="lp-serif-num">${i + 1}</span><span>${E(text)}</span></div>`).join('')}
+              ${T.newSteps.map((text, i) => `<div class="lp-new-step ${i === 2 ? 'is-last' : ''}"><span class="lp-serif-num">${i + 1}</span><span class="lp-new-label">${E(text)}</span><span class="lp-new-chip">${i === 2 ? '<i aria-hidden="true">✓</i>' : ''}${E(T.newChips[i])}</span></div>`).join('')}
             </div>
+            <p class="lp-new-foot">${E(T.newFoot)}</p>
           </div>
         </div>
       </section>
@@ -310,7 +324,15 @@ function renderLanding(root, options) {
           ${T.personas.map((p, i) => `<span class="lp-pill"><img src="${LP_ASSETS.personas[i].img}" alt="${E(p[3])}" style="transform:scale(${LP_ASSETS.personas[i].zoom});transform-origin:${LP_ASSETS.personas[i].origin}"></span>${E(T.whoPhrases[i])} `).join('')}<span class="lp-accent">${E(T.whoEnd)}</span>
         </p>
         <div class="lp-who-grid">
-          ${T.personas.map(([who, line, tag]) => `<div class="lp-who-item"><b>${E(who)}</b><span>${E(line)}</span><span class="lp-serif-tag">${E(tag)}</span></div>`).join('')}
+          ${T.personas.map(([who, line, tag], i) => {
+            const [range, pct, dday] = T.personaToday[i];
+            return `<div class="lp-who-item"><b>${E(who)}</b><span>${E(line)}</span><span class="lp-serif-tag">${E(tag)}</span>
+            <div class="lp-who-today" aria-hidden="true">
+              <div class="lp-who-bar"><i style="--w:${pct}%"></i></div>
+              <div class="lp-who-meta"><span>${pct}%</span><span>${E(dday)}</span></div>
+              <div class="lp-who-check"><span class="lp-check"></span><em>${E(T.whoToday)}</em>${E(range)}</div>
+            </div></div>`;
+          }).join('')}
         </div>
       </section>
 
