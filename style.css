@@ -2109,7 +2109,7 @@ tr.is-today .check-mark { color: #fff; }
 /* 강의 표 */
 .lecture-source { display: none; }
 .lec-table { display: flex; flex-direction: column; }
-.lec-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 160px 28px; gap: 8px; align-items: center; padding: 5px 0; border-bottom: 1px solid #ececea; }
+.lec-row { display: grid; grid-template-columns: 22px 28px minmax(0, 1fr) 160px 28px; gap: 8px; align-items: center; padding: 5px 0; border-bottom: 1px solid #ececea; }
 .lec-row.is-head { padding: 0 0 6px; border-bottom: 2px solid var(--text); font: 500 11px var(--mono); color: var(--muted); }
 .lec-row .gf-input { height: 38px; border-radius: 10px; font-size: 14px; }
 .lec-time { display: flex; gap: 4px; }
@@ -2170,7 +2170,7 @@ tr.is-today .check-mark { color: #fff; }
 #gf-miss.is-ready { color: #9fb3e0; }
 #goal-form.gf-card { max-width: none; }
 .gf-sum-big { font-size: 38px; white-space: nowrap; }
-.lec-row { grid-template-columns: 28px minmax(0, 1fr) 200px 28px; }
+.lec-row { grid-template-columns: 22px 28px minmax(0, 1fr) 200px 28px; }
 .lec-time-box { white-space: nowrap; }
 
 /* =========================================================================
@@ -2297,3 +2297,6 @@ tr.is-today .check-mark { color: #fff; }
 .ch-bulk .btn-danger-outline { background: transparent; color: #f0a898; border: 1.5px solid rgba(240, 168, 152, .6); }
 .ch-bulk .btn-danger-outline:hover { background: rgba(240, 168, 152, .12); border-color: #f0a898; }
 .ch-bulk .link-btn { color: #c9c9c5; }
+.lec-row.is-picked { background: #eaeef7; }
+.lec-row.is-picked .gf-input, .lec-row.is-picked .lec-time-box { background: #fff; }
+.lec-row .ch-sel { justify-self: center; }

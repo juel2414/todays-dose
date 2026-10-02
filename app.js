@@ -3072,6 +3072,7 @@ function renderLectureRows(titles, durations = []) {
     const m = Number(durations[i]) || 0;
     return `
       <div class="lec-row" data-lec-row>
+        ${locked ? '<span></span>' : `<input type="checkbox" class="ch-sel lec-sel" tabindex="-1" aria-label="${t('강의 선택')}">`}
         <span class="mono-cell">${i + 1}</span>
         <input class="gf-input lec-title" ${i === 0 ? 'id="f-lec-first"' : ''} data-nav value="${escapeHtml(title)}" placeholder="${t('강의 제목')}" ${locked ? 'readonly' : ''} aria-label="${t('강의 제목')}">
         <span class="lec-time">
@@ -3082,6 +3083,87 @@ function renderLectureRows(titles, durations = []) {
       </div>`;
   }).join('');
   document.getElementById('f-lectures').dataset.synced = document.getElementById('f-lectures').value;
+  updateLectureBulk();
+}
+
+/* ----- 강의 여러 개 선택: 한 번에 삭제 · 위아래로 옮기기 (챕터 표와 같은 방식) ----- */
+
+function updateLectureBulk() {
+  const bar = document.getElementById('lec-bulk');
+  const all = document.getElementById('lec-sel-all');
+  if (!bar || !all) return;
+  const boxes = [...document.querySelectorAll('#lecture-rows .lec-sel')];
+  const picked = boxes.filter((el) => el.checked);
+  boxes.forEach((el) => el.closest('[data-lec-row]').classList.toggle('is-picked', el.checked));
+  bar.hidden = picked.length === 0;
+  document.getElementById('lec-bulk-count').textContent = t('{n}개 선택', { n: picked.length });
+  all.hidden = boxes.length === 0;
+  all.checked = boxes.length > 0 && picked.length === boxes.length;
+  all.indeterminate = picked.length > 0 && picked.length < boxes.length;
+}
+
+/** 줄 번호와 첫 줄 id를 지금 순서에 맞춘다 */
+function renumberLectureRows() {
+  document.querySelectorAll('#lecture-rows [data-lec-row]').forEach((row, i) => {
+    row.querySelector('.mono-cell').textContent = i + 1;
+    row.querySelector('.lec-title').id = i === 0 ? 'f-lec-first' : '';
+  });
+}
+
+function bindLectureSelect(form, onChange) {
+  const box = form.querySelector('#lecture-rows');
+  const all = form.querySelector('#lec-sel-all');
+  if (!box || !all) return;
+  let anchor = null;
+  box.addEventListener('click', (e) => {
+    const sel = e.target.closest('.lec-sel');
+    if (!sel) return;
+    const rows = [...box.querySelectorAll('[data-lec-row]')];
+    const row = sel.closest('[data-lec-row]');
+    if (e.shiftKey && anchor && rows.includes(anchor)) {
+      const [a, b] = [rows.indexOf(anchor), rows.indexOf(row)].sort((x, y) => x - y);
+      rows.slice(a, b + 1).forEach((r) => { r.querySelector('.lec-sel').checked = sel.checked; });
+    }
+    anchor = row;
+    updateLectureBulk();
+  });
+  all.addEventListener('change', () => {
+    box.querySelectorAll('.lec-sel').forEach((el) => { el.checked = all.checked; });
+    updateLectureBulk();
+  });
+  form.querySelector('#lec-bulk').addEventListener('click', (e) => {
+    const action = e.target.closest('[data-lec-bulk]')?.dataset.lecBulk;
+    if (!action) return;
+    const rows = [...box.querySelectorAll('[data-lec-row]')];
+    const picked = rows.filter((r) => r.querySelector('.lec-sel').checked);
+    if (action === 'clear') {
+      picked.forEach((r) => { r.querySelector('.lec-sel').checked = false; });
+      updateLectureBulk();
+      return;
+    }
+    if (!picked.length) return;
+    if (action === 'delete') {
+      if (!confirm(t('선택한 강의 {n}개를 지울까요?', { n: picked.length }))) return;
+      picked.forEach((r) => r.remove());
+      syncLectureSource();
+      const { titles, durations } = readLectureRows();
+      renderLectureRows(titles, durations);
+    } else if (action === 'up') {
+      picked.forEach((r) => {
+        const prev = r.previousElementSibling;
+        if (prev && !prev.querySelector('.lec-sel').checked) box.insertBefore(r, prev);
+      });
+    } else if (action === 'down') {
+      picked.slice().reverse().forEach((r) => {
+        const next = r.nextElementSibling;
+        if (next && !next.querySelector('.lec-sel').checked) box.insertBefore(next, r);
+      });
+    }
+    renumberLectureRows();
+    syncLectureSource();
+    updateLectureBulk();
+    onChange();
+  });
 }
 
 /** 강의 표 → 숨긴 제목 목록 + 길이 배열 (빈 제목 줄은 뺀다) */
@@ -3266,8 +3348,15 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
               </div>
               <p id="lecture-ai-result" class="toc-result" hidden></p>`}
               <textarea id="f-lectures" class="lecture-source" hidden>${escapeHtml(v.titles.join('\n'))}</textarea>
+              <div class="ch-bulk" id="lec-bulk" hidden>
+                <span class="ch-bulk-count" id="lec-bulk-count"></span>
+                <button type="button" class="btn btn-small btn-outline" data-lec-bulk="up">${t('↑ 위로')}</button>
+                <button type="button" class="btn btn-small btn-outline" data-lec-bulk="down">${t('↓ 아래로')}</button>
+                <button type="button" class="btn btn-small btn-danger-outline" data-lec-bulk="delete">${t('선택 삭제')}</button>
+                <button type="button" class="link-btn" data-lec-bulk="clear">${t('선택 해제')}</button>
+              </div>
               <div class="lec-table">
-                <div class="lec-row is-head"><span>#</span><span>${t('강의 제목')}</span><span>${t('시간')}</span><span></span></div>
+                <div class="lec-row is-head"><input type="checkbox" class="ch-sel" id="lec-sel-all" tabindex="-1" aria-label="${t('강의 모두 선택')}" title="${t('강의 모두 선택')}"><span>#</span><span>${t('강의 제목')}</span><span>${t('시간')}</span><span></span></div>
                 <div id="lecture-rows"></div>
               </div>
               <div class="lec-foot">
@@ -3444,6 +3533,7 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
     }
   });
   bindChapterEditor(form, updateFormView);
+  bindLectureSelect(form, updateFormView);
   bindLectureAi(form, updateFormView);
   bindLibraryPicker(form);
   form.addEventListener('click', (e) => {
@@ -9241,6 +9331,9 @@ const EN = {
   '챕터 선택': 'Select chapter',
   '선택한 챕터 {n}개를 지울까요?': 'Delete {n} selected chapters?',
   '{n}개 선택': '{n} selected',
+  '강의 선택': 'Select lecture',
+  '강의 모두 선택': 'Select all lectures',
+  '선택한 강의 {n}개를 지울까요?': 'Delete {n} selected lectures?',
   '나의 다짐을 적어 보세요': 'Write your motto',
   '나의 다짐': 'My motto',
   'Enter 저장 · Esc 취소 · 비우면 기본 문구': 'Enter to save · Esc to cancel · Leave empty for default',
