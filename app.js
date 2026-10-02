@@ -618,7 +618,34 @@ function createBookGoal({ title, startDate, dueDate, restWeekdays = [], restDate
   return goal;
 }
 
-function createLectureGoal({ title, startDate, dueDate, restWeekdays = [], restDates = [], extraDates = [], titles }) {
+/**
+ * 강의별 길이(분) 정리: 강의 수에 맞추고, 없는 칸은 null. 하나도 없으면 null (저장하지 않음)
+ * 표시용이며 계획 계산에는 쓰지 않는다.
+ */
+function normalizeDurations(durations, count) {
+  if (!Array.isArray(durations)) return null;
+  const list = Array.from({ length: count }, (_, i) => {
+    const m = Number(durations[i]);
+    return Number.isFinite(m) && m > 0 ? Math.round(m) : null;
+  });
+  return list.some((m) => m !== null) ? list : null;
+}
+
+/** 강의 목록 객체 (길이가 있으면 durations도 함께) */
+function lectureContent(titles, durations) {
+  const d = normalizeDurations(durations, titles.length);
+  return d ? { titles: [...titles], durations: d } : { titles: [...titles] };
+}
+
+/** 총 길이 문구: "총 3시간 20분" (길이를 적은 강의만 더한다) */
+function formatTotalDuration(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return currentLang === 'en' ? `${h ? `${h}h ` : ''}${m ? `${m}m` : ''}`.trim() + ' total'
+    : `총 ${h ? `${h}시간 ` : ''}${m ? `${m}분` : ''}`.trim();
+}
+
+function createLectureGoal({ title, startDate, dueDate, restWeekdays = [], restDates = [], extraDates = [], titles, durations = null }) {
   const now = new Date().toISOString();
   const goal = {
     id: generateId(),
@@ -631,7 +658,7 @@ function createLectureGoal({ title, startDate, dueDate, restWeekdays = [], restD
     extraDates: normalizeExtraDates(extraDates),
     createdAt: now,
     updatedAt: now,
-    lecture: { titles: [...titles] },
+    lecture: lectureContent(titles, durations),
     progress: { current: 0, history: [] },
     plans: null,
   };
@@ -987,7 +1014,11 @@ function applyGoalEdit(goal, input, today = todayStr()) {
   } else if (goal.type === 'custom') {
     goal.custom = normalizeCustom(input);
   } else {
-    goal.lecture = { titles: [...input.titles] };
+    // 길이를 입력하지 않은 수정(그룹 내용 적용 등)이면 같은 제목의 기존 길이를 이어 쓴다
+    const old = goal.lecture;
+    const durations = Array.isArray(input.durations) ? input.durations
+      : input.titles.map((title, i) => (old.durations && old.titles[i] === title ? old.durations[i] : null));
+    goal.lecture = lectureContent(input.titles, durations);
   }
   // 목록이 줄어 진도가 범위를 벗어나면 맞춰 주고, 기록에도 남긴다
   const { min, max } = getProgressBounds(goal);
@@ -1049,6 +1080,7 @@ function goalToInput(goal) {
     lastPage: goal.type === 'book' ? goal.book.lastPage : NaN,
     author: goal.type === 'book' ? getBookAuthor(goal) : '',
     titles: goal.type === 'lecture' ? [...goal.lecture.titles] : [],
+    durations: goal.type === 'lecture' && goal.lecture.durations ? [...goal.lecture.durations] : null,
     bibleStart: goal.type === 'bible' ? bibleIndexOf(goal.bible.books[0].name) : 0,
     bibleEnd: goal.type === 'bible' ? bibleIndexOf(goal.bible.books[goal.bible.books.length - 1].name) : 65,
     customUnit: goal.type === 'custom' ? goal.custom.unit : '',
@@ -2241,6 +2273,15 @@ function runPlanSelfTests() {
   check('그룹: 도서관 책이 바뀌면 다시 공유 표시', isGroupItemSourceChanged(libItem));
   libraryRows = savedRows;
 
+  // 강의 길이: 표시용으로만 저장하고, 계획은 강의 개수로 나눈다
+  const dg = createLectureGoal({ title: 'd', startDate: '2026-10-01', dueDate: '2026-10-04', titles: ['a', 'b', 'c'], durations: [65, '', 30] });
+  check('강의 길이: 저장 (빈 칸은 null)', JSON.stringify(dg.lecture.durations) === '[65,null,30]');
+  check('강의 길이: 계획은 강의 개수 기준', getTotalUnits(dg, 'lecture') === 3);
+  const dg2 = createLectureGoal({ title: 'd', startDate: '2026-10-01', dueDate: '2026-10-04', titles: ['a'], durations: ['', null] });
+  check('강의 길이: 모두 비면 저장하지 않음', !('durations' in dg2.lecture));
+  applyGoalEdit(dg, { ...goalToInput(dg), titles: ['a', 'b', 'c', 'x'], durations: undefined }, '2026-09-20');
+  check('강의 길이: 길이 없이 목록만 바꾸면 같은 강의 길이 유지', JSON.stringify(dg.lecture.durations) === '[65,null,30,null]');
+
   console.group('■ 검사 결과');
   console.table(results);
   console.groupEnd();
@@ -2929,6 +2970,57 @@ function renderTodayAmount(goal, s) {
  * 9. 화면 — 목표 추가 / 수정
  * ========================================================================= */
 
+/** 새 목표 화면 상태: "더 정하기" 펼침 · 하루 분량으로 마감일을 정하는 중인지 */
+const gfState = { moreOpen: false, paceMode: false };
+
+/** 하루 분량이 이보다 많으면 "무리한 계획" 경고 */
+const HEAVY_PER_DAY = { page: 60, lecture: 5, bible: 15 };
+
+/** 강의 표: 제목 + 길이(시간·분) 한 줄씩. 제목 목록의 원본은 숨긴 textarea(#f-lectures) */
+function renderLectureRows(titles, durations = []) {
+  const box = document.getElementById('lecture-rows');
+  if (!box) return;
+  const list = titles.length ? titles : [''];
+  const locked = !!document.querySelector('#goal-form.is-locked');
+  box.innerHTML = list.map((title, i) => {
+    const m = Number(durations[i]) || 0;
+    return `
+      <div class="lec-row" data-lec-row>
+        <span class="mono-cell">${i + 1}</span>
+        <input class="gf-input lec-title" ${i === 0 ? 'id="f-lec-first"' : ''} data-nav value="${escapeHtml(title)}" placeholder="${t('강의 제목')}" ${locked ? 'readonly' : ''} aria-label="${t('강의 제목')}">
+        <span class="lec-time">
+          <span class="lec-time-box"><input type="number" min="0" class="lec-h" data-nav value="${m >= 60 ? Math.floor(m / 60) : ''}" placeholder="0" aria-label="${t('시간')}"><span>${t('시간')}</span></span>
+          <span class="lec-time-box"><input type="number" min="0" max="59" class="lec-m" data-nav value="${m % 60 || ''}" placeholder="0" aria-label="${t('분')}"><span>${t('분')}</span></span>
+        </span>
+        ${locked ? '<span></span>' : `<button type="button" class="chip-x lec-del" tabindex="-1" data-action="lec-del" aria-label="${t('삭제')}">×</button>`}
+      </div>`;
+  }).join('');
+  document.getElementById('f-lectures').dataset.synced = document.getElementById('f-lectures').value;
+}
+
+/** 강의 표 → 숨긴 제목 목록 + 길이 배열 (빈 제목 줄은 뺀다) */
+function readLectureRows() {
+  const rows = [...document.querySelectorAll('#lecture-rows [data-lec-row]')];
+  const titles = [];
+  const durations = [];
+  rows.forEach((row) => {
+    const title = row.querySelector('.lec-title').value.trim();
+    if (!title) return;
+    titles.push(title);
+    const h = Number(row.querySelector('.lec-h').value) || 0;
+    const m = Number(row.querySelector('.lec-m').value) || 0;
+    durations.push(h * 60 + m || null);
+  });
+  return { titles, durations };
+}
+
+function syncLectureSource() {
+  const area = document.getElementById('f-lectures');
+  if (!area) return;
+  area.value = readLectureRows().titles.join('\n');
+  area.dataset.synced = area.value;
+}
+
 /** 언어를 바꿀 때 입력 중이던 목표 폼 값 (다시 그린 폼에 한 번 채운다) */
 let langFormDraft = null;
 
@@ -2967,203 +3059,234 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
   }
   if (groupItemId && !langDraft) Object.assign(v, { title: groupItem.title }, groupItem.content);
 
+  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+  const submitKey = isMac ? '⌘↵' : 'Ctrl+↵';
+  const typeImg = { book: LP_ASSETS.hero, lecture: LP_ASSETS.personas[1].img, bible: LP_ASSETS.personas[3].img, custom: LP_ASSETS.personas[0].img };
+  const typeDesc = {
+    book: t('페이지·챕터 단위로 나눠요'), lecture: t('강의 목록 순서대로 나눠요'),
+    bible: t('권·장 단위로 나눠요'), custom: t('숙제, 문제집, 단어 암기처럼 개수로 셀 수 있는 것'),
+  };
+  const showType = !isEdit && !locked;
+  // 행 번호 (보이는 행만 차례로)
+  let rowNo = 0;
+  const no = () => String(++rowNo).padStart(2, '0');
+  const lockedSummary = locked ? (requiredBook
+    ? t('{pages}페이지 · {n}개 챕터', { pages: requiredBook.lastPage - requiredBook.chapters[0].startPage + 1, n: requiredBook.chapters.length })
+    : describeShareContent(groupItem)) : '';
+  const lockedTag = requiredBook ? t('배정된 책') : groupItem ? t(sharedKindOf(groupItem.type).label) : '';
+  const durations = Array.isArray(v.durations) ? v.durations : [];
+
   root.innerHTML = `
-    <header class="page-header">
-      <div>
+    <div class="gf-page">
+      <div class="gf-head">
         <a class="back-link" href="${isEdit ? `#/goal/${escapeHtml(goal.id)}` : '#/'}">← ${isEdit ? t('목표 상세') : t('대시보드')}</a>
         <h1>${isEdit ? t('목표 수정') : bookId ? t('도서관 책으로 계획 세우기') : t('새 목표 추가')}</h1>
+        <span class="gf-kbd">${t('Tab 이동 · Enter 다음 칸 · {key} {action}', { key: submitKey, action: isEdit ? t('저장') : t('추가') })}</span>
+        <img class="gf-hero" id="gf-hero" src="${typeImg[type]}" alt="">
       </div>
-    </header>
-
-    <form id="goal-form" class="panel ${locked ? 'is-locked' : ''}" novalidate>
       ${requiredBook ? `<p class="notice notice-info">${t('도서관에 있는 책입니다. 책 제목과 챕터는 관리자가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.')}</p>` : ''}
-      ${groupItem && !requiredBook ? `<p class="notice notice-info">${t("'{group}' 그룹의 {kind}입니다. 이름과 내용은 리더가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.", { group: escapeHtml(groupNameOf(groupItem.groupId)), kind: t(sharedKindOf(groupItem.type).label) })}</p>` : ''}
-      ${started ? `<p class="notice">${t('진행 중인 목표입니다. 날짜·쉬는 요일·챕터·강의 목록을 바꾸면 원래 계획은 보관하고, 오늘부터 마감일까지 남은 분량을 다시 나눕니다. 저장하면 새 계획을 먼저 미리보기로 보여드립니다.')}</p>` : ''}
+      ${groupItem && !requiredBook ? `<p class="notice notice-info">${t("'{group}' 그룹의 {kind}예요. 날짜만 정하면 돼요.", { group: escapeHtml(groupNameOf(groupItem.groupId)), kind: t(sharedKindOf(groupItem.type).label) })}</p>` : ''}
+      ${started ? `<p class="notice notice-row-soft">${t('진행 중인 목표입니다. 날짜·쉬는 요일·챕터·강의 목록을 바꾸면 원래 계획은 보관하고, 오늘부터 마감일까지 남은 분량을 다시 나눕니다. 저장하면 새 계획을 먼저 미리보기로 보여드립니다.')}</p>` : ''}
 
-      <div class="field">
-        <span class="field-label">${t('종류')}</span>
-        <div class="segmented">
-          <label><input type="radio" name="type" value="book" ${type === 'book' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> ${typeLabel('book')}</label>
-          <label><input type="radio" name="type" value="lecture" ${type === 'lecture' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> ${typeLabel('lecture')}</label>
-          <label><input type="radio" name="type" value="bible" ${type === 'bible' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> ${typeLabel('bible')}</label>
-          <label><input type="radio" name="type" value="custom" ${type === 'custom' ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}> ${typeLabel('custom')}</label>
-        </div>
-      </div>
-
-      ${!isEdit && !locked && account.isAdmin ? `
-      <div data-section="book-pick">
-        <div class="library-pick">
-          <button type="button" class="btn" data-action="library-open">${t('도서관에서 고르기')}</button>
-          <span class="field-hint">${t('도서관에 있는 책을 고르면 제목과 챕터를 입력하지 않아도 됩니다.')}</span>
-        </div>
-        <div id="library-picker" class="library-picker" hidden></div>
-      </div>` : ''}
-
-
-      <div class="field">
-        <label class="field-label" for="f-title" id="f-title-label"></label>
-        <input id="f-title" type="text" class="input input-wide" value="${escapeHtml(v.title)}" ${locked ? 'readonly' : ''}>
-      </div>
-
-      <div class="field-row">
-        <div class="field">
-          <label class="field-label" for="f-start">${t('시작일')}</label>
-          <input id="f-start" type="date" class="input" value="${escapeHtml(v.startDate)}">
-        </div>
-        <div class="field">
-          <label class="field-label" for="f-due">${t('마감일')}</label>
-          <input id="f-due" type="date" class="input" value="${escapeHtml(v.dueDate)}">
-        </div>
-        <div class="field">
-          <span class="field-label">${t('기간')}</span>
-          <span id="f-days" class="field-value">-</span>
-        </div>
-      </div>
-      ${isEdit ? '' : `<div class="plan-mode">
-        <div class="segmented segmented-small" role="radiogroup" aria-label="${t('기간 정하는 방법')}">
-          <label><input type="radio" name="plan-mode" value="due" checked> ${t('마감일로 정하기')}</label>
-          <label><input type="radio" name="plan-mode" value="pace"> ${t('하루 분량으로 정하기')}</label>
-        </div>
-        <div class="pace-row" id="pace-row" hidden>
-          <span>${t('하루')}</span>
-          <input id="f-pace" type="number" min="1" class="input input-num" placeholder="20">
-          <span id="f-pace-unit"></span>
-          <span>${t('씩 하면')}</span>
-          <strong id="f-pace-result" class="pace-result">-</strong>
-        </div>
-      </div>`}
-      <div class="quick-due" id="quick-due">
-        <span class="field-hint">${t('마감일 빠르게 정하기 (시작일부터)')}</span>
-        ${[1, 2, 4, 6, 8].map((w) => `<button type="button" class="btn btn-small" data-weeks="${w}"
-          title="${t('시작일부터 {w}주 뒤를 마감일로 정합니다', { w })}">${t('{w}주 동안', { w })}</button>`).join('')}
-        <span id="f-daily" class="daily-estimate"></span>
-      </div>
-
-      <div class="field">
-        <span class="field-label">${t('쉬는 요일')} <span class="muted">${t('(선택한 요일에는 분량을 배정하지 않습니다)')}</span></span>
-        <div class="weekday-picker">
-          ${WEEKDAY_ORDER.map((d) => `
-            <label class="weekday ${d === 0 ? 'is-sun' : d === 6 ? 'is-sat' : ''}">
-              <input type="checkbox" name="rest-weekday" value="${d}"
-                ${normalizeWeekdays(v.restWeekdays).includes(d) ? 'checked' : ''}>
-              <span>${weekdayName(d)}</span>
-            </label>`).join('')}
-        </div>
-      </div>
-
-      <div class="field">
-        <span class="field-label">${t('쉬는 날||label')} <span class="muted">${t('(행사·일정 등으로 빠지는 특정 날짜)')}</span></span>
-        <div class="rest-date-add">
-          <input id="f-rest-date" type="date" class="input" aria-label="${t('쉬는 날짜')}">
-          <input id="f-rest-label" type="text" class="input rest-label-input" placeholder="${t('메모 (예: 수련회)')}" maxlength="30">
-          <button type="button" class="btn btn-small" id="add-rest-date">${t('+ 추가')}</button>
-        </div>
-        <div id="rest-date-list" class="rest-date-list"></div>
-      </div>
-
-      <div class="field">
-        <span class="field-label">${t('여유 있는 날')} <span class="muted">${t('(그날은 평소보다 많이 배정)')}</span></span>
-        <div class="rest-date-add">
-          <input id="f-extra-date" type="date" class="input" aria-label="${t('여유 있는 날짜')}">
-          <select id="f-extra-weight" class="input extra-weight-select" aria-label="${t('분량 배수')}">
-            ${EXTRA_WEIGHTS.map((w) => `<option value="${w}" ${w === 2 ? 'selected' : ''}>${t('평소의 {w}배', { w })}</option>`).join('')}
-          </select>
-          <button type="button" class="btn btn-small" id="add-extra-date">${t('+ 추가')}</button>
-        </div>
-        <div id="extra-date-list" class="rest-date-list"></div>
-      </div>
-
-      <div data-section="book">
-        <div class="field">
-          <label class="field-label" for="f-author">${t('저자')} <span class="muted">${t('(선택)')}</span></label>
-          <input id="f-author" type="text" class="input input-wide" value="${escapeHtml(v.author || '')}" ${locked ? 'readonly' : ''}>
-        </div>
-        ${renderChapterEditorHtml(v.lastPage)}
-        ${isEdit ? '' : `
-        <div class="field">
-          <label class="field-label" for="f-read-page">${t('마지막으로 읽은 페이지')} <span class="muted">${t('(선택 · 이미 읽기 시작한 책이면 입력)')}</span></label>
-          <div class="read-page-row">
-            <input id="f-read-page" type="number" min="1" class="input input-num" value="${v.readPage ? escapeHtml(v.readPage) : ''}" placeholder="${t('예: 42')}">
-            <span id="f-read-hint" class="field-hint">${t('비워 두면 처음부터 읽는 것으로 계획합니다.')}</span>
+      <div class="gf-cols">
+      <form id="goal-form" class="gf-card ${locked ? 'is-locked' : ''}" novalidate>
+        <div class="gf-row gf-row-type" ${showType ? '' : 'hidden'}>
+          <span class="gf-label"><i>${showType ? no() : ''}</i>${t('무엇을 할까요?')}</span>
+          <div class="type-cards">
+            ${['book', 'lecture', 'bible', 'custom'].map((k) => `
+              <label class="type-card">
+                <input type="radio" name="type" value="${k}" ${type === k ? 'checked' : ''} ${isEdit || locked ? 'disabled' : ''}>
+                <span class="type-card-img"><img src="${typeImg[k]}" alt=""></span>
+                <b>${typeLabel(k)}</b>
+                <span class="type-card-desc">${typeDesc[k]}</span>
+                <span class="type-card-check" aria-hidden="true">✓</span>
+              </label>`).join('')}
           </div>
-        </div>`}
-      </div>
+        </div>
 
-      <div data-section="lecture">
-        <div class="field">
-          <label class="field-label" for="f-lectures">${t('강의 제목 목록')} <span class="muted">${t('(한 줄에 하나, 빈 줄은 무시)')}</span></label>
-          ${locked ? '' : `
-          <div class="ai-toc ai-lecture">
-            <div class="ai-toc-icon" aria-hidden="true">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>
+        ${locked ? `
+        <div class="gf-row gf-row-locked">
+          <span class="type-tag ${groupItem && sharedKindOf(groupItem.type).key === 'lecture' ? 'is-blue' : 'is-dark'}">${escapeHtml(lockedTag)}</span>
+          <b>${escapeHtml(v.title)}</b>
+          <span class="muted small">${v.author ? `${escapeHtml(v.author)} · ` : ''}<span class="num-font">${escapeHtml(lockedSummary)}</span></span>
+          <span class="pill-outline gf-locked-pill">${t('잠김')}</span>
+        </div>` : ''}
+
+        <div class="gf-row" ${locked ? 'hidden' : ''}>
+          <label class="gf-label" for="f-title"><i>${locked ? '' : no()}</i><span id="f-title-label"></span></label>
+          <div class="gf-field">
+            <div class="gf-inline">
+              <input id="f-title" type="text" class="gf-input gf-input-strong" data-nav value="${escapeHtml(v.title)}" autocomplete="off" ${locked ? 'readonly' : ''}>
+              ${!isEdit && !locked && account.isAdmin ? `<button type="button" class="btn btn-outline gf-lib-btn" data-action="library-open" data-section-book>${t('도서관에서 고르기')}</button>` : ''}
             </div>
-            <div class="ai-toc-text">
-              <strong>${t('AI 강의 목록 인식')}<span class="ai-badge">AI</span></strong>
-              <span>${t('강의 사이트의 차시 목록을 캡처하거나 사진으로 올리면 AI가 강의 제목을 순서대로 채워요. 여러 장이면 함께 고르세요.')}</span>
-              <span class="ai-toc-drop">${t('사진을 이 상자에 끌어다 놓아도 돼요.')}</span>
+            <div id="title-suggest" class="title-suggest" hidden></div>
+            ${!isEdit && !locked && account.isAdmin ? `<div data-section="book-pick"><div id="library-picker" class="library-picker" hidden></div></div>` : ''}
+            <span class="gf-err" data-err="title" hidden>${t('이름을 입력해 주세요')}</span>
+          </div>
+        </div>
+
+        <div class="gf-row">
+          <span class="gf-label"><i>${no()}</i>${t('기간')}</span>
+          <div class="gf-field">
+            <div class="gf-inline gf-dates">
+              <input id="f-start" type="date" class="gf-input gf-date" data-nav value="${escapeHtml(v.startDate)}" aria-label="${t('시작일')}">
+              <span>~</span>
+              <input id="f-due" type="date" class="gf-input gf-date" data-nav value="${escapeHtml(v.dueDate)}" aria-label="${t('마감일')}">
+              ${isEdit ? '' : `
+              <span class="muted">${t('또는')}</span>
+              <span class="gf-pace" id="pace-box">
+                <span>${t('하루')}</span>
+                <input id="f-pace" type="number" min="1" data-nav placeholder="—" aria-label="${t('하루 분량')}">
+                <span id="f-pace-unit"></span>
+              </span>`}
             </div>
-            <label class="btn btn-ai" id="lecture-photo-label">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
-              <span class="toc-photo-text">${t('강의 목록 사진 올리기')}</span>
-              <input type="file" id="lecture-photo" accept="image/*" multiple hidden>
-            </label>
+            <div class="quick-due" id="quick-due">
+              ${[1, 2, 4, 6, 8].map((w) => `<button type="button" class="week-pill" tabindex="-1" data-weeks="${w}"
+                title="${t('시작일부터 {w}주 뒤를 마감일로 정합니다', { w })}">${t('{w}주 동안', { w })}</button>`).join('')}
+            </div>
+            <span class="gf-hint"><span id="f-days">-</span> <span id="f-pace-result"></span></span>
+            <span class="gf-err" data-err="due" hidden>${t('마감일을 정해 주세요')}</span>
           </div>
-          <p id="lecture-ai-result" class="toc-result" hidden></p>`}
-          <textarea id="f-lectures" class="input textarea" rows="12">${escapeHtml(v.titles.join('\n'))}</textarea>
-          <span id="f-lecture-count" class="field-hint"></span>
         </div>
-      </div>
 
-      <div data-section="custom">
-        <p class="field-hint custom-intro">${t('숙제, 문제집, 단어 암기처럼 개수로 셀 수 있는 것이면 무엇이든 계획할 수 있어요.')}</p>
-        <div class="field-row">
-          <div class="field">
-            <label class="field-label" for="f-custom-unit">${t('단위 이름')}</label>
-            <input id="f-custom-unit" class="input" type="text" maxlength="10" value="${escapeHtml(v.customUnit || '')}" placeholder="${t('예: 문제, 과제, 단원, 단어')}">
-            <div class="custom-unit-presets">
-              ${['문제', '과제', '단원', '단어', '개'].map((u) => `<button type="button" class="btn btn-small" data-custom-unit="${escapeHtml(t(u))}">${escapeHtml(t(u))}</button>`).join('')}
+        <div class="gf-row">
+          <span class="gf-label"><i>${no()}</i>${t('쉬는 요일')}</span>
+          <div class="weekday-picker">
+            ${WEEKDAY_ORDER.map((d) => `
+              <label class="weekday ${d === 0 ? 'is-sun' : d === 6 ? 'is-sat' : ''}">
+                <input type="checkbox" name="rest-weekday" value="${d}"
+                  ${normalizeWeekdays(v.restWeekdays).includes(d) ? 'checked' : ''}>
+                <span>${weekdayName(d)}</span>
+              </label>`).join('')}
+          </div>
+        </div>
+
+        <div class="gf-row" ${locked ? 'hidden' : ''}>
+          <span class="gf-label"><i>${locked ? '' : no()}</i>${t('내용')}</span>
+          <div class="gf-field" id="f-content" tabindex="-1">
+            <div data-section="book">
+              ${renderChapterEditorHtml(v.lastPage)}
+            </div>
+
+            <div data-section="lecture">
+              ${locked ? '' : `
+              <div class="ai-drop ai-lecture">
+                <span class="ai-drop-title"><span class="ai-chip">AI</span>${t('강의 목록 사진으로 채우기')}</span>
+                <label class="btn-ai-shine" id="lecture-photo-label">
+                  <span class="ai-dot"></span><span class="toc-photo-text">${t('AI로 강의 목록 사진 올리기')}</span>
+                  <input type="file" id="lecture-photo" accept="image/*" multiple hidden>
+                </label>
+                <span class="ai-drop-hint">${t('사진을 이 상자에 끌어다 놓아도 돼요.')}</span>
+              </div>
+              <p id="lecture-ai-result" class="toc-result" hidden></p>`}
+              <textarea id="f-lectures" class="lecture-source" hidden>${escapeHtml(v.titles.join('\n'))}</textarea>
+              <div class="lec-table">
+                <div class="lec-row is-head"><span>#</span><span>${t('강의 제목')}</span><span>${t('시간')}</span><span></span></div>
+                <div id="lecture-rows"></div>
+              </div>
+              <div class="lec-foot">
+                <button type="button" class="btn btn-small btn-outline" tabindex="-1" data-action="lec-add">${t('+ 강의 추가')}</button>
+                <span id="f-lecture-count" class="num-font"></span>
+              </div>
+            </div>
+
+            <div data-section="custom">
+              <div class="unit-pills custom-unit-presets">
+                ${['문제', '과제', '단원', '단어', '개'].map((u) => `<button type="button" class="week-pill" tabindex="-1" data-custom-unit="${escapeHtml(t(u))}">${escapeHtml(t(u))}</button>`).join('')}
+              </div>
+              <div class="gf-inline">
+                <input id="f-custom-unit" class="gf-input gf-input-short" type="text" maxlength="10" data-nav value="${escapeHtml(v.customUnit || '')}" placeholder="${t('단위 이름')}" aria-label="${t('단위 이름')}">
+                <span class="gf-sub-label">${t('전체')}</span>
+                <input id="f-custom-total" class="gf-input gf-input-num" type="number" min="1" step="1" data-nav value="${Number.isInteger(v.customTotal) ? v.customTotal : ''}" aria-label="${t('전체 개수')}">
+                <span id="f-custom-total-hint" class="gf-hint"></span>
+              </div>
+              <textarea id="f-custom-items" class="gf-input gf-textarea" rows="4" placeholder="${t('항목 목록 (선택 · 한 줄에 하나). 적으면 계획표에 항목 이름이 나오고, 줄 수가 전체 개수가 됩니다.')}">${escapeHtml((v.customItems || []).join('\n'))}</textarea>
+            </div>
+
+            <div data-section="bible">
+              <div class="unit-pills bible-presets">
+                ${BIBLE_PRESETS.map(([name, a, b]) => `<button type="button" class="week-pill" tabindex="-1" data-bible-preset="${a},${b}">${t(name)}</button>`).join('')}
+              </div>
+              <div class="gf-inline bible-range">
+                <select id="f-bible-start" class="gf-input bible-select" data-nav aria-label="${t('시작 권')}">
+                  ${BIBLE_BOOKS.map((b, i) => `<option value="${i}" ${i === Number(v.bibleStart) ? 'selected' : ''}>${bibleBookName(b.name)}</option>`).join('')}
+                </select>
+                <span>~</span>
+                <select id="f-bible-end" class="gf-input bible-select" data-nav aria-label="${t('끝 권')}">
+                  ${BIBLE_BOOKS.map((b, i) => `<option value="${i}" ${i === Number(v.bibleEnd) ? 'selected' : ''}>${bibleBookName(b.name)}</option>`).join('')}
+                </select>
+                <span id="f-bible-summary" class="num-font is-blue"></span>
+              </div>
+            </div>
+            <span class="gf-err" data-err="content" hidden></span>
+          </div>
+        </div>
+
+        <details class="gf-more" ${gfState.moreOpen ? 'open' : ''}>
+          <summary>${t('더 정하기')} <span class="muted" id="gf-more-sub"></span></summary>
+          <div class="gf-more-body">
+            <div class="gf-inline" data-section="book-more">
+              <input id="f-author" type="text" class="gf-input" data-nav value="${escapeHtml(v.author || '')}" placeholder="${t('저자 (선택)')}" ${locked ? 'readonly' : ''} aria-label="${t('저자')}">
+              ${isEdit ? '' : `<input id="f-read-page" type="number" min="1" class="gf-input" data-nav value="${v.readPage ? escapeHtml(v.readPage) : ''}" placeholder="${t('마지막으로 읽은 페이지 (선택)')}" aria-label="${t('마지막으로 읽은 페이지')}">`}
+            </div>
+            ${isEdit ? '' : `<span id="f-read-hint" class="gf-hint" data-section="book-more"></span>`}
+            <div class="gf-more-line">
+              <span class="gf-sub-label">${t('쉬는 날짜')}</span>
+              <div class="gf-field">
+                <div class="gf-inline">
+                  <input id="f-rest-date" type="date" class="gf-input gf-date-small" aria-label="${t('쉬는 날짜')}">
+                  <input id="f-rest-label" type="text" class="gf-input" placeholder="${t('메모 (예: 수련회)')}" maxlength="30">
+                  <button type="button" class="btn btn-small btn-outline" id="add-rest-date">${t('+ 추가')}</button>
+                </div>
+                <div id="rest-date-list" class="rest-date-list"></div>
+              </div>
+            </div>
+            <div class="gf-more-line">
+              <span class="gf-sub-label">${t('여유 있는 날짜')}</span>
+              <div class="gf-field">
+                <div class="gf-inline">
+                  <input id="f-extra-date" type="date" class="gf-input gf-date-small" aria-label="${t('여유 있는 날짜')}">
+                  <select id="f-extra-weight" class="gf-input gf-select-small" aria-label="${t('분량 배수')}">
+                    ${EXTRA_WEIGHTS.map((w) => `<option value="${w}" ${w === 2 ? 'selected' : ''}>${t('평소의 {w}배', { w })}</option>`).join('')}
+                  </select>
+                  <button type="button" class="btn btn-small btn-outline" id="add-extra-date">${t('+ 추가')}</button>
+                </div>
+                <div id="extra-date-list" class="rest-date-list"></div>
+              </div>
             </div>
           </div>
-          <div class="field">
-            <label class="field-label" for="f-custom-total">${t('전체 개수')}</label>
-            <input id="f-custom-total" class="input" type="number" min="1" step="1" value="${Number.isInteger(v.customTotal) ? v.customTotal : ''}">
-            <span id="f-custom-total-hint" class="field-hint"></span>
-          </div>
-        </div>
-        <div class="field">
-          <label class="field-label" for="f-custom-items">${t('항목 목록')} <span class="muted">${t('(선택 · 한 줄에 하나)')}</span></label>
-          <textarea id="f-custom-items" class="input textarea" rows="8" placeholder="${t('적으면 계획표에 항목 이름이 나오고, 줄 수가 전체 개수가 됩니다.')}">${escapeHtml((v.customItems || []).join('\n'))}</textarea>
-        </div>
-      </div>
+        </details>
 
-      <div data-section="bible">
-        <div class="field">
-          <span class="field-label">${t('통독 범위')}</span>
-          <div class="bible-presets">
-            ${BIBLE_PRESETS.map(([name, a, b]) => `<button type="button" class="btn btn-small" data-bible-preset="${a},${b}">${t(name)}</button>`).join('')}
-          </div>
-          <div class="bible-range">
-            <select id="f-bible-start" class="input bible-select">
-              ${BIBLE_BOOKS.map((b, i) => `<option value="${i}" ${i === Number(v.bibleStart) ? 'selected' : ''}>${bibleBookName(b.name)}</option>`).join('')}
-            </select>
-            <span>${t('부터')}</span>
-            <select id="f-bible-end" class="input bible-select">
-              ${BIBLE_BOOKS.map((b, i) => `<option value="${i}" ${i === Number(v.bibleEnd) ? 'selected' : ''}>${bibleBookName(b.name)}</option>`).join('')}
-            </select>
-            ${t('까지') ? `<span>${t('까지')}</span>` : ''}
-          </div>
-          <span id="f-bible-summary" class="field-hint"></span>
+        <div id="form-errors" class="errors" hidden></div>
+        <button type="submit" hidden></button>
+      </form>
+
+      <aside class="gf-summary">
+        <div class="gf-sum-top">
+          <span class="gf-sum-label">${t('하루 분량')}</span>
+          <b class="gf-sum-big num-font" id="gf-sum-daily">—</b>
         </div>
+        <span class="gf-sum-period" id="gf-sum-period"></span>
+        <div class="gf-dots" id="gf-dots" hidden></div>
+        <span class="gf-cheer" id="gf-cheer"></span>
+        <div class="gf-heavy" id="gf-heavy" hidden>
+          <span id="gf-heavy-text"></span>
+          <button type="button" class="btn btn-small btn-white" data-action="extend-2w">${t('2주 늘리기')}</button>
+        </div>
+        <div class="gf-issues" id="gf-issues"></div>
+        <div class="gf-submit-row">
+          <button type="submit" form="goal-form" class="btn btn-white gf-submit">${isEdit ? t('저장') : t('목표 추가')}</button>
+          <span class="gf-kbd-small">${submitKey}</span>
+        </div>
+        <div class="gf-sum-foot">
+          <a class="link-btn gf-cancel" href="${isEdit ? `#/goal/${escapeHtml(goal.id)}` : '#/'}">${t('취소')}</a>
+          <span id="gf-miss"></span>
+        </div>
+      </aside>
       </div>
-
-      <div id="form-errors" class="errors" hidden></div>
-
-      <div class="form-actions">
-        <a class="btn" href="${isEdit ? `#/goal/${escapeHtml(goal.id)}` : '#/'}">${t('취소')}</a>
-        <button type="submit" class="btn btn-primary">${isEdit ? t('저장') : t('목표 추가')}</button>
-      </div>
-    </form>
+    </div>
   `;
+  renderLectureRows(v.titles, durations);
 
   fillChapterEditor(v.chapters, locked);
   if (locked) lockSharedContentInputs(root);
@@ -3173,17 +3296,67 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
   const form = root.querySelector('#goal-form');
   // 언어를 바꿔 다시 그렸으면, 자동으로 붙인 통독 이름도 새 언어로
   if (langDraft && type === 'bible') syncBibleAutoTitle(form, true);
+  gfState.paceMode = false;
+  const page = root.querySelector('.gf-page');
   form.addEventListener('change', (e) => {
     if (e.target.name === 'type' || e.target.classList.contains('bible-select')) {
       syncBibleAutoTitle(form);
       updateFormView();
     }
-    if (e.target.name === 'plan-mode') {
-      if (e.target.value === 'pace') form.querySelector('#f-pace').focus();
-      updateFormView();
+    if (e.target.name === 'type') {
+      const imgs = { book: LP_ASSETS.hero, lecture: LP_ASSETS.personas[1].img, bible: LP_ASSETS.personas[3].img, custom: LP_ASSETS.personas[0].img };
+      root.querySelector('#gf-hero').src = imgs[e.target.value];
     }
   });
-  form.addEventListener('input', updateFormView);
+  form.addEventListener('input', (e) => {
+    // 마감일과 하루 분량 중 마지막에 입력한 쪽을 따른다
+    if (e.target.id === 'f-pace') gfState.paceMode = e.target.value !== '';
+    if (e.target.id === 'f-due' || e.target.id === 'f-start') {
+      if (e.target.id === 'f-due') gfState.paceMode = false;
+    }
+    if (e.target.closest('#lecture-rows')) syncLectureSource();
+    if (e.target.id === 'f-title') renderTitleSuggest(form);
+    updateFormView();
+  });
+  form.querySelector('.gf-more').addEventListener('toggle', (e) => { gfState.moreOpen = e.target.open; });
+  // Enter: 다음 칸으로 (챕터 시작 페이지는 챕터 표가 따로 처리) · ⌘/Ctrl+Enter: 저장
+  page.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      form.requestSubmit();
+      return;
+    }
+    const el = e.target;
+    if (!el.matches || !el.matches('input[data-nav], select[data-nav]') || el.closest('#chapter-rows')) return;
+    e.preventDefault();
+    const all = [...form.querySelectorAll('[data-nav]')].filter((x) => x.offsetParent !== null && !x.disabled && !x.readOnly);
+    const next = all[all.indexOf(el) + 1];
+    if (next) next.focus();
+    else form.requestSubmit();
+  });
+  // 오른쪽 요약 카드: 2주 늘리기 · 빠진 항목으로 이동
+  page.addEventListener('click', (e) => {
+    if (e.target.closest('[data-action="extend-2w"]')) {
+      const dueEl = form.querySelector('#f-due');
+      if (!isValidDateStr(dueEl.value)) return;
+      dueEl.value = addDays(dueEl.value, 14);
+      gfState.paceMode = false;
+      const paceEl = form.querySelector('#f-pace');
+      if (paceEl) paceEl.value = '';
+      updateFormView();
+      return;
+    }
+    const go = e.target.closest('[data-focus]');
+    if (go) {
+      const target = document.getElementById(go.dataset.focus);
+      if (target) {
+        if (target.closest('details') && !target.closest('details').open) target.closest('details').open = true;
+        target.focus();
+        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    }
+  });
   bindChapterEditor(form, updateFormView);
   bindLectureAi(form, updateFormView);
   bindLibraryPicker(form);
@@ -3226,11 +3399,29 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
       updateFormView();
       return;
     }
+    if (e.target.closest('[data-action="lec-add"]')) {
+      const { titles, durations } = readLectureRows();
+      renderLectureRows([...titles, ''], durations);
+      const inputs = form.querySelectorAll('#lecture-rows .lec-title');
+      inputs[inputs.length - 1].focus();
+      return;
+    }
+    if (e.target.closest('[data-action="lec-del"]')) {
+      e.target.closest('[data-lec-row]').remove();
+      syncLectureSource();
+      const { titles, durations } = readLectureRows();
+      renderLectureRows(titles, durations);
+      updateFormView();
+      return;
+    }
     const weeks = e.target.closest('[data-weeks]')?.dataset.weeks;
     if (!weeks) return;
     const start = form.querySelector('#f-start').value;
     if (!isValidDateStr(start)) return;
     form.querySelector('#f-due').value = addDays(start, Number(weeks) * 7 - 1);
+    gfState.paceMode = false;
+    const paceEl = form.querySelector('#f-pace');
+    if (paceEl) paceEl.value = '';
     updateFormView();
   });
   form.querySelector('#f-rest-label').addEventListener('keydown', (e) => {
@@ -3239,8 +3430,11 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
       form.querySelector('#add-rest-date').click();
     }
   });
+  gfState.tried = false;
   form.addEventListener('submit', (e) => {
     e.preventDefault();
+    gfState.tried = true;
+    updateFormView();
     submitGoalForm(goal, requiredBook && !goal ? requiredBook.id : null, groupItemId && !goal ? groupItemId : null);
   });
   updateFormView();
@@ -3306,35 +3500,24 @@ function bindLibraryPicker(form) {
 
 function renderChapterEditorHtml(lastPage) {
   return `
-    <div class="field">
-      <span class="field-label">${t('챕터 목록')}</span>
-      <div class="ai-toc">
-        <div class="ai-toc-icon" aria-hidden="true">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>
-        </div>
-        <div class="ai-toc-text">
-          <strong>${t('AI 목차 인식')}<span class="ai-badge">AI</span></strong>
-          <span>${t('책의 목차 페이지를 찍어 올리면 AI가 챕터 이름과 시작 페이지를 읽어 한 번에 채워요. 여러 쪽이면 사진을 여러 장 함께 고르세요.')}</span>
-          <span class="ai-toc-drop">${t('사진을 이 상자에 끌어다 놓아도 돼요.')}</span>
-        </div>
-        <label class="btn btn-ai" id="toc-photo-label">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
-          <span class="toc-photo-text">${t('목차 사진 올리기')}</span>
+    <div class="chapter-editor">
+      <div class="ai-drop ai-toc">
+        <span class="ai-drop-title"><span class="ai-chip">AI</span>${t('목차 사진으로 챕터 채우기')}</span>
+        <label class="btn-ai-shine" id="toc-photo-label">
+          <span class="ai-dot"></span><span class="toc-photo-text">${t('AI로 목차 사진 올리기')}</span>
           <input type="file" id="toc-photo" accept="image/*" multiple hidden>
         </label>
-      </div>
-      <div class="toc-tools">
-        <span class="field-hint">${t('사진이 없으면')}</span>
+        <span class="ai-drop-hint">${t('사진을 이 상자에 끌어다 놓아도 돼요. 여러 장도 돼요.')}</span>
         <button type="button" class="link-btn toc-paste-link" data-action="toc-paste">${t('목차 글자 붙여넣기')}</button>
       </div>
       <p id="toc-result" class="toc-result" hidden></p>
       <div id="toc-paste-panel" class="toc-paste" hidden>
-        <textarea id="toc-text" class="input textarea" rows="8"
+        <textarea id="toc-text" class="gf-input gf-textarea" rows="8"
           placeholder="${t('예:\n1장 도입 ········ 11\n2장 기도의 삶 ····· 35\n3장 말씀 묵상 (58)')}"></textarea>
         <div class="toc-paste-actions">
           <span id="toc-parse-count" class="field-hint"></span>
-          <button type="button" class="btn btn-small" data-action="toc-cancel">${t('취소')}</button>
-          <button type="button" class="btn btn-small btn-primary" data-action="toc-apply">${t('챕터 채우기')}</button>
+          <button type="button" class="btn btn-small btn-outline" data-action="toc-cancel">${t('취소')}</button>
+          <button type="button" class="btn btn-small btn-dark" data-action="toc-apply">${t('챕터 채우기')}</button>
         </div>
       </div>
       <table class="chapter-table">
@@ -3343,17 +3526,12 @@ function renderChapterEditorHtml(lastPage) {
         </thead>
         <tbody id="chapter-rows"></tbody>
       </table>
-      <button type="button" class="btn btn-small" id="add-chapter">${t('+ 챕터 추가')}</button>
-    </div>
-    <div class="field-row">
-      <div class="field">
-        <label class="field-label" for="f-last-page">${t('마지막 페이지')}</label>
-        <input id="f-last-page" type="number" min="1" class="input input-num"
+      <button type="button" class="btn btn-small btn-outline" id="add-chapter">${t('+ 챕터 추가')}</button>
+      <div class="gf-inline last-page-row">
+        <label class="gf-sub-label" for="f-last-page">${t('마지막 페이지')}</label>
+        <input id="f-last-page" type="number" min="1" class="gf-input gf-input-num" data-nav
           value="${Number.isFinite(Number(lastPage)) && lastPage !== '' && lastPage !== null ? Number(lastPage) : ''}">
-      </div>
-      <div class="field">
-        <span class="field-label">${t('합계')}</span>
-        <span id="f-book-summary" class="field-value">-</span>
+        <span id="f-book-summary" class="num-font">-</span>
       </div>
     </div>`;
 }
@@ -4128,6 +4306,7 @@ function collectFormInput() {
     bibleStart: Number(val('f-bible-start')),
     bibleEnd: Number(val('f-bible-end')),
     titles: parseLectureLines(val('f-lectures')),
+    durations: document.getElementById('lecture-rows') ? readLectureRows().durations : null,
     customUnit: val('f-custom-unit'),
     customTotal: val('f-custom-total') === '' ? NaN : Number(val('f-custom-total')),
     customItems: parseLectureLines(val('f-custom-items')),
@@ -4165,14 +4344,24 @@ function updateFormView() {
     ? t('{books}권 · {chapters}장', { books: input.bibleEnd - input.bibleStart + 1, chapters: bibleChapters })
     : t('시작 권이 끝 권보다 뒤에 있습니다');
 
-  // 하루 분량으로 정하기: 하루 분량 → 마감일 자동 계산
-  const paceMode = document.querySelector('input[name="plan-mode"]:checked')?.value === 'pace';
-  const paceRow = document.getElementById('pace-row');
-  if (paceRow) paceRow.hidden = !paceMode;
-  document.getElementById('quick-due').hidden = paceMode;
+  // 책 전용 칸 (저자 · 읽은 페이지 · 도서관에서 고르기)
+  document.querySelectorAll('[data-section="book-more"], [data-section-book]').forEach((el) => { el.hidden = !isBook; });
+  // 강의: 사진(AI)으로 제목 목록이 바뀌었으면 강의 표를 다시 그린다
+  const lecArea = document.getElementById('f-lectures');
+  if (lecArea && document.getElementById('lecture-rows') && lecArea.value !== lecArea.dataset.synced) {
+    renderLectureRows(parseLectureLines(lecArea.value), []);
+  }
+
+  // 하루 분량으로 정하기: 하루 분량 → 마감일 자동 계산 (마감일과 하루 분량 중 마지막에 입력한 쪽을 따른다)
+  const paceBox = document.getElementById('pace-box');
+  const paceMode = gfState.paceMode && !!paceBox;
   const dueEl = document.getElementById('f-due');
-  dueEl.readOnly = paceMode;
-  if (paceRow) document.getElementById('f-pace-unit').textContent = getUnitLabel(unitBasis, 2);
+  if (paceBox) {
+    document.getElementById('f-pace-unit').textContent = getUnitLabel(unitBasis, 2);
+    paceBox.classList.toggle('is-active', paceMode);
+    dueEl.classList.toggle('is-derived', paceMode);
+    document.getElementById('f-pace-result').textContent = '';
+  }
   if (paceMode) {
     const firstPage = input.chapters[0] && input.chapters[0].startPage;
     const readFrom = Number.isInteger(input.readPage) ? input.readPage : (Number.isInteger(firstPage) ? firstPage - 1 : NaN);
@@ -4221,7 +4410,7 @@ function updateFormView() {
       daily = t('공부하는 날 하루 약 <b>{amount}</b>', { amount });
     }
   }
-  document.getElementById('f-daily').innerHTML = daily;
+  updateFormSummary(input, { isBook, isBible, isCustom, unitBasis, bibleChapters, customTotal });
 
   refreshChapterEditor();
   // 마지막으로 읽은 페이지 안내: 남은 분량
@@ -4234,7 +4423,105 @@ function updateFormView() {
       readHint.textContent = t('p.{p}까지 읽음 → 남은 {n}페이지를 나눕니다.', { p: read, n: input.lastPage - read });
     } else readHint.textContent = t('첫 챕터 시작 페이지와 마지막 페이지 사이로 입력하세요.');
   }
-  document.getElementById('f-lecture-count').textContent = t('{n}개 강의', { n: input.titles.length });
+  const lecMinutes = (input.durations || []).reduce((a, m) => a + (m || 0), 0);
+  document.getElementById('f-lecture-count').textContent = t('{n}개 강의', { n: input.titles.length })
+    + (lecMinutes ? ` · ${formatTotalDuration(lecMinutes)}` : '');
+}
+
+/** 도서관 책 바로 제안 (제목을 칠 때, 도서관에서 고를 수 있는 사람만) */
+function renderTitleSuggest(form) {
+  const box = form.querySelector('#title-suggest');
+  if (!box) return;
+  const q = normalizeBookTitle(form.querySelector('#f-title').value);
+  const canPick = !!form.querySelector('[data-action="library-open"]');
+  const found = canPick && getFormType() === 'book' && q.length >= 2
+    ? requiredBooks.filter((b) => normalizeBookTitle(b.title).includes(q) || normalizeBookTitle(b.author).includes(q)).slice(0, 3) : [];
+  box.hidden = !found.length;
+  box.innerHTML = found.length ? `<span class="mono-label">${t('도서관에 있어요')}</span>${found.map((b) => {
+    const mine = findGoalForBook(appData.goals, b.id);
+    return `<a class="suggest-item" href="${mine ? `#/goal/${escapeHtml(mine.id)}` : `#/new/book/${escapeHtml(b.id)}`}">
+      <b>${escapeHtml(b.title)}</b><span class="muted small">${[b.author, t('{pages}페이지 · {n}개 챕터', { pages: b.lastPage - b.chapters[0].startPage + 1, n: b.chapters.length })].filter(Boolean).map(escapeHtml).join(' · ')}</span>
+      <span class="suggest-use">${mine ? t('내 계획 보기') : t('이 책으로')}</span></a>`;
+  }).join('')}` : '';
+}
+
+/** 오른쪽 요약 카드: 하루 분량 · 기간 · 날짜 점 · 응원 · 무리한 계획 경고 · 빠진 항목 */
+function updateFormSummary(input, info) {
+  const bigEl = document.getElementById('gf-sum-daily');
+  if (!bigEl) return;
+  const { isBook, isBible, isCustom, unitBasis, bibleChapters, customTotal } = info;
+  const locked = !!document.querySelector('#goal-form.is-locked');
+  const validDates = isValidDateStr(input.startDate) && isValidDateStr(input.dueDate) && diffDays(input.startDate, input.dueDate) >= 0;
+  const study = validDates ? countStudyDays(input.startDate, input.dueDate, input.restWeekdays, input.restDates) : 0;
+  const first = input.chapters[0] && input.chapters[0].startPage;
+  const readFrom = isBook && Number.isInteger(input.readPage) ? input.readPage + 1 : first;
+  const total = isBook
+    ? (Number.isInteger(readFrom) && Number.isInteger(input.lastPage) ? input.lastPage - readFrom + 1 : 0)
+    : isBible ? bibleChapters : isCustom ? customTotal : input.titles.length;
+  let perDay = 0;
+  if (study > 0 && total > 0) {
+    const avg = total / study;
+    perDay = avg >= 10 ? Math.round(avg) : Math.round(avg * 10) / 10;
+  }
+  useUnitOf(isCustom ? { type: 'custom', custom: { unit: input.customUnit } } : null);
+  const limit = HEAVY_PER_DAY[unitBasis];
+  const heavy = !!(limit && perDay >= limit);
+  bigEl.textContent = perDay ? t('하루 {amount}', { amount: formatAmount(perDay, unitBasis) }) : '—';
+  bigEl.classList.toggle('is-heavy', heavy);
+  const md = (d) => formatShortDate(d);
+  document.getElementById('gf-sum-period').textContent = validDates
+    ? t('{start} ~ {end} · 공부일 {n}일', { start: md(input.startDate), end: md(input.dueDate), n: study }) : '';
+
+  // 날짜 점: 공부일 · 쉬는 날 · 여유 있는 날 (9주 이하일 때만)
+  const dots = document.getElementById('gf-dots');
+  const days = validDates ? countDaysInclusive(input.startDate, input.dueDate) : 0;
+  if (days > 0 && days <= 63) {
+    const extra = new Set((input.extraDates || []).map((x) => x.date));
+    const restDates = restDateList(input.restDates);
+    const lead = (parseDate(input.startDate).getDay() + 6) % 7; // 월요일 시작
+    const cells = [];
+    for (let i = 0; i < lead; i++) cells.push('<i class="dot-empty"></i>');
+    for (let i = 0; i < days; i++) {
+      const d = addDays(input.startDate, i);
+      const rest = isRestDate(d, input.restWeekdays, restDates);
+      cells.push(`<i class="${rest ? 'dot-rest' : extra.has(d) ? 'dot-easy' : 'dot-study'}${i === 0 ? ' is-start' : ''}" title="${md(d)}"></i>`);
+    }
+    dots.innerHTML = `<div class="gf-dots-grid">${cells.join('')}</div>
+      <div class="gf-dots-legend"><span><i class="dot-study"></i>${t('공부일')}</span><span><i class="dot-rest"></i>${t('쉬는 날')}</span><span><i class="dot-easy"></i>${t('여유 있는 날')}</span></div>`;
+    dots.hidden = false;
+  } else dots.hidden = true;
+
+  const cheer = document.getElementById('gf-cheer');
+  cheer.textContent = !perDay ? t('마감일만 정하면 돼요') : heavy ? t('조금 빡빡해요!') : t('이 정도면 할 만해요!');
+  cheer.classList.toggle('is-heavy', heavy);
+  const heavyBox = document.getElementById('gf-heavy');
+  heavyBox.hidden = !heavy || gfState.paceMode;
+  if (heavy) document.getElementById('gf-heavy-text').textContent = t('하루 {amount} 이상이에요. 마감일을 늦춰 볼까요?', { amount: formatAmount(limit, unitBasis) });
+
+  // 빠진 항목 (누르면 그 칸으로)
+  const issues = [];
+  if (!locked && !input.title.trim()) issues.push({ key: 'title', label: t('이름을 입력해 주세요'), focus: 'f-title' });
+  if (!validDates) issues.push({ key: 'due', label: t('마감일을 정해 주세요'), focus: 'f-due' });
+  if (!locked) {
+    if (isBook && !Number.isInteger(input.lastPage)) issues.push({ key: 'content', label: t('마지막 페이지를 입력해 주세요'), focus: 'f-last-page' });
+    else if (input.type === 'lecture' && !input.titles.length) issues.push({ key: 'content', label: t('강의를 한 줄 이상 입력해 주세요'), focus: 'f-lec-first' });
+    else if (isCustom && !customTotal) issues.push({ key: 'content', label: t('전체 개수를 입력해 주세요'), focus: 'f-custom-total' });
+  }
+  document.getElementById('gf-issues').innerHTML = issues.map((x) => `<button type="button" class="gf-issue" data-focus="${x.focus}">→ ${escapeHtml(x.label)}</button>`).join('');
+  const miss = document.getElementById('gf-miss');
+  miss.textContent = issues.length ? t('빠진 것 {n}개', { n: issues.length }) : t('준비됐어요');
+  miss.className = issues.length ? 'is-missing' : 'is-ready';
+  // 저장을 한 번 눌렀으면 칸 아래에도 표시
+  document.querySelectorAll('#goal-form .gf-err').forEach((el) => {
+    const hit = gfState.tried && issues.find((x) => x.key === el.dataset.err);
+    el.hidden = !hit;
+    if (hit) el.textContent = hit.label;
+  });
+  const sub = document.getElementById('gf-more-sub');
+  if (sub) {
+    const n = (input.restDates || []).length + (input.extraDates || []).length;
+    sub.textContent = (isBook ? t('저자 · 읽은 페이지 · 쉬는 날짜 · 여유 있는 날짜') : t('쉬는 날짜 · 여유 있는 날짜')) + (n ? ` · ${t('{n}개 정함', { n })}` : '');
+  }
 }
 
 function submitGoalForm(goal, requiredBookId = null, groupItemId = null) {
@@ -8855,6 +9142,51 @@ const EN = {
   '읽어야 할 페이지': 'Pages to read',
   '들어야 할 강의': 'Lectures',
   '완료 시 진도': 'Progress if done',
+  // 새 목표 추가 새 디자인
+  "'{group}' 그룹의 {kind}예요. 날짜만 정하면 돼요.": (p) => `${p.kind} for ${p.group}. Just pick your dates.`,
+  '강의 제목': 'Lecture title',
+  '시간': 'h',
+  '분': 'm',
+  '페이지·챕터 단위로 나눠요': 'Split by pages and chapters',
+  '강의 목록 순서대로 나눠요': 'Split in lecture order',
+  '권·장 단위로 나눠요': 'Split by books and chapters',
+  '숙제, 문제집, 단어 암기처럼 개수로 셀 수 있는 것': 'Anything you can count: homework, workbooks, vocabulary',
+  'Tab 이동 · Enter 다음 칸 · {key} {action}': (p) => `Tab move · Enter next · ${p.key} ${p.action}`,
+  '무엇을 할까요?': 'What will you do?',
+  '잠김': 'Locked',
+  '이름을 입력해 주세요': 'Enter a name',
+  '하루 분량': 'Daily dose',
+  '마감일을 정해 주세요': 'Set a deadline',
+  '내용': 'Contents',
+  '강의 목록 사진으로 채우기': 'Fill from a lecture list photo',
+  'AI로 강의 목록 사진 올리기': 'Upload lecture list with AI',
+  '+ 강의 추가': '+ Add lecture',
+  '항목 목록 (선택 · 한 줄에 하나). 적으면 계획표에 항목 이름이 나오고, 줄 수가 전체 개수가 됩니다.': 'Item list (optional, one per line). Items show in the plan and the line count becomes the total.',
+  '시작 권': 'From book',
+  '끝 권': 'To book',
+  '더 정하기': 'More options',
+  '저자 (선택)': 'Author (optional)',
+  '마지막으로 읽은 페이지 (선택)': 'Last page read (optional)',
+  '2주 늘리기': 'Add 2 weeks',
+  '목차 사진으로 챕터 채우기': 'Fill chapters from a contents photo',
+  'AI로 목차 사진 올리기': 'Upload contents photo with AI',
+  '사진을 이 상자에 끌어다 놓아도 돼요. 여러 장도 돼요.': 'Or drop photos here. Several at once is fine.',
+  '도서관에 있어요': 'IN THE LIBRARY',
+  '이 책으로': 'Use this',
+  '하루 {amount}': (p) => `${p.amount} a day`,
+  '{start} ~ {end} · 공부일 {n}일': (p) => `${p.start} – ${p.end} · ${p.n} study days`,
+  '공부일': 'Study',
+  '조금 빡빡해요!': 'A bit tight!',
+  '이 정도면 할 만해요!': 'Totally doable!',
+  '하루 {amount} 이상이에요. 마감일을 늦춰 볼까요?': (p) => `That’s ${p.amount} or more a day. Push the deadline back?`,
+  '마지막 페이지를 입력해 주세요': 'Enter the last page',
+  '강의를 한 줄 이상 입력해 주세요': 'Add at least one lecture',
+  '전체 개수를 입력해 주세요': 'Enter the total',
+  '빠진 것 {n}개': (p) => `${p.n} missing`,
+  '준비됐어요': 'Ready',
+  '저자 · 읽은 페이지 · 쉬는 날짜 · 여유 있는 날짜': 'author · pages read · days off · lighter days',
+  '쉬는 날짜 · 여유 있는 날짜': 'days off · lighter days',
+  '{n}개 정함': (p) => `${p.n} set`,
 };
 
 /* =========================================================================

@@ -24,7 +24,7 @@ const HELP_TEXT = {
       start: [
         ['start-1-new', '새 목표 만들기', ['오른쪽 위 **+ 새 목표 추가**를 눌러요', '종류(책·강의·성경 통독·기타)를 고르고 제목을 써요', '시작일·마감일을 정하고 **목표 추가**를 눌러요'], '**○주 동안** 버튼으로 마감일을 바로 정할 수 있어요.'],
         ['start-2-toc', '책 목차 넣기', ['**목차 사진 올리기**를 누르면 AI가 챕터와 페이지를 채워요', '빈 칸만 확인해요', '마지막 페이지를 입력해요']],
-        ['start-3-rest', '쉬는 날 정하기', ['쉬는 요일을 골라요', '행사 같은 특정 쉬는 날을 골라요', '여유 있는 날을 정하면 그날 더 많이 배정돼요']],
+        ['start-3-rest', '쉬는 날 정하기', ['쉬는 요일을 골라요', '**더 정하기**를 펼쳐 행사 같은 특정 쉬는 날을 골라요', '여유 있는 날을 정하면 그날 더 많이 배정돼요']],
       ],
       daily: [
         ['daily-1-today', '오늘 할 분량', ['다 했으면 동그라미를 눌러 체크해요. 다시 누르면 취소돼요', '목표 이름을 누르면 자세한 화면으로 가요']],
@@ -66,7 +66,7 @@ const HELP_TEXT = {
       start: [
         ['start-1-new', 'Create a new goal', ['Tap **+ New goal** at the top right', 'Pick a type (book, course, Bible reading, other) and enter a title', 'Set the start and end dates, then tap **Add goal**'], 'Use the **○ weeks** buttons to set the deadline in one tap.'],
         ['start-2-toc', 'Add a book’s contents', ['Tap **Upload contents photo** and AI fills in chapters and pages', 'Just check the empty fields', 'Enter the last page']],
-        ['start-3-rest', 'Set days off', ['Pick your weekly days off', 'Pick specific days off, like events', 'Mark lighter-schedule days to get more on those days']],
+        ['start-3-rest', 'Set days off', ['Pick your weekly days off', 'Open **More options** and pick specific days off, like events', 'Mark lighter-schedule days to get more on those days']],
       ],
       daily: [
         ['daily-1-today', 'Today’s dose', ['Done? Tap the circle to check it off. Tap again to undo', 'Tap a goal’s name to open its details']],
