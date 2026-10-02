@@ -1,6 +1,6 @@
 /* =========================================================================
  * 오늘분량 — 도움말 (Claude Design 도움말 화면)
- *   맨 위 핵심 흐름 3단계 → 상황별 탭 5개(처음 시작 · 매일 쓰기 · 그룹 참여자 · 그룹 리더 · 자주 묻는 질문).
+ *   맨 위 핵심 흐름 3단계 → 상황별 탭 5개(처음 시작 · 매일 쓰기 · 그룹 참여자 · 그룹 관리자 · 자주 묻는 질문).
  *   항목마다 화면 그림 1장 + 번호 단계 + 한 줄 팁. 그림(help/v2/*.jpg)의 빨간 번호와 단계 번호가 같다.
  *   문구의 **굵게**는 앱 화면의 버튼·메뉴 이름이다.
  * ========================================================================= */
@@ -14,7 +14,7 @@ const HELP_TEXT = {
     lead: '마감일만 정하면 오늘 할 분량을 매일 알려 드려요.',
     note: '1분이면 충분해요!',
     flow: ['목표 만들기', '오늘 분량 하고 체크', '밀리면 재분배'],
-    tabs: ['처음 시작', '매일 쓰기', '그룹 참여자', '그룹 리더', '자주 묻는 질문'],
+    tabs: ['처음 시작', '매일 쓰기', '그룹 참여자', '그룹 관리자', '자주 묻는 질문'],
     tip: 'TIP',
     more: '그래도 모르겠다면 아래 문의하기로 알려 주세요.',
     contact: '문의하기',
@@ -33,9 +33,9 @@ const HELP_TEXT = {
         ['daily-4-views', '계획표 보기', ['**목록** / **달력**을 눌러 보기를 바꿔요', '**이미지로 내보내기**로 계획표를 저장해요']],
       ],
       member: [
-        ['member-1-join', '그룹 들어가기', ['리더가 보낸 초대 링크를 누르고 **참여하기**를 눌러요', '또는 그룹 화면에서 6자리 코드를 넣고 **참여하기**를 눌러요']],
+        ['member-1-join', '그룹 들어가기', ['관리자가 보낸 초대 링크를 누르고 **참여하기**를 눌러요', '또는 그룹 화면에서 6자리 코드를 넣고 **참여하기**를 눌러요']],
         ['member-2-plan', '필독서·필수 시청 계획 세우기', ['대시보드 오른쪽 **그룹에서 받은 항목**에서 **계획 세우기**를 눌러요', '날짜만 정하면 돼요. 제목과 목차는 잠겨 있어요']],
-        ['member-3-changed', '리더가 내용을 바꿨을 때', ['안내 띠의 **적용 미리보기**로 바뀐 내용을 확인해요', '확인한 뒤 **적용**해요. 내 진도와 날짜는 그대로예요'], '리더는 그룹 항목의 진도만 볼 수 있어요. 개인 목표는 보이지 않아요.'],
+        ['member-3-changed', '관리자가 내용을 바꿨을 때', ['안내 띠의 **적용 미리보기**로 바뀐 내용을 확인해요', '확인한 뒤 **적용**해요. 내 진도와 날짜는 그대로예요'], '관리자는 그룹 항목의 진도만 볼 수 있어요. 개인 목표는 보이지 않아요.'],
       ],
       leader: [
         ['leader-1-create', '그룹 만들기', ['그룹 화면에서 그룹 이름을 입력해요', '**만들기**를 눌러요']],
@@ -56,7 +56,7 @@ const HELP_TEXT = {
     lead: 'Set a deadline, and we’ll show you today’s dose every day.',
     note: 'Takes a minute!',
     flow: ['Create a goal', 'Do today’s dose and check it', 'Behind? Redistribute'],
-    tabs: ['Getting started', 'Every day', 'Group members', 'Group leaders', 'FAQ'],
+    tabs: ['Getting started', 'Every day', 'Group members', 'Group admins', 'FAQ'],
     tip: 'TIP',
     more: 'Still stuck? Let us know with Contact us below.',
     contact: 'Contact us',
@@ -75,11 +75,11 @@ const HELP_TEXT = {
         ['daily-4-views', 'View your schedule', ['Tap **List** / **Calendar** to switch views', 'Tap **Export as image** to save the schedule']],
       ],
       member: [
-        ['member-1-join', 'Join a group', ['Tap the invite link from your leader, then tap **Join**', 'Or enter the 6-character code on the Groups screen and tap **Join**']],
+        ['member-1-join', 'Join a group', ['Tap the invite link from your admin, then tap **Join**', 'Or enter the 6-character code on the Groups screen and tap **Join**']],
         ['member-2-plan', 'Plan required reading or viewing', ['On the dashboard, find **From your groups** and tap **Make a plan**', 'Just set the dates. The title and contents are locked']],
-        ['member-3-changed', 'When your leader updates an item', ['Tap **Preview changes** in the banner to see what changed', 'Tap **Apply** after checking. Your progress and dates stay the same'], 'Leaders only see progress on group items. Your personal goals stay private.'],
+        ['member-3-changed', 'When your admin updates an item', ['Tap **Preview changes** in the banner to see what changed', 'Tap **Apply** after checking. Your progress and dates stay the same'], 'Admins only see progress on group items. Your personal goals stay private.'],
       ],
-      leader: [
+      admin: [
         ['leader-1-create', 'Create a group', ['Enter a group name on the Groups screen', 'Tap **Create**']],
         ['leader-2-invite', 'Invite members', ['Find the invite code in group details', 'Tap **Copy invite link** and send it', 'Tap **New code** to replace the code']],
         ['leader-3-share', 'Share required reading or viewing', ['Tap **+ Share one of my goals**', 'Search your goals and pick one']],

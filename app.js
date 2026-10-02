@@ -1716,7 +1716,7 @@ async function adminLoadGroups() {
   adminState.groupItems = items.data.map(rowToGroupItem).filter((i) => isValidShareContent(i.type, i.content));
 }
 
-/** 관리자: 그룹 한 곳의 사람들 (리더 포함 여부 선택) → 프로필 목록 */
+/** 관리자: 그룹 한 곳의 사람들 (관리자 포함 여부 선택) → 프로필 목록 */
 function adminGroupPeople(groupId, withLeader = false) {
   const g = adminState.groups.find((x) => x.id === groupId);
   const ids = adminState.groupMembers.filter((m) => m.group_id === groupId).map((m) => m.user_id);
@@ -1725,7 +1725,7 @@ function adminGroupPeople(groupId, withLeader = false) {
     || { user_id: id, name: '', email: t('알 수 없음') });
 }
 
-/** 관리자: 사람이 속한 그룹 이름들 (리더 포함) */
+/** 관리자: 사람이 속한 그룹 이름들 (관리자 포함) */
 function adminGroupsOf(userId) {
   return adminState.groups.filter((g) => g.leader_id === userId
     || adminState.groupMembers.some((m) => m.group_id === g.id && m.user_id === userId));
@@ -2251,7 +2251,7 @@ function runPlanSelfTests() {
   const mine = linkGoalToGroupItem(createGoalFromInput({ ...goalToInput(src), title: shared.title, ...shared.content, startDate: '2026-10-02', dueDate: '2026-10-20' }), shared);
   check('그룹: 키 순서가 달라도 같은 내용', !isGroupItemChanged(mine, shared) && !isSourceGoalChanged(shared, src));
   const shared2 = { ...shared, content: { ...shared.content, lastPage: 30 } };
-  check('그룹: 리더 수정 감지', isGroupItemChanged(mine, shared2) && isSourceGoalChanged(shared2, src));
+  check('그룹: 관리자 수정 감지', isGroupItemChanged(mine, shared2) && isSourceGoalChanged(shared2, src));
   applyGoalEdit(mine, inputFromGroupItem(mine, shared2), '2026-09-30');
   check('그룹: 적용하면 같아지고 날짜는 유지', !isGroupItemChanged(mine, shared2) && mine.dueDate === '2026-10-20' && mine.groupItemId === 'item1');
   check('그룹: 형식 검사', checkGoalShape(mine, 0) === null && isValidShareContent('book', shared.content)
@@ -3477,7 +3477,7 @@ function renderGoalForm(root, goal, bookId = null, groupItemId = null) {
     const existing = findGoalForBook(appData.goals, bookId);
     if (existing) { navigate(`#/goal/${existing.id}`); return; }
   }
-  // 그룹에서 공유된 목표로 계획 세우기: 이름·내용은 리더가 공유한 것을 쓰고 잠근다
+  // 그룹에서 공유된 목표로 계획 세우기: 이름·내용은 관리자가 공유한 것을 쓰고 잠근다
   const groupItem = groupItemId ? groupItems.find((i) => i.id === groupItemId) : groupItemForGoal(goal);
   if (groupItemId) {
     if (!groupItem) { navigate('#/groups'); return; }
@@ -6354,7 +6354,7 @@ function renderAdminGroupProgress() {
       <details class="panel progress-toggle" data-progress-key="${escapeHtml(key)}" ${isProgressOpen(key, true) ? 'open' : ''}>
         <summary>
           <b class="toggle-name is-big">${escapeHtml(g.name)}</b>
-          <span class="toggle-meta">${t('리더 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })}</span>
+          <span class="toggle-meta">${t('관리자 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })}</span>
           <span class="toggle-meta">${t('멤버')} <b class="num-font is-ink">${t('{n}명', { n: members.length })}</b></span>
           ${behind ? `<b class="toggle-behind">${t('밀림 {n}명', { n: behind })}</b>` : ''}
           <span class="chev" aria-hidden="true"></span>
@@ -6911,7 +6911,7 @@ function renderAdminMembers() {
 function renderMemberGroupCell(p, groups) {
   const others = adminState.groups.filter((g) => !groups.includes(g));
   const tags = groups.map((g) => g.leader_id === p.user_id
-    ? `<span class="group-chip" title="${t('리더는 그룹에서 뺄 수 없습니다')}">${escapeHtml(g.name)}<span class="chip-leader">${t('리더')}</span></span>`
+    ? `<span class="group-chip" title="${t('관리자는 그룹에서 뺄 수 없습니다')}">${escapeHtml(g.name)}<span class="chip-leader">${t('관리자')}</span></span>`
     : `<span class="group-chip">${escapeHtml(g.name)}<button type="button" class="chip-x" data-action="ag-remove-member"
         data-group="${escapeHtml(g.id)}" data-user="${escapeHtml(p.user_id)}" data-name="${escapeHtml(profileName(p))}"
         aria-label="${t('{group}에서 빼기', { group: escapeHtml(g.name) })}">×</button></span>`).join('');
@@ -6988,10 +6988,10 @@ function summarizeGoalTypes(goals, activeCount = null) {
   return parts.join(' · ');
 }
 
-/** 사람이 속한 그룹 태그 (리더면 "리더" 표시) */
+/** 사람이 속한 그룹 태그 (관리자면 "관리자" 표시) */
 function renderAdminGroupTags(userId) {
   return adminGroupsOf(userId).map((g) => `<span class="type-tag ${g.leader_id === userId ? 'type-leader' : 'type-group'}">${escapeHtml(g.name)}${
-    g.leader_id === userId ? ` · ${t('리더')}` : ''}</span>`).join(' ');
+    g.leader_id === userId ? ` · ${t('관리자')}` : ''}</span>`).join(' ');
 }
 
 /** 관리자: 그룹 하나 (접고 펼치기) — 멤버 관리 · 공유 목표별 진도 · 그룹 필독서 */
@@ -7009,7 +7009,7 @@ function renderAdminGroup(g) {
       <summary>
         <span class="chev is-left" aria-hidden="true"></span>
         <b class="toggle-name is-big">${escapeHtml(g.name)}</b>
-        <span class="toggle-meta">${t('리더 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })}</span>
+        <span class="toggle-meta">${t('관리자 {name}', { name: escapeHtml(leader ? profileName(leader) : t('알 수 없음')) })}</span>
         <span class="toggle-meta">${t('멤버')} <b class="num-font is-ink">${t('{n}명', { n: members.length })}</b></span>
         <span class="code-chip" title="${t('초대 코드')}">${escapeHtml(g.invite_code)}</span>
         <span class="toggle-actions">
@@ -7023,7 +7023,7 @@ function renderAdminGroup(g) {
         ${items.length ? groupItemsByKind(items).map(({ items: list }) => list.map((item) => renderGroupItemProgress(item, members, memberGoals,
           `<button type="button" class="btn btn-small btn-outline-muted is-danger" data-action="ag-item-delete" data-item="${escapeHtml(item.id)}">${t('공유 취소')}</button>`,
           (m, goal) => `#/admin/member/${m.user_id}/${goal.id}`)).join('')).join('')
-          : `<p class="muted small">${t('리더가 아직 필독서나 필수 시청을 정하지 않았습니다.')}</p>`}
+          : `<p class="muted small">${t('관리자가 아직 필독서나 필수 시청을 정하지 않았습니다.')}</p>`}
 
         <h3 class="admin-group-sub">${t('멤버')} <span class="num-font is-blue">${members.length}</span></h3>
         ${members.length ? `
@@ -7079,7 +7079,7 @@ async function handleAdminGroupAction(action, btn, container) {
     job = async () => check(await sb.from(GROUP_MEMBERS_TABLE).delete().eq('group_id', g.id).eq('user_id', btn.dataset.user));
   } else if (action === 'ag-item-delete') {
     const item = adminState.groupItems.find((i) => i.id === btn.dataset.item);
-    if (!item || !confirm(t("'{title}' 공유를 취소할까요?\n멤버들이 이미 만든 계획은 각자에게 개인 목표로 남지만, 리더는 더 이상 진도를 볼 수 없습니다.", { title: item.title }))) return true;
+    if (!item || !confirm(t("'{title}' 공유를 취소할까요?\n멤버들이 이미 만든 계획은 각자에게 개인 목표로 남지만, 관리자는 더 이상 진도를 볼 수 없습니다.", { title: item.title }))) return true;
     job = async () => check(await sb.from(GROUP_ITEMS_TABLE).delete().eq('id', item.id));
   }
   if (!job) return true;
@@ -7938,10 +7938,10 @@ async function onExportDialogChange(e) {
 }
 
 /* =========================================================================
- * 12-2. 그룹 — 회원 누구나 그룹을 만들어 리더가 되고, 초대 링크/코드로 멤버를 모은다.
- *   리더는 내 목표의 내용(책 목차·강의 목록 등, 날짜 제외)을 그룹에 공유하고,
+ * 12-2. 그룹 — 회원 누구나 그룹을 만들어 관리자가 되고, 초대 링크/코드로 멤버를 모은다.
+ *   관리자는 내 목표의 내용(책 목차·강의 목록 등, 날짜 제외)을 그룹에 공유하고,
  *   멤버는 그 내용으로 각자 날짜를 정해 계획한다.
- *   리더는 공유한 목표로 만든 멤버 계획의 진도만 볼 수 있다 (서버 RLS: study_planner_leader_can_view).
+ *   관리자는 공유한 목표로 만든 멤버 계획의 진도만 볼 수 있다 (서버 RLS: study_planner_leader_can_view).
  * ========================================================================= */
 
 const GROUPS_TABLE = 'study_planner_groups';
@@ -7949,12 +7949,12 @@ const GROUP_MEMBERS_TABLE = 'study_planner_group_members';
 const GROUP_ITEMS_TABLE = 'study_planner_group_items';
 const PENDING_JOIN_KEY = 'study-planner:pending-join';
 
-/** 내 그룹 [{ id, name, leaderId, leaderName, inviteCode(리더만), memberCount, isLeader }] */
+/** 내 그룹 [{ id, name, leaderId, leaderName, inviteCode(관리자만), memberCount, isLeader }] */
 let myGroups = [];
 /** 내 그룹들에 공유된 목표 [{ id, groupId, type, title, content, coverUrl, sourceGoalId, updatedAt }] */
 let groupItems = [];
 
-/** 그룹 상세 화면 상태 (리더: 멤버 목록 · 멤버들의 공유 목표) */
+/** 그룹 상세 화면 상태 (관리자: 멤버 목록 · 멤버들의 공유 목표) */
 const groupState = {
   groupId: null,
   loaded: false,
@@ -7965,7 +7965,7 @@ const groupState = {
   sharing: false, // "내 목표 공유하기" 선택 상자 열림
   libQuery: '', // 관리자: 도서관 검색어
   goalQuery: '', // 공유할 내 목표 검색어
-  itemId: null, // 리더 화면에서 진도를 보는 공유 항목
+  itemId: null, // 관리자 화면에서 진도를 보는 공유 항목
   tab: 'progress', // 'progress' 멤버 진도 | 'manage' 멤버 관리
   filter: 'all', // 'all' | 'behind' | 'none' | 'ahead'
   showAll: false, // 멤버 8명 넘게 보기
@@ -7998,12 +7998,12 @@ function shareSignature(title, content) {
   return canonicalJson({ title: String(title).trim(), ...content });
 }
 
-/** 리더가 공유 내용을 바꿔서 내 목표와 달라졌는지 */
+/** 관리자가 공유 내용을 바꿔서 내 목표와 달라졌는지 */
 function isGroupItemChanged(goal, item) {
   return goal.type !== item.type || shareSignature(goal.title, goalShareContent(goal)) !== shareSignature(item.title, item.content);
 }
 
-/** 리더의 원본 목표가 공유한 뒤에 바뀌었는지 (리더 화면의 "공유 내용 업데이트") */
+/** 관리자의 원본 목표가 공유한 뒤에 바뀌었는지 (관리자 화면의 "공유 내용 업데이트") */
 function isSourceGoalChanged(item, goal) {
   return !!goal && (goal.type !== item.type || shareSignature(goal.title, goalShareContent(goal)) !== shareSignature(item.title, item.content));
 }
@@ -8199,7 +8199,7 @@ async function loadGroups() {
   groupItems = items.data.map(rowToGroupItem).filter((i) => isValidShareContent(i.type, i.content));
 }
 
-/** 그룹 상세(리더): 멤버 목록 + 멤버들이 이 그룹에서 받은 목표 */
+/** 그룹 상세(관리자): 멤버 목록 + 멤버들이 이 그룹에서 받은 목표 */
 async function loadGroupDetail(groupId) {
   groupState.loading = true;
   groupState.error = null;
@@ -8255,7 +8255,7 @@ function renderGroups(root) {
     const items = groupItems.filter((i) => i.groupId === g.id);
     return `
       <a class="group-card" href="#/group/${escapeHtml(g.id)}">
-        <div class="group-card-top"><span class="role-pill ${g.isLeader ? 'is-leader' : ''}">${g.isLeader ? t('리더') : t('멤버')}</span><span class="group-card-arrow" aria-hidden="true">→</span></div>
+        <div class="group-card-top"><span class="role-pill ${g.isLeader ? 'is-leader' : ''}">${g.isLeader ? t('관리자') : t('멤버')}</span><span class="group-card-arrow" aria-hidden="true">→</span></div>
         <b class="group-card-name">${escapeHtml(g.name)}</b>
         <div class="group-card-foot">
           <span>${items.length ? summarizeShared(items) : t('아직 공유한 항목 없음')}</span>
@@ -8270,16 +8270,16 @@ function renderGroups(root) {
       <div class="groups-head">
         <a class="back-link" href="#/">← ${t('내 계획')}</a>
         <h1>${t('그룹')}</h1>
-        ${myGroups.length ? `<p>${t('그룹을 만들면 리더가 되어 책·강의 같은 목표를 멤버들에게 나눠 주고 진도를 볼 수 있어요.')}</p>` : ''}
+        ${myGroups.length ? `<p>${t('그룹을 만들면 관리자가 되어 책·강의 같은 목표를 멤버들에게 나눠 주고 진도를 볼 수 있어요.')}</p>` : ''}
       </div>
       ${myGroups.length ? `
       <div class="groups-actions">
         <section class="groups-create">
-          <div class="groups-box-head"><h2>${t('새 그룹 만들기')}</h2><span class="mono-label">${t('만든 사람이 리더')}</span></div>
+          <div class="groups-box-head"><h2>${t('새 그룹 만들기')}</h2><span class="mono-label">${t('만든 사람이 관리자')}</span></div>
           ${renderGroupCreateForm()}
         </section>
         <section class="groups-join">
-          <div class="groups-box-head"><h2>${t('초대 코드로 참여')}</h2><span class="hand-note hand-sm">${t('리더에게 받은 코드!')}</span></div>
+          <div class="groups-box-head"><h2>${t('초대 코드로 참여')}</h2><span class="hand-note hand-sm">${t('관리자에게 받은 코드!')}</span></div>
           ${renderGroupJoinForm(true)}
           <span class="mono-label code-count">0/6</span>
         </section>
@@ -8297,7 +8297,7 @@ function renderGroups(root) {
         <div class="groups-empty-text">
           <span class="hand-note">${t('같이 읽으면 끝까지 가요')}</span>
           <h2>${t('아직 참여한 그룹이 없어요')}</h2>
-          <p>${t('그룹을 만들면 리더가 되어 책·강의 같은 목표를 멤버들에게 나눠 주고 진도를 볼 수 있어요.')}</p>
+          <p>${t('그룹을 만들면 관리자가 되어 책·강의 같은 목표를 멤버들에게 나눠 주고 진도를 볼 수 있어요.')}</p>
           <div class="groups-empty-forms">${renderGroupCreateForm()}${renderGroupJoinForm(false)}</div>
           <p class="errors" id="group-error" hidden></p>
         </div>
@@ -8349,14 +8349,14 @@ function renderJoinGroup(root, code) {
     const info = !error && data && data[0];
     if (!info) {
       renderMessageScreen(root, t('그룹을 찾을 수 없습니다'), `
-        <p class="muted">${t('초대 코드가 틀렸거나, 리더가 코드를 새로 만들었을 수 있어요. 리더에게 새 링크를 받아 주세요.')}</p>
+        <p class="muted">${t('초대 코드가 틀렸거나, 관리자가 코드를 새로 만들었을 수 있어요. 관리자에게 새 링크를 받아 주세요.')}</p>
         <a class="btn" href="#/groups">${t('그룹 목록')}</a>`);
       return;
     }
     if (info.is_member) { navigate(`#/group/${info.id}`); return; }
     renderMessageScreen(root, t("'{name}' 그룹에 참여할까요?", { name: escapeHtml(info.name) }), `
-      <p class="muted">${t('리더: {name}', { name: escapeHtml(info.leader_name) })}</p>
-      <p class="muted">${t('참여하면 리더가 공유한 목표로 계획을 세울 수 있고, 리더는 그 목표의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.')}</p>
+      <p class="muted">${t('관리자: {name}', { name: escapeHtml(info.leader_name) })}</p>
+      <p class="muted">${t('참여하면 관리자가 공유한 목표로 계획을 세울 수 있고, 관리자는 그 목표의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.')}</p>
       <div class="join-actions">
         <button type="button" class="btn btn-primary" data-action="join">${t('참여하기')}</button>
         <a class="btn" href="#/">${t('취소')}</a>
@@ -8403,9 +8403,9 @@ function renderGroupHeader(group, actions) {
     <div class="group-head">
       <div class="group-head-text">
         <div class="group-head-meta">
-          <span class="role-pill ${group.isLeader ? 'is-leader' : ''}">${group.isLeader ? t('리더') : t('멤버')}</span>
+          <span class="role-pill ${group.isLeader ? 'is-leader' : ''}">${group.isLeader ? t('관리자') : t('멤버')}</span>
           <span>${t('멤버')} <b class="num-font">${t('{n}명', { n: group.memberCount })}</b></span>
-          ${group.isLeader ? '' : `<span>· ${t('리더 {name}', { name: escapeHtml(group.leaderName) })}</span>`}
+          ${group.isLeader ? '' : `<span>· ${t('관리자 {name}', { name: escapeHtml(group.leaderName) })}</span>`}
         </div>
         <h1>${escapeHtml(group.name)}</h1>
       </div>
@@ -8444,15 +8444,15 @@ function renderMemberGroup(group) {
     ${renderGroupHeader(group, groupState.leaveAsk ? '' : `<button type="button" class="btn btn-outline-muted" data-action="group-leave-ask">${t('그룹 나가기')}</button>`)}
     ${groupState.leaveAsk ? `
     <div class="leave-bar">
-      <span>${t('그룹을 나가면 받은 항목이 내 목록에서 빠져요. 내가 세운 계획과 기록은 개인 목표로 남고, 리더는 더 이상 볼 수 없어요.')}</span>
+      <span>${t('그룹을 나가면 받은 항목이 내 목록에서 빠져요. 내가 세운 계획과 기록은 개인 목표로 남고, 관리자는 더 이상 볼 수 없어요.')}</span>
       <button type="button" class="btn btn-outline-light" data-action="group-leave-cancel">${t('취소')}</button>
       <button type="button" class="btn btn-white" data-action="group-leave">${t('나가기')}</button>
     </div>` : ''}
     <section class="received">
       <div class="groups-list-head"><h2>${t('받은 항목')}</h2><span class="num-font is-blue">${items.length}</span></div>
-      ${items.length ? items.map(renderItem).join('') : `<div class="empty">${t('리더가 아직 필독서나 필수 시청을 정하지 않았습니다.')}</div>`}
+      ${items.length ? items.map(renderItem).join('') : `<div class="empty">${t('관리자가 아직 필독서나 필수 시청을 정하지 않았습니다.')}</div>`}
     </section>
-    <p class="muted small">${t('리더는 여기서 만든 계획의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.')}</p>`;
+    <p class="muted small">${t('관리자는 여기서 만든 계획의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.')}</p>`;
 }
 
 /** 마지막 기록 날짜를 "오늘 · 어제 · n일 전"으로 */
@@ -8464,7 +8464,7 @@ function relativeDay(date, today = todayStr()) {
   return t('{n}일 전', { n });
 }
 
-/** 리더 화면 멤버 한 줄의 상태 분류: 'none' | 'behind' | 'ahead' | 'on' */
+/** 관리자 화면 멤버 한 줄의 상태 분류: 'none' | 'behind' | 'ahead' | 'on' */
 function memberProgressKind(s) {
   if (!s) return 'none';
   if (s.isActive && !s.notStarted && s.diff < 0) return 'behind';
@@ -8473,7 +8473,7 @@ function memberProgressKind(s) {
 }
 
 /**
- * 공유 목표 하나 + 멤버별 진도 표 (리더 화면 · 관리자 회원 관리 공용)
+ * 공유 목표 하나 + 멤버별 진도 표 (관리자 화면 · 관리자 회원 관리 공용)
  *  members: [{ user_id, name, email }] (null이면 불러오는 중) / memberGoals: [{ userId, goal }]
  */
 function renderGroupItemProgress(item, members, memberGoals, actionsHtml, linkFor) {
@@ -8568,7 +8568,7 @@ function renderShareLibraryResults(books, query) {
     + (found.length > shown.length ? `<p class="muted small">${t('{n}권 더 있어요. 검색어를 더 적어 주세요.', { n: found.length - shown.length })}</p>` : '');
 }
 
-/** 리더 화면: 초대 코드 · 공유한 항목 · 멤버 진도 / 멤버 관리 */
+/** 관리자 화면: 초대 코드 · 공유한 항목 · 멤버 진도 / 멤버 관리 */
 function renderLeaderGroup(group) {
   const today = todayStr();
   const items = groupItems.filter((i) => i.groupId === group.id);
@@ -8647,7 +8647,7 @@ function renderLeaderGroup(group) {
     <div class="manage-row">
       <span class="avatar">${initial(m.name || profileName(m))}</span>
       <span class="manage-name"><span>${escapeHtml(leader ? m.name : profileName(m))}${leader ? ` <span class="muted">${t('(나)')}</span>` : ''}</span>${m.email ? `<span class="muted small">${escapeHtml(m.email)}</span>` : ''}</span>
-      <span class="role-pill ${leader ? 'is-leader' : ''}">${leader ? t('리더') : t('멤버')}</span>
+      <span class="role-pill ${leader ? 'is-leader' : ''}">${leader ? t('관리자') : t('멤버')}</span>
       <span class="mono manage-date">${leader ? '' : timestampToDate(m.joined_at)}</span>
       ${leader ? '<span class="manage-gap"></span>' : `<button type="button" class="btn btn-small btn-outline-muted" data-action="member-remove" data-user="${escapeHtml(m.user_id)}" data-name="${escapeHtml(profileName(m))}">${t('내보내기||member')}</button>`}
     </div>`).join('');
@@ -8725,7 +8725,7 @@ function renderLeaderGroup(group) {
     </section>`;
 }
 
-/** 리더: 멤버 한 사람의 공유 목표 계획 (읽기 전용) */
+/** 관리자: 멤버 한 사람의 공유 목표 계획 (읽기 전용) */
 function renderGroupMemberGoal(group, userId, goalId) {
   const back = `<a class="back-link" href="#/group/${escapeHtml(group.id)}">← ${escapeHtml(group.name)}</a>`;
   if (!groupState.loaded) return `${back}<div class="empty">${t('불러오는 중…')}</div>`;
@@ -8866,7 +8866,7 @@ function bindGroupEvents(container, group) {
       });
     } else if (action === 'share-delete') {
       const item = groupItems.find((i) => i.id === btn.dataset.item);
-      if (!item || !confirm(t("'{title}' 공유를 취소할까요?\n멤버들이 이미 만든 계획은 각자에게 개인 목표로 남지만, 리더는 더 이상 진도를 볼 수 없습니다.", { title: item.title }))) return;
+      if (!item || !confirm(t("'{title}' 공유를 취소할까요?\n멤버들이 이미 만든 계획은 각자에게 개인 목표로 남지만, 관리자는 더 이상 진도를 볼 수 없습니다.", { title: item.title }))) return;
       await run(async () => { check(await sb.from(GROUP_ITEMS_TABLE).delete().eq('id', item.id)); await refreshGroups(); });
     }
   });
@@ -8874,13 +8874,13 @@ function bindGroupEvents(container, group) {
 
 /* ----- 대시보드 · 목표 화면 연결 ----- */
 
-/** 상세 화면: 리더가 공유 내용을 바꿨으면 적용 안내 */
+/** 상세 화면: 관리자가 공유 내용을 바꿨으면 적용 안내 */
 function renderGroupItemNotice(goal) {
   const item = groupItemForGoal(goal);
   if (!item || !isGroupItemChanged(goal, item) || detailState.preview) return '';
   return `
     <div class="notice notice-row">
-      <span>${t('그룹 리더가 공유 내용(이름·목차·목록)을 수정했습니다. 내 계획에 적용할까요?')}</span>
+      <span>${t('그룹 관리자가 공유 내용(이름·목차·목록)을 수정했습니다. 내 계획에 적용할까요?')}</span>
       <button type="button" class="btn btn-small" data-action="sync-group">${t('적용 미리보기')}</button>
     </div>`;
 }
@@ -9434,14 +9434,13 @@ const EN = {
   // 그룹
   '그룹': 'Groups',
   '그룹 연결 정보가 올바르지 않습니다.': 'Group link data is invalid.',
-  "'{group}' 그룹에서 공유된 목표입니다. 이름과 내용은 리더가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.": (p) => `This goal was shared in the group '${p.group}'. The leader sets its name and contents; here you can only set the start date, due date and rest days.`,
-  '리더': 'Leader',
+  "'{group}' 그룹에서 공유된 목표입니다. 이름과 내용은 관리자가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.": (p) => `This goal was shared in the group '${p.group}'. The admin sets its name and contents; here you can only set the start date, due date and rest days.`,
   '멤버': 'Member',
   '멤버 {n}명': (p) => `${p.n} ${p.n === 1 ? 'member' : 'members'}`,
   '공유한 목표 {n}개': (p) => `${p.n} shared ${p.n === 1 ? 'goal' : 'goals'}`,
-  '리더 {name}': (p) => `Leader ${p.name}`,
+  '관리자 {name}': (p) => `Admin ${p.name}`,
   '공유된 목표 {n}개 · 계획 {planned}개': (p) => `${p.n} shared · ${p.planned} planned`,
-  '그룹을 만들면 리더가 되어 책·강의 같은 목표를 멤버들에게 나눠 주고 진도를 볼 수 있어요.': 'Create a group to become its leader, share goals like books and lectures with members, and follow their progress.',
+  '그룹을 만들면 관리자가 되어 책·강의 같은 목표를 멤버들에게 나눠 주고 진도를 볼 수 있어요.': 'Create a group to become its admin, share goals like books and lectures with members, and follow their progress.',
   '새 그룹 만들기': 'Create a group',
   '예: 청년부 독서 모임': 'e.g. Youth reading club',
   '만들기': 'Create',
@@ -9453,16 +9452,16 @@ const EN = {
   '그룹 이름을 입력하세요.': 'Enter a group name.',
   '초대 코드 6자리를 확인하세요.': 'Check the 6-character invite code.',
   '그룹을 찾을 수 없습니다': 'Group not found',
-  '초대 코드가 틀렸거나, 리더가 코드를 새로 만들었을 수 있어요. 리더에게 새 링크를 받아 주세요.': 'The invite code is wrong, or the leader created a new one. Ask the leader for a new link.',
+  '초대 코드가 틀렸거나, 관리자가 코드를 새로 만들었을 수 있어요. 관리자에게 새 링크를 받아 주세요.': 'The invite code is wrong, or the admin created a new one. Ask the admin for a new link.',
   '그룹 목록': 'Groups',
   "'{name}' 그룹에 참여할까요?": (p) => `Join the group '${p.name}'?`,
-  '리더: {name}': (p) => `Leader: ${p.name}`,
-  '참여하면 리더가 공유한 목표로 계획을 세울 수 있고, 리더는 그 목표의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.': 'After joining you can plan the goals the leader shares. The leader can see progress on those goals only — never your personal goals.',
-  '내가 리더인 그룹': 'You lead this group',
+  '관리자: {name}': (p) => `Admin: ${p.name}`,
+  '참여하면 관리자가 공유한 목표로 계획을 세울 수 있고, 관리자는 그 목표의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.': 'After joining you can plan the goals the admin shares. The admin can see progress on those goals only — never your personal goals.',
+  '내가 관리자인 그룹': 'You manage this group',
   '그룹 나가기': 'Leave group',
   '공유된 목표': 'Shared goals',
-  '리더가 아직 공유한 목표가 없습니다.': 'The leader has not shared any goals yet.',
-  '리더는 여기서 만든 계획의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.': 'The leader can see progress only on plans made from these goals. Your personal goals stay private.',
+  '관리자가 아직 공유한 목표가 없습니다.': 'The admin has not shared any goals yet.',
+  '관리자는 여기서 만든 계획의 진도만 볼 수 있어요. 개인 목표는 보이지 않습니다.': 'The admin can see progress only on plans made from these goals. Your personal goals stay private.',
   '아직 계획 없음': 'No plan yet',
   '계획 세운 멤버 {n}/{total}명': (p) => `${p.n}/${p.total} members planned`,
   '내 목표에서 바꾼 이름·내용을 멤버들에게 다시 공유합니다': 'Share the name and contents you changed in your goal with members again',
@@ -9491,17 +9490,17 @@ const EN = {
   '초대 코드를 새로 만들까요?\n지금 코드와 링크로는 더 이상 참여할 수 없습니다. (이미 참여한 멤버는 그대로예요)': 'Create a new invite code?\nThe current code and link will stop working. (Existing members stay.)',
   '새 그룹 이름': 'New group name',
   "'{name}' 그룹을 삭제할까요?\n공유한 목표와 멤버 목록이 사라집니다. 멤버들이 이미 만든 계획은 각자에게 개인 목표로 남습니다.": (p) => `Delete the group '${p.name}'?\nShared goals and the member list will be removed. Plans members already made stay with them as personal goals.`,
-  "'{name}' 그룹에서 나갈까요?\n이미 만든 계획은 개인 목표로 남고, 리더는 더 이상 볼 수 없습니다.": (p) => `Leave the group '${p.name}'?\nPlans you made stay as personal goals, and the leader can no longer see them.`,
+  "'{name}' 그룹에서 나갈까요?\n이미 만든 계획은 개인 목표로 남고, 관리자는 더 이상 볼 수 없습니다.": (p) => `Leave the group '${p.name}'?\nPlans you made stay as personal goals, and the admin can no longer see them.`,
   '{name}님을 그룹에서 내보낼까요?\n그 멤버의 계획은 개인 목표로 남고, 더 이상 볼 수 없습니다.': (p) => `Remove ${p.name} from the group?\nTheir plans stay as personal goals, and you will no longer see them.`,
   '내 목표의 바뀐 이름·내용을 멤버들에게 다시 공유할까요?\n이미 계획을 세운 멤버에게는 "적용할까요?" 안내가 나타납니다.': 'Share the updated name and contents with members?\nMembers who already planned will be asked whether to apply the changes.',
-  "'{title}' 공유를 취소할까요?\n멤버들이 이미 만든 계획은 각자에게 개인 목표로 남지만, 리더는 더 이상 진도를 볼 수 없습니다.": (p) => `Unshare '${p.title}'?\nPlans members already made stay as personal goals, but you will no longer see their progress.`,
+  "'{title}' 공유를 취소할까요?\n멤버들이 이미 만든 계획은 각자에게 개인 목표로 남지만, 관리자는 더 이상 진도를 볼 수 없습니다.": (p) => `Unshare '${p.title}'?\nPlans members already made stay as personal goals, but you will no longer see their progress.`,
   '그룹에서 공유된 목표': 'Shared in your groups',
-  '그룹 리더가 공유 내용(이름·목차·목록)을 수정했습니다. 내 계획에 적용할까요?': 'The group leader updated the shared contents (name, table of contents, list). Apply to your plan?',
+  '그룹 관리자가 공유 내용(이름·목차·목록)을 수정했습니다. 내 계획에 적용할까요?': 'The group admin updated the shared contents (name, table of contents, list). Apply to your plan?',
   // 그룹 (관리자)
   '아직 이 책을 받을 사람이 없습니다. (그룹 멤버는 <a href="#/admin/members">회원 관리</a>에서)': 'Nobody receives this book yet. (Manage group members in <a href="#/admin/members">Members</a>.)',
   '필독서 · {group}': (p) => `Required · ${p.group}`,
   '그룹 필독서': 'Required for groups',
-  '고른 그룹의 모든 사람(리더 포함) 대시보드에 필독서로 보입니다': "Shown as required reading on the dashboard of everyone in the selected groups (leaders included)",
+  '고른 그룹의 모든 사람(관리자 포함) 대시보드에 필독서로 보입니다': "Shown as required reading on the dashboard of everyone in the selected groups (admins included)",
   '아직 그룹이 없습니다.': 'No groups yet.',
   '그룹을 누르면 멤버·공유 목표·진도를 펼쳐 볼 수 있어요. 새 그룹은 상단 [그룹] 메뉴에서 만듭니다.': 'Click a group to see its members, shared goals and progress. Create new groups from the [Groups] menu at the top.',
   '전체 회원': 'All members',
@@ -9519,24 +9518,23 @@ const EN = {
   '그룹 없음': 'No group',
   '이름 / 이메일': 'Name / Email',
   '조건에 맞는 회원이 없습니다.': 'No members match.',
-  '리더는 그룹에서 뺄 수 없습니다': 'The leader cannot be removed from the group',
+  '관리자는 그룹에서 뺄 수 없습니다': 'The admin cannot be removed from the group',
   '{group}에서 빼기': (p) => `Remove from ${p.group}`,
   '그룹에 추가': 'Add to group',
   '+ 그룹 추가': '+ Add group',
   '그룹 선택': 'Choose group',
   '아직 배정된 책이 없습니다. <a href="#/admin/books">도서관</a>에서 정하세요. (그룹의 진도는 <a href="#/admin/members">회원 관리</a>의 그룹에서 봅니다)': 'No assigned books yet. Assign them in the <a href="#/admin/books">Library</a>. (See group progress under groups in <a href="#/admin/members">Members</a>.)',
   // 필독서 · 필수 시청
-  '필독서 {n}권': (p) => `${p.n} required ${p.n === 1 ? 'book' : 'books'}`,
   '필수 시청': 'Required viewing',
   '필수 시청 {n}개': (p) => `${p.n} required ${p.n === 1 ? 'lecture' : 'lectures'}`,
   '공유 목표': 'Shared goal',
   '필독서·필수 시청 없음': 'No required books or lectures',
   '계획 {n}개': (p) => `${p.n} planned`,
-  '리더가 아직 필독서나 필수 시청을 정하지 않았습니다.': 'The leader has not set any required books or lectures yet.',
+  '관리자가 아직 필독서나 필수 시청을 정하지 않았습니다.': 'The admin has not set any required books or lectures yet.',
   '필독서 · 필수 시청': 'Required books · lectures',
   '아직 필독서나 필수 시청이 없습니다. 내 책·강의 목표를 공유하면 멤버들이 같은 내용으로 계획을 세울 수 있어요.': 'No required books or lectures yet. Share one of your book or lecture goals so members can plan with the same contents.',
   '그룹 필독서 · 필수 시청': 'Required in your groups',
-  "'{group}' 그룹의 {kind}입니다. 이름과 내용은 리더가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.": (p) => `${p.kind} in the group '${p.group}'. The leader sets its name and contents; here you can only set the start date, due date and rest days.`,
+  "'{group}' 그룹의 {kind}입니다. 이름과 내용은 관리자가 정하며, 여기서는 시작일·마감일·쉬는 요일만 정할 수 있습니다.": (p) => `${p.kind} in the group '${p.group}'. The admin sets its name and contents; here you can only set the start date, due date and rest days.`,
   '아직 그룹의 필독서·필수 시청이나 배정된 책이 없습니다.': 'No group required books/lectures or assigned books yet.',
   '아직 그룹의 필독서·필수 시청이나 회원 목표가 없습니다.': 'No group required books/lectures or member goals yet.',
   '개별 진행': 'Individual goals',
@@ -9632,7 +9630,6 @@ const EN = {
   '올리는 중…': 'Uploading…',
   '다른 사진으로': 'Change photo',
   '표지 사진 올리기': 'Upload cover photo',
-  '표지 빼기': 'Remove cover',
   '대시보드와 목표 화면에 보여요 (선택)': 'Shown on your dashboard and goal page (optional)',
   '공유받은 책의 표지를 써요': 'Uses the shared book’s cover',
   '공유받은 책이라 표지를 바꿀 수 없어요': 'This is a shared book, so the cover can’t be changed',
@@ -9680,13 +9677,13 @@ const EN = {
   // 그룹 화면 새 디자인
   '그룹 이름': 'Group name',
   '아직 공유한 항목 없음': 'Nothing shared yet',
-  '만든 사람이 리더': 'You’ll be the leader',
-  '리더에게 받은 코드!': 'Ask your leader!',
+  '만든 사람이 관리자': 'You’ll be the admin',
+  '관리자에게 받은 코드!': 'Ask your admin!',
   '둘러앉아 함께 책을 읽는 사람들 손그림': 'Sketch of people reading together',
   '같이 읽으면 끝까지 가요': 'Read together, finish together',
   '아직 참여한 그룹이 없어요': 'You’re not in any groups yet',
   '마감일만 정하면 돼요': 'Just pick a deadline',
-  '그룹을 나가면 받은 항목이 내 목록에서 빠져요. 내가 세운 계획과 기록은 개인 목표로 남고, 리더는 더 이상 볼 수 없어요.': 'Leaving removes shared items from your list. Your plans and logs stay as personal goals, and the leader can no longer see them.',
+  '그룹을 나가면 받은 항목이 내 목록에서 빠져요. 내가 세운 계획과 기록은 개인 목표로 남고, 관리자는 더 이상 볼 수 없어요.': 'Leaving removes shared items from your list. Your plans and logs stay as personal goals, and the admin can no longer see them.',
   '나가기': 'Leave',
   '받은 항목': 'Received',
   '어제': 'Yesterday',
@@ -9720,8 +9717,6 @@ const EN = {
   '고른 사람에게만 보여요': 'Only people you pick',
   '보이는 대상': 'Visible to',
   '계획': 'Plans',
-  '표지': 'Cover',
-  '표지 주소가 올바르지 않습니다.': 'The cover address is invalid.',
   '회원 선택': 'Pick a member',
   // 이미지 내보내기 새 디자인
   '{name} 님의 진도 보고 · {date}': (p) => `${p.name}’s progress · ${p.date}`,
