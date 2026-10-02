@@ -2282,3 +2282,18 @@ tr.is-today .check-mark { color: #fff; }
 .gf-card [data-section="custom"]:not([hidden]) { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
 .gf-card [data-section="custom"] .custom-unit-presets { margin-top: 0; }
 .gf-card [data-section="custom"] .gf-textarea { width: 100%; }
+
+/* 챕터 여러 개 선택 — 체크칸 · 선택하면 나타나는 작업 막대 */
+.chapter-table .col-sel { width: 30px; padding-left: 0; padding-right: 0; text-align: center; }
+.ch-sel { width: 17px; height: 17px; margin: 0; accent-color: var(--text); cursor: pointer; vertical-align: middle; }
+.ch-sel[hidden] { display: none; }
+.chapter-table tr.is-picked td { background: #eaeef7; }
+.chapter-table tr.is-picked .input { background: #fff; }
+.ch-bulk { position: sticky; top: 76px; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; padding: 10px 12px; border-radius: 14px; background: var(--text); color: #fff; box-shadow: 0 12px 24px -16px rgba(0, 0, 0, .5); animation: gfRise .25s cubic-bezier(.2, .8, .2, 1); }
+.ch-bulk[hidden] { display: none; }
+.ch-bulk-count { font-weight: 700; font-size: 14px; margin-right: auto; }
+.ch-bulk .btn-outline { background: transparent; color: #fff; border-color: rgba(255, 255, 255, .4); }
+.ch-bulk .btn-outline:hover { border-color: #fff; background: rgba(255, 255, 255, .08); }
+.ch-bulk .btn-danger-outline { background: transparent; color: #f0a898; border: 1.5px solid rgba(240, 168, 152, .6); }
+.ch-bulk .btn-danger-outline:hover { background: rgba(240, 168, 152, .12); border-color: #f0a898; }
+.ch-bulk .link-btn { color: #c9c9c5; }

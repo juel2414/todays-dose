@@ -3606,9 +3606,16 @@ function renderChapterEditorHtml(lastPage) {
           <button type="button" class="btn btn-small btn-dark" data-action="toc-apply">${t('챕터 채우기')}</button>
         </div>
       </div>
+      <div class="ch-bulk" id="ch-bulk" hidden>
+        <span class="ch-bulk-count" id="ch-bulk-count"></span>
+        <button type="button" class="btn btn-small btn-outline" data-ch-bulk="up">${t('↑ 위로')}</button>
+        <button type="button" class="btn btn-small btn-outline" data-ch-bulk="down">${t('↓ 아래로')}</button>
+        <button type="button" class="btn btn-small btn-danger-outline" data-ch-bulk="delete">${t('선택 삭제')}</button>
+        <button type="button" class="link-btn" data-ch-bulk="clear">${t('선택 해제')}</button>
+      </div>
       <table class="chapter-table">
         <thead>
-          <tr><th class="col-drag"></th><th class="col-no">#</th><th>${t('챕터 이름')}</th><th class="col-page">${t('시작 페이지')}</th><th class="col-page">${t('끝 페이지')}</th><th class="col-del"></th></tr>
+          <tr><th class="col-sel"><input type="checkbox" class="ch-sel" id="ch-sel-all" aria-label="${t('챕터 모두 선택')}" title="${t('챕터 모두 선택')}"></th><th class="col-drag"></th><th class="col-no">#</th><th>${t('챕터 이름')}</th><th class="col-page">${t('시작 페이지')}</th><th class="col-page">${t('끝 페이지')}</th><th class="col-del"></th></tr>
         </thead>
         <tbody id="chapter-rows"></tbody>
       </table>
@@ -3629,7 +3636,7 @@ function fillChapterEditor(chapters, locked = false) {
   if (locked) {
     document.querySelectorAll('#chapter-rows input, #f-last-page').forEach((el) => { el.readOnly = true; });
     document.getElementById('add-chapter').hidden = true;
-    document.querySelectorAll('.ch-del, .ch-insert, .drag-handle, .toc-tools').forEach((el) => { el.hidden = true; });
+    document.querySelectorAll('.ch-del, .ch-insert, .drag-handle, .toc-tools, .ch-sel').forEach((el) => { el.hidden = true; });
     document.getElementById('chapter-rows').classList.add('is-locked');
   }
 }
@@ -3653,8 +3660,81 @@ function bindChapterEditor(container, onChange) {
       if (rows.length > 1) e.target.closest('tr').remove();
       onChange();
     }
+    const bulk = e.target.closest('[data-ch-bulk]');
+    if (bulk) runChapterBulk(container, bulk.dataset.chBulk, onChange);
   });
+  bindChapterSelect(container);
   bindChapterDrag(container.querySelector('#chapter-rows'), onChange);
+}
+
+/* ----- 챕터 여러 개 선택: 한 번에 삭제 · 위아래로 옮기기 ----- */
+
+/** 체크칸: 누르면 선택, Shift를 누르고 누르면 앞서 누른 줄부터 범위 선택 */
+function bindChapterSelect(container) {
+  const tbody = container.querySelector('#chapter-rows');
+  const all = container.querySelector('#ch-sel-all');
+  if (!tbody || !all) return;
+  let anchor = null;
+  tbody.addEventListener('click', (e) => {
+    const box = e.target.closest('.ch-sel-row');
+    if (!box) return;
+    const rows = [...tbody.querySelectorAll('tr')];
+    const tr = box.closest('tr');
+    if (e.shiftKey && anchor && rows.includes(anchor)) {
+      const [a, b] = [rows.indexOf(anchor), rows.indexOf(tr)].sort((x, y) => x - y);
+      rows.slice(a, b + 1).forEach((r) => { r.querySelector('.ch-sel-row').checked = box.checked; });
+    }
+    anchor = tr;
+    updateChapterBulk();
+  });
+  all.addEventListener('change', () => {
+    tbody.querySelectorAll('.ch-sel-row').forEach((el) => { el.checked = all.checked; });
+    updateChapterBulk();
+  });
+}
+
+/** 선택한 줄 수에 맞춰 위쪽 작업 막대와 '모두 선택' 칸을 맞춘다 */
+function updateChapterBulk() {
+  const bar = document.getElementById('ch-bulk');
+  const all = document.getElementById('ch-sel-all');
+  if (!bar || !all) return;
+  const boxes = [...document.querySelectorAll('#chapter-rows .ch-sel-row')];
+  const picked = boxes.filter((el) => el.checked);
+  boxes.forEach((el) => el.closest('tr').classList.toggle('is-picked', el.checked));
+  bar.hidden = picked.length === 0;
+  document.getElementById('ch-bulk-count').textContent = t('{n}개 선택', { n: picked.length });
+  all.checked = boxes.length > 0 && picked.length === boxes.length;
+  all.indeterminate = picked.length > 0 && picked.length < boxes.length;
+}
+
+function runChapterBulk(container, action, onChange) {
+  const tbody = container.querySelector('#chapter-rows');
+  const rows = [...tbody.querySelectorAll('tr')];
+  const picked = rows.filter((tr) => tr.querySelector('.ch-sel-row').checked);
+  if (action === 'clear') {
+    picked.forEach((tr) => { tr.querySelector('.ch-sel-row').checked = false; });
+    updateChapterBulk();
+    return;
+  }
+  if (!picked.length) return;
+  if (action === 'delete') {
+    if (!confirm(t('선택한 챕터 {n}개를 지울까요?', { n: picked.length }))) return;
+    picked.forEach((tr) => tr.remove());
+    if (!tbody.querySelector('tr')) addChapterRow({ name: '', startPage: '' });
+  } else if (action === 'up') {
+    // 선택한 줄들이 한 칸씩 위로 (맨 위에 닿은 줄은 그대로, 선택한 줄끼리는 순서 유지)
+    picked.forEach((tr) => {
+      const prev = tr.previousElementSibling;
+      if (prev && !prev.querySelector('.ch-sel-row').checked) tbody.insertBefore(tr, prev);
+    });
+  } else if (action === 'down') {
+    picked.slice().reverse().forEach((tr) => {
+      const next = tr.nextElementSibling;
+      if (next && !next.querySelector('.ch-sel-row').checked) tbody.insertBefore(next, tr);
+    });
+  }
+  onChange();
+  updateChapterBulk();
 }
 
 /* ----- 목차로 챕터 채우기 (붙여넣기 · 사진) ----- */
@@ -4243,6 +4323,7 @@ function readChapterEditor() {
 
 /** 끝 페이지 자동 계산, 합계 표시 */
 function refreshChapterEditor() {
+  updateChapterBulk();
   const { chapters, lastPage } = readChapterEditor();
   const rows = [...document.querySelectorAll('#chapter-rows tr')];
   rows.forEach((tr, i) => {
@@ -4264,6 +4345,7 @@ function refreshChapterEditor() {
 function addChapterRow(ch, before = null) {
   const tr = document.createElement('tr');
   tr.innerHTML = `
+    <td class="col-sel"><input type="checkbox" class="ch-sel ch-sel-row" aria-label="${t('챕터 선택')}"></td>
     <td class="col-drag"><span class="drag-handle" title="${t('끌어서 순서 바꾸기')}" aria-hidden="true">⠿</span></td>
     <td class="col-no ch-no"></td>
     <td><input type="text" class="input ch-name" value="${escapeHtml(ch.name)}" placeholder="${t('예: 1장 도입')}"></td>
@@ -9151,6 +9233,14 @@ const EN = {
   '책을 읽는 사람 손그림': 'Sketch of a person reading',
   '오늘도 조금씩!': 'A little every day!',
   '잘했어요!': 'Nice!',
+  '↑ 위로': '↑ Up',
+  '↓ 아래로': '↓ Down',
+  '선택 삭제': 'Delete selected',
+  '선택 해제': 'Clear selection',
+  '챕터 모두 선택': 'Select all chapters',
+  '챕터 선택': 'Select chapter',
+  '선택한 챕터 {n}개를 지울까요?': 'Delete {n} selected chapters?',
+  '{n}개 선택': '{n} selected',
   '나의 다짐을 적어 보세요': 'Write your motto',
   '나의 다짐': 'My motto',
   'Enter 저장 · Esc 취소 · 비우면 기본 문구': 'Enter to save · Esc to cancel · Leave empty for default',
