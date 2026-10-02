@@ -1619,3 +1619,13 @@ tr.is-today .row-check:checked::after, .cal-cell.is-today .row-check:checked::af
 /* 한글은 자간을 좁게 (고정폭 글꼴에 한글이 없어 넓게 벌어진다) */
 .mono-label, .plan-table th, .admin-table th, .cal-weekday { letter-spacing: .03em; }
 .plan-table .col-check { white-space: nowrap; width: 90px; text-align: left; }
+
+/* 분량·숫자 글씨: 한글이 들어가는 곳은 함렛 (기울이지 않아 또렷하게) */
+:root { --num: 'Hahmlet', 'Nanum Myeongjo', Georgia, serif; }
+.serif-amt, .serif-num, .serif-sub, .stat-box strong {
+  font-family: var(--num); font-style: normal; font-weight: 600; letter-spacing: -0.03em;
+}
+.today-range .serif-amt, .dash-today-head .serif-num { font-size: 19px; }
+.pending-title .serif-sub { font-size: 17px; }
+.today-card-range .serif-amt { font-size: 21px; }
+.stat-box strong { font-size: 28px; }
