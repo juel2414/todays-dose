@@ -76,7 +76,10 @@ function applyLanguage(lang) {
   currentLang = isLang(lang) ? lang : 'ko';
   if (typeof document !== 'undefined') {
     document.documentElement.lang = currentLang;
-    document.title = t('오늘분량');
+    // 검색 결과에 보이는 제목 (index.html의 <title>과 같게)
+    document.title = currentLang === 'en'
+      ? "Today's Dose · 오늘분량 — set a deadline, get today's study amount"
+      : "오늘분량 · Today's Dose — 마감일만 정하면 오늘 할 분량을 알려 주는 학습 계획 앱";
   }
 }
 
