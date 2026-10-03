@@ -34,7 +34,6 @@
 * { box-sizing: border-box; }
 
 body {
-  min-width: 1024px;
   margin: 0;
   font-family: var(--font);
   font-size: 15px;
@@ -2412,3 +2411,97 @@ tr.is-today .check-mark { color: #fff; }
 .inq-msg { margin: 0; font-size: 15px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .inq-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .inq-actions > .muted { margin-right: auto; }
+
+/* 위쪽 메뉴 — 홈은 선으로만 그린 집 아이콘 */
+.nav-home { display: inline-grid; place-items: center; padding: 6px 13px; }
+.nav-home svg { width: 20px; height: 20px; display: block; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+/* =========================================================================
+ * 휴대폰 화면 (760px 이하) — 앱 화면 전체
+ *   위쪽 바는 두 줄(로고·오른쪽 / 메뉴), 넓은 표는 그 안에서 옆으로 밀어 본다
+ * ========================================================================= */
+@media (max-width: 760px) {
+  #app { padding: 22px 16px 72px; }
+  .login-card { width: 100%; max-width: 440px; padding: 28px 20px; }
+  .login-screen { padding: 8vh 16px 0; }
+
+  /* 위쪽 바 */
+  .topbar-inner { grid-template-columns: auto 1fr; gap: 10px 8px; min-height: 0; padding: 10px 16px; }
+  .topbar .brand { gap: 8px; }
+  .brand-tile { width: 34px; height: 34px; border-radius: 10px; }
+  .brand-tile img { width: 20px; height: 20px; }
+  .topbar-right { gap: 8px; min-width: 0; }
+  .topbar-right .user, .topbar-right .user-menu-btn { display: none; }
+  .topbar-right .save-state { font-size: 0; gap: 0; }
+  .topbar-right .save-state .link-btn { font-size: 11px; margin-left: 4px; }
+  .topbar-right .btn-small { height: 32px; padding: 0 12px; font-size: 12px; }
+  .lang-toggle .tab { padding: 5px 8px; font-size: 11px; }
+  .topbar-nav { grid-column: 1 / -1; grid-row: 2; justify-self: stretch; justify-content: space-between; }
+  .nav-link { flex: 1; text-align: center; padding: 8px 6px; font-size: 14px; }
+  .nav-home { flex: 0 0 auto; padding: 6px 14px; }
+  .plan-table th { top: 0; }
+
+  /* 큰 제목 */
+  .dash-title h1, .groups-head h1, .help-head h1, .admin-head h1 { font-size: 32px; line-height: 1.1; }
+  .detail-title h1, .readonly-page .detail-title h1 { font-size: 28px; }
+  .gf-head h1 { font-size: 26px; }
+  .groups-empty-text h2 { font-size: 26px; }
+  .groups-empty-text { flex-basis: 100%; min-width: 0; }
+
+  /* 대시보드 */
+  .dash { gap: 20px; }
+  .dash-head-actions { width: 100%; justify-content: space-between; margin-left: 0; }
+  .dash-head-actions .btn-lg { height: 48px; padding: 0 20px; }
+  .dash-today { padding: 20px 16px 6px; flex-basis: 100%; }
+  .dash-aside { flex-basis: 100%; }
+  .today-item { grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; }
+  .today-range-main { font-size: 20px; }
+  .progress-grid { grid-template-columns: 1fr; }
+  .dash-illust { min-height: 180px; }
+
+  /* 넓은 표: 칸 안에서 옆으로 밀어 보기 */
+  .admin-table { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .admin-table th, .admin-table td { white-space: nowrap; }
+  /* 계획표: 요일·누적 칸은 숨기고 날짜 · 내용 · 분량 · 완료만 */
+  .plan-table { font-size: 13px; table-layout: auto; }
+  .plan-table th, .plan-table td { padding: 8px 5px; }
+  .plan-table .col-weekday, .plan-table .col-cum, .plan-table .col-original { display: none; }
+  .plan-table .col-date { width: auto; font-size: 12px; }
+  .plan-table .col-amount { width: auto; white-space: nowrap; }
+  .plan-table .col-adjust { width: auto; }
+  .plan-table .col-check { width: 40px; }
+  :where(*):has(> .plan-table) { max-width: 100%; overflow-x: auto; }
+  /* 챕터 표: 끌기 손잡이는 숨기고(터치로는 못 끈다) 칸을 좁게 */
+  .chapter-table .col-drag { display: none; }
+  .chapter-editor .chapter-table th, .chapter-editor .chapter-table td { padding: 4px 3px; }
+  .chapter-editor .chapter-table { table-layout: fixed; width: 100%; }
+  .chapter-table thead th:nth-child(1) { width: 26px; }
+  .chapter-table thead th:nth-child(3) { width: 22px; }
+  .chapter-table thead th:nth-child(5) { width: 62px; }
+  .chapter-table thead th:nth-child(6) { width: 38px; }
+  .chapter-table thead th:nth-child(7) { width: 52px; }
+  .chapter-table .ch-end { font-size: 13px; }
+  .chapter-table thead th { white-space: normal; line-height: 1.2; }
+  .chapter-editor .chapter-table .input { padding: 0 8px; font-size: 14px; }
+  :where(*):has(> .member-table), :where(*):has(> .plan-rows) { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .admin-tabbar { flex-wrap: nowrap; }
+  .admin-tabs { flex: 1; min-width: 0; }
+  .help-tabs, .admin-tabs { scrollbar-width: none; }
+
+  /* 상세 · 새 목표 */
+  .detail-head { align-items: flex-start; }
+  .header-actions { width: 100%; flex-wrap: wrap; }
+  .gf-page { margin-top: 0; }
+  .gf-card { padding: 4px 16px; flex-basis: 100%; }
+  .gf-summary { position: static; flex-basis: 100%; }
+  .gf-row > .gf-label { flex-basis: 100%; }
+  .lec-row { grid-template-columns: 22px 22px minmax(0, 1fr) 132px 26px; gap: 6px; }
+
+  /* 창(내보내기 등) */
+  .modal-card { width: calc(100vw - 24px); max-height: calc(100vh - 24px); overflow-y: auto; }
+  #export-dialog .modal-card { padding: 20px 16px 16px; border-radius: 20px; }
+
+  /* 도움말 · 문의 */
+  .help-more { padding: 16px 18px; }
+  .help-ask { padding: 18px 16px; }
+}

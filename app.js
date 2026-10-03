@@ -2420,7 +2420,9 @@ function renderTopbar() {
         ${landingWordmark('sm', false)}
       </a>
       <nav class="topbar-nav">
-        ${navLink('home', '#/', t('홈'))}
+        <a class="nav-link nav-home ${view === 'home' ? 'is-active' : ''}" href="#/" aria-label="${t('홈')}" title="${t('홈')}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 10.6 12 3.8l8.5 6.8"/><path d="M5.8 9v10.2h12.4V9"/><path d="M10 19.2v-5.4h4v5.4"/></svg>
+        </a>
         ${navLink('groups', '#/groups', t('그룹'))}
         ${navLink('help', '#/help', t('도움말'))}
         ${account.isAdmin ? navLink('admin', '#/admin', t('어드민')) : ''}
