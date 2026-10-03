@@ -2409,7 +2409,7 @@ function renderTopbar() {
   }[saveState];
   const name = currentUser.user_metadata && (currentUser.user_metadata.full_name || currentUser.user_metadata.name);
   const first = location.hash.replace(/^#\/?/, '').split('/')[0];
-  const view = first === 'group' || first === 'join' ? 'groups' : first;
+  const view = first === 'group' || first === 'join' ? 'groups' : first === '' ? 'home' : first;
   const navLink = (key, href, label) => `<a class="nav-link ${view === key ? 'is-active' : ''}" href="${href}">${label}</a>`;
   if (typeof loadLandingFonts === 'function') loadLandingFonts();
   bar.hidden = false;
@@ -2420,6 +2420,7 @@ function renderTopbar() {
         ${landingWordmark('sm', false)}
       </a>
       <nav class="topbar-nav">
+        ${navLink('home', '#/', t('홈'))}
         ${navLink('groups', '#/groups', t('그룹'))}
         ${navLink('help', '#/help', t('도움말'))}
         ${account.isAdmin ? navLink('admin', '#/admin', t('어드민')) : ''}
@@ -9029,6 +9030,7 @@ const EN = {
   '다시 시도': 'Retry',
   '관리자': 'Admin',
   '어드민': 'Admin',
+  '홈': 'Home',
   '로그아웃': 'Log out',
   '책·강의의 마감일까지 매일 할 분량을 계획하고 진도를 기록합니다.': 'Plan how much to do each day to finish your books and lectures by the due date, and track your progress.',
   '구글 계정으로 로그인하면 어느 기기에서든 같은 계획을 볼 수 있습니다.': 'Sign in with your Google account to see the same plans on any device.',
