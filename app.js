@@ -2779,6 +2779,7 @@ function renderDashboard(root) {
       </div>
 
       <div class="dash-cols">
+        <h2 class="dash-sec-label is-today">${t('오늘')}</h2>
         <section class="dash-today">
           <div class="dash-today-head">
             <h2>${t('오늘 할 분량')}</h2>
@@ -2791,8 +2792,10 @@ function renderDashboard(root) {
         </section>
 
         <aside class="dash-aside">
+          ${appData.goals.length ? `<h2 class="dash-sec-label is-week">${t('이번 주 기록')}</h2>` : ''}
           ${renderMotivationCard()}
-          ${pendingCards}
+          ${pendingCards ? `<h2 class="dash-sec-label is-shared">${t('받은 항목')}</h2><div class="dash-pending">${pendingCards}</div>` : ''}
+          <h2 class="dash-sec-label is-closed">${t('지난 목표')}</h2>
           <section class="closed-box">
             <button type="button" class="closed-toggle" data-action="toggle-closed" aria-expanded="${dashState.closedOpen}">
               <span>${t('끝난 목표 · 마감 지난 목표')} <span class="mono-count">${finished.length}</span></span>
@@ -5914,6 +5917,7 @@ function renderPlanCalendar(goal, basis) {
             : `<input type="checkbox" class="row-check" data-date="${date}" ${checked ? 'checked' : ''} aria-label="${t('{date} 완료', { date })}">`}
         </div>
         <div class="cal-content">${describeCellContent(goal, basis, row)}</div>
+        <span class="cal-amt" aria-hidden="true">${row.isRestDay || row.amount === 0 ? '–' : escapeHtml(String(row.amount))}</span>
       </div>`);
   }
   while (cells.length % 7 !== 0) cells.push('<div class="cal-cell is-empty"></div>');
@@ -5925,6 +5929,7 @@ function renderPlanCalendar(goal, basis) {
         <strong class="cal-title">${t('{y}년 {m}월', { y, m })}</strong>
         <button type="button" class="btn btn-small" data-month="1" ${month >= lastMonth ? 'disabled' : ''} aria-label="${t('다음 달')}">▶</button>
       </div>
+      <p class="cal-mobile-hint">${t('칸의 숫자는 그날 할 분량이에요. 자세한 내용은 목록에서 볼 수 있어요.')}</p>
       <div class="cal-grid">
         ${WEEKDAY_ORDER.map((d) => `<div class="cal-weekday ${d === 0 ? 'is-sun' : d === 6 ? 'is-sat' : ''}">${weekdayName(d)}</div>`).join('')}
         ${cells.join('')}
@@ -9702,6 +9707,9 @@ const EN = {
   '챕터 선택': 'Select chapter',
   '선택한 챕터 {n}개를 지울까요?': 'Delete {n} selected chapters?',
   '{n}개 선택': '{n} selected',
+  '칸의 숫자는 그날 할 분량이에요. 자세한 내용은 목록에서 볼 수 있어요.': 'Numbers show each day’s amount. See the list for details.',
+  '받은 항목': 'Shared with you',
+  '지난 목표': 'Past goals',
   '문의': 'Inquiries',
   '답할 문의 {n}': (p) => `To answer ${p.n}`,
   '전체 {n}': (p) => `All ${p.n}`,

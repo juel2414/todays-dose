@@ -2505,3 +2505,52 @@ tr.is-today .check-mark { color: #fff; }
   .help-more { padding: 16px 18px; }
   .help-ask { padding: 18px 16px; }
 }
+
+/* 대시보드 구역 이름 — 휴대폰에서만 보인다 */
+.dash-sec-label { display: none; }
+.dash-pending { display: flex; flex-direction: column; gap: 20px; }
+
+@media (max-width: 760px) {
+  /* 구역을 한 줄로 펼쳐 순서를 정한다: 오늘 → 이번 주 기록 → 받은 항목 → 목표별 진행 → 지난 목표 */
+  .dash { gap: 14px; }
+  .dash-cols, .dash-aside { display: contents; }
+  .dash-head { order: 0; margin-bottom: 4px; }
+  .dash-sec-label.is-today { order: 1; }
+  .dash-today { order: 2; }
+  .dash-sec-label.is-week { order: 3; }
+  .mot-card { order: 4; }
+  .dash-sec-label.is-shared { order: 5; }
+  .dash-pending { order: 6; gap: 12px; }
+  .dash-progress { order: 7; margin-top: 0; gap: 14px; }
+  .dash-sec-label.is-closed { order: 8; }
+  .closed-box { order: 9; }
+  .dash-illust { display: none; }
+
+  .dash-sec-label, .dash-progress h2 {
+    display: flex; align-items: center; gap: 10px; margin: 18px 0 0;
+    font: 700 13px var(--font); letter-spacing: 0; color: var(--text);
+  }
+  .dash-sec-label::before, .dash-progress h2::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--primary); flex: none; }
+  .dash-sec-label::after, .dash-progress h2::after { content: ""; flex: 1; height: 1px; background: #cfcfcb; }
+  .dash-sec-label.is-today { margin-top: 6px; }
+  .progress-grid { gap: 12px; }
+}
+
+/* 달력 — 휴대폰에서는 칸마다 날짜 · 체크 · 그날 분량 숫자만 */
+.cal-amt, .cal-mobile-hint { display: none; }
+@media (max-width: 760px) {
+  .calendar { min-width: 0; }
+  .cal-nav { gap: 8px; }
+  .cal-title { font-size: 20px; min-width: 0; }
+  .cal-mobile-hint { display: block; margin: 0 0 8px; font-size: 12px; color: var(--text-2); }
+  .cal-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+  .cal-weekday { padding: 0 0 4px; font-size: 10px; text-align: center; letter-spacing: 0; }
+  .cal-cell { min-height: 62px; min-width: 0; padding: 5px 3px 6px; border-radius: 9px; display: flex; flex-direction: column; align-items: center; gap: 4px; overflow: hidden; }
+  .cal-cell-head { flex-direction: column; align-items: center; gap: 4px; margin: 0; }
+  .cal-day { font-size: 16px; }
+  .cal-cell .today-tag { display: none; }
+  .cal-content { display: none; }
+  .cal-amt { display: block; font: 600 12px var(--mono); line-height: 1; }
+  .cal-cell.is-rest-day .cal-amt, .cal-cell.is-out .cal-amt { color: var(--muted); font-weight: 400; }
+  .cal-cell .row-check { width: 18px; height: 18px; }
+}
