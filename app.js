@@ -1462,6 +1462,12 @@ async function loadAccount(user) {
     language: profile.data && isLang(profile.data.language) ? profile.data.language : null,
     motto: (profile.data && profile.data.motto) || '',
     dayLog: profile.data && profile.data.day_log && typeof profile.data.day_log === 'object' ? { ...profile.data.day_log } : {},
+    notify: {
+      morning: (profile.data && profile.data.notify_morning) || '08:00',
+      evening: (profile.data && profile.data.notify_evening) || '21:00',
+      morningOn: !profile.data || profile.data.notify_morning_on !== false,
+      eveningOn: !profile.data || profile.data.notify_evening_on !== false,
+    },
   };
 }
 
@@ -2428,6 +2434,10 @@ function renderTopbar() {
         ${account.isAdmin ? navLink('admin', '#/admin', t('어드민')) : ''}
       </nav>
       <div class="topbar-right">
+        <button type="button" class="topbar-bell ${notifyState.subscribed ? 'is-on' : ''}" data-action="notify-open" aria-label="${t('알림 설정')}" title="${t('알림 설정')}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2h-14z"/><path d="M10 20.5a2.1 2.1 0 0 0 4 0"/></svg>
+          ${notifyState.subscribed ? '<i class="topbar-bell-dot"></i>' : ''}
+        </button>
         ${renderLangToggle()}
         ${status}
         ${account.isAdmin ? `
@@ -2778,6 +2788,7 @@ function renderDashboard(root) {
         </div>
       </div>
 
+      ${renderNotifyNudge()}
       <div class="dash-cols">
         <h2 class="dash-sec-label is-today">${t('오늘')}</h2>
         <section class="dash-today">
@@ -2822,6 +2833,13 @@ function renderDashboard(root) {
   root.querySelector('.dash').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
+    if (btn.dataset.action === 'notify-open') { openNotifyDialog(); return; }
+    if (btn.dataset.action === 'notify-nudge-close') {
+      try { localStorage.setItem('td-notify-nudge', 'off'); } catch (_) { /* 무시 */ }
+      const slot = root.querySelector('#notify-nudge-slot');
+      if (slot) slot.outerHTML = '<span id="notify-nudge-slot" hidden></span>';
+      return;
+    }
     if (btn.dataset.action === 'edit-motto') {
       dashState.mottoEdit = true;
       renderDashboard(root);
@@ -2994,6 +3012,37 @@ function renderMotivationCardInner() {
     </section>`;
 }
 
+/**
+ * 휴대폰 알림 문구 — 서버(Edge Function study-planner-push)가 이 파일을 불러 그대로 쓴다.
+ *   slot: 'morning'(오늘 할 분량 안내) | 'evening'(남은 것 · 다 했으면 칭찬)
+ *   → { title, body } (목표가 하나도 없으면 null)
+ */
+function buildReminder(slot, goals, dayLog, lang, today) {
+  const saved = { appData, account, lang: currentLang, todayStr };
+  appData = { goals };
+  account = { isAdmin: false, dayLog: dayLog || {} };
+  currentLang = lang === 'en' ? 'en' : 'ko';
+  todayStr = () => today;
+  try {
+    if (!goals.length) return null;
+    const items = goals.map((g) => todayItemOf(g, getGoalSummary(g, undefined, today))).filter(Boolean);
+    const rest = { title: t('오늘은 쉬는 날이에요'), body: t('푹 쉬어요. 연속 기록은 끊기지 않아요.') };
+    if (!items.length) return rest;
+    const list = (arr) => arr.slice(0, 3).map((x) => `${x.goal.title} · ${x.range}`).join('\n')
+      + (arr.length > 3 ? `\n${t('외 {n}개', { n: arr.length - 3 })}` : '');
+    if (slot === 'morning') return { title: t('오늘 할 분량 {n}개', { n: items.length }), body: list(items) };
+    const left = items.filter((x) => !x.done);
+    const before = computeStreak(today) - (account.dayLog[today] === 'done' ? 1 : 0); // 어제까지 연속
+    if (!left.length) return { title: t('오늘 끝! {n}일째 이어서', { n: before + 1 }), body: t('잘했어요. 내일도 오늘만큼만!') };
+    return { title: t('아직 {n}개 남았어요', { n: left.length }), body: `${list(left)}\n${t('오늘 끝내면 {n}일째예요', { n: before + 1 })}` };
+  } finally {
+    appData = saved.appData;
+    account = saved.account;
+    currentLang = saved.lang;
+    todayStr = saved.todayStr;
+  }
+}
+
 /** 오늘 다 끝냈을 때: 손글씨 '오늘 끝!' + 내일 할 분량 미리보기 */
 function renderTodayFinish(active) {
   const tomorrow = addDays(todayStr(), 1);
@@ -3035,6 +3084,264 @@ function celebrateToday() {
   }).join('');
   document.body.appendChild(layer);
   setTimeout(() => layer.remove(), 2400);
+}
+
+/* =========================================================================
+ * 홈 화면 앱 · 휴대폰 알림 (Web Push)
+ *   sw.js가 알림을 받고, 서버(Edge Function study-planner-push)가 회원이 정한 아침·저녁 시간에 보낸다.
+ *   아이폰은 홈 화면에 추가한 앱(iOS 16.4 이상)에서만 알림을 받을 수 있다.
+ * ========================================================================= */
+
+const notifyState = {
+  ready: false,
+  supported: false, // 이 브라우저에서 알림 구독 가능
+  subscribed: false, // 이 기기가 구독 중
+  permission: 'default',
+  busy: false,
+  message: '',
+  installEvent: null, // 안드로이드·PC 크롬의 설치 프롬프트
+};
+
+const isStandaloneApp = () => (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+const isIOSDevice = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+function initNotify() {
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    notifyState.installEvent = e;
+    refreshNotifyDialog();
+  });
+  window.addEventListener('appinstalled', () => { notifyState.installEvent = null; refreshNotifyDialog(); });
+  notifyState.supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  if (!('serviceWorker' in navigator)) { notifyState.ready = true; return; }
+  navigator.serviceWorker.register('sw.js').then(async (reg) => {
+    if (notifyState.supported) {
+      notifyState.permission = Notification.permission;
+      const sub = await reg.pushManager.getSubscription();
+      notifyState.subscribed = !!sub && Notification.permission === 'granted';
+    }
+  }).catch((err) => console.warn('[notify] 서비스 워커 등록 실패:', err))
+    .finally(() => {
+      notifyState.ready = true;
+      if (currentUser) renderTopbar();
+      if (appData && parseRoute().view === 'dashboard') {
+        const nudge = document.getElementById('notify-nudge-slot');
+        if (nudge) nudge.outerHTML = renderNotifyNudge();
+      }
+    });
+}
+
+function urlBase64ToUint8Array(base64) {
+  const padded = base64.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((base64.length + 3) % 4);
+  return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
+}
+
+/** 이 기기에서 알림 켜기: 권한 → 구독 → 서버에 저장 */
+async function enablePush() {
+  const permission = await Notification.requestPermission();
+  notifyState.permission = permission;
+  if (permission !== 'granted') throw new Error(t('알림이 허용되지 않았어요. 기기·브라우저 설정에서 오늘분량 알림을 허용해 주세요.'));
+  const reg = await navigator.serviceWorker.ready;
+  const { data: key, error: keyError } = await getSupabase().rpc('study_planner_vapid_public');
+  if (keyError || !key) throw keyError || new Error('no key');
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key) });
+  const j = sub.toJSON();
+  const { error } = await getSupabase().from('study_planner_push_subs').upsert({
+    user_id: currentUser.id, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
+    user_agent: navigator.userAgent.slice(0, 300),
+  }, { onConflict: 'endpoint' });
+  if (error) throw error;
+  await saveNotifyTimes();
+  notifyState.subscribed = true;
+}
+
+async function disablePush() {
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if (sub) {
+    await getSupabase().from('study_planner_push_subs').delete().eq('endpoint', sub.endpoint);
+    await sub.unsubscribe();
+  }
+  notifyState.subscribed = false;
+}
+
+async function saveNotifyTimes() {
+  const n = account.notify;
+  const tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || 'Asia/Seoul';
+  const { error } = await getSupabase().rpc('study_planner_set_notify', {
+    p_morning: n.morning, p_evening: n.evening, p_morning_on: n.morningOn, p_evening_on: n.eveningOn, p_tz: tz,
+  });
+  if (error) throw error;
+}
+
+async function sendTestPush() {
+  const { data, error } = await getSupabase().functions.invoke('study-planner-push', { body: { action: 'test' } });
+  if (error) throw error;
+  if (!data || !data.sent) throw new Error(t('보내지 못했어요. 알림을 껐다가 다시 켜 보세요.'));
+}
+
+/** 대시보드 위 한 줄 안내: 알림을 아직 안 켠 기기에서만 (닫으면 이 기기에서 다시 안 보임) */
+function renderNotifyNudge() {
+  let dismissed = false;
+  try { dismissed = localStorage.getItem('td-notify-nudge') === 'off'; } catch (_) { /* 무시 */ }
+  const canInstallIOS = isIOSDevice() && !isStandaloneApp();
+  if (!notifyState.ready || dismissed || notifyState.subscribed || (!notifyState.supported && !canInstallIOS)) {
+    return '<span id="notify-nudge-slot" hidden></span>';
+  }
+  return `
+    <div class="notify-nudge" id="notify-nudge-slot">
+      <span class="notify-nudge-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2h-14z"/><path d="M10 20.5a2.1 2.1 0 0 0 4 0"/></svg></span>
+      <span class="notify-nudge-text"><b>${canInstallIOS ? t('홈 화면에 추가하고 알림 받기') : t('아침·저녁 알림 받기')}</b><span>${t('아침엔 오늘 할 분량, 저녁엔 남은 분량을 알려 드려요.')}</span></span>
+      <button type="button" class="btn btn-small btn-dark" data-action="notify-open">${canInstallIOS ? t('방법 보기') : t('알림 켜기')}</button>
+      <button type="button" class="notify-nudge-close" data-action="notify-nudge-close" aria-label="${t('닫기')}">×</button>
+    </div>`;
+}
+
+const NOTIFY_TIMES = Array.from({ length: 48 }, (_, i) => `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
+
+function renderNotifyDialogBody() {
+  const n = account.notify || { morning: '08:00', evening: '21:00', morningOn: true, eveningOn: true };
+  const standalone = isStandaloneApp();
+  const ios = isIOSDevice();
+  const timeSelect = (id, value) => `<select id="${id}" class="input notify-time">${(NOTIFY_TIMES.includes(value) ? NOTIFY_TIMES : [value, ...NOTIFY_TIMES]).map((v) => `<option value="${v}" ${v === value ? 'selected' : ''}>${v}</option>`).join('')}</select>`;
+
+  let install = '';
+  if (standalone) install = `<p class="notify-ok">✓ ${t('홈 화면 앱으로 쓰고 있어요')}</p>`;
+  else if (ios) {
+    install = `
+      <ol class="notify-steps">
+        <li>${t('사파리 아래쪽의 <b>공유</b> 버튼(네모에 위 화살표)을 눌러요')}</li>
+        <li>${t('<b>홈 화면에 추가</b>를 눌러요')}</li>
+        <li>${t('홈 화면의 <b>오늘분량</b> 아이콘으로 열고, 여기서 알림을 켜요')}</li>
+      </ol>
+      <p class="muted small">${t('아이폰은 홈 화면에 추가한 앱에서만 알림을 받을 수 있어요 (iOS 16.4 이상).')}</p>`;
+  } else if (notifyState.installEvent) {
+    install = `<button type="button" class="btn btn-dark" data-notify="install">${t('홈 화면에 앱 설치')}</button>`;
+  } else {
+    install = `<p class="muted small">${t('브라우저 메뉴에서 <b>홈 화면에 추가</b> 또는 <b>앱 설치</b>를 누르면 앱처럼 쓸 수 있어요.')}</p>`;
+  }
+
+  let device;
+  if (!notifyState.supported) {
+    device = `<p class="muted small">${ios && !standalone ? t('홈 화면에 추가한 뒤 그 앱에서 알림을 켤 수 있어요.') : t('이 브라우저는 알림을 지원하지 않아요.')}</p>`;
+  } else if (notifyState.subscribed) {
+    device = `
+      <p class="notify-ok">✓ ${t('이 기기에서 알림을 받고 있어요')}</p>
+      <div class="notify-actions">
+        <button type="button" class="btn btn-small btn-outline" data-notify="test" ${notifyState.busy ? 'disabled' : ''}>${t('시험 알림 보내기')}</button>
+        <button type="button" class="btn btn-small btn-outline-muted" data-notify="off" ${notifyState.busy ? 'disabled' : ''}>${t('이 기기 알림 끄기')}</button>
+      </div>`;
+  } else if (notifyState.permission === 'denied') {
+    device = `<p class="notify-warn">${t('알림이 막혀 있어요. 기기·브라우저 설정에서 오늘분량 알림을 허용한 뒤 다시 열어 주세요.')}</p>`;
+  } else {
+    device = `<button type="button" class="btn btn-dark" data-notify="on" ${notifyState.busy ? 'disabled' : ''}>${notifyState.busy ? t('켜는 중…') : t('이 기기에서 알림 켜기')}</button>`;
+  }
+
+  return `
+    <div class="notify-head">
+      <h2>${t('알림')}</h2>
+      <button type="button" class="notify-close" data-notify="close" aria-label="${t('닫기')}">×</button>
+    </div>
+    <section class="notify-sec">
+      <h3>${t('1. 홈 화면 앱')}</h3>
+      ${install}
+    </section>
+    <section class="notify-sec">
+      <h3>${t('2. 이 기기에서 알림 받기')}</h3>
+      ${device}
+    </section>
+    <section class="notify-sec">
+      <h3>${t('3. 알림 시간')}</h3>
+      <label class="notify-row">
+        <input type="checkbox" id="notify-morning-on" ${n.morningOn ? 'checked' : ''}>
+        <span class="notify-row-text"><b>${t('아침')}</b><span>${t('오늘 할 분량 안내')}</span></span>
+        ${timeSelect('notify-morning', n.morning)}
+      </label>
+      <label class="notify-row">
+        <input type="checkbox" id="notify-evening-on" ${n.eveningOn ? 'checked' : ''}>
+        <span class="notify-row-text"><b>${t('저녁')}</b><span>${t('남은 분량 · 다 했으면 칭찬')}</span></span>
+        ${timeSelect('notify-evening', n.evening)}
+      </label>
+      <p class="muted small">${t('시간은 이 계정의 모든 기기에 똑같이 적용돼요.')}</p>
+    </section>
+    ${notifyState.message ? `<p class="notify-msg">${escapeHtml(notifyState.message)}</p>` : ''}`;
+}
+
+function openNotifyDialog() {
+  let dialog = document.getElementById('notify-dialog');
+  if (!dialog) {
+    dialog = document.createElement('div');
+    dialog.id = 'notify-dialog';
+    dialog.className = 'modal';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.innerHTML = '<div class="modal-card notify-card"></div>';
+    document.body.appendChild(dialog);
+    dialog.addEventListener('click', onNotifyClick);
+    dialog.addEventListener('change', onNotifyChange);
+  }
+  notifyState.message = '';
+  dialog.hidden = false;
+  document.body.classList.add('modal-open');
+  refreshNotifyDialog();
+}
+
+function closeNotifyDialog() {
+  const dialog = document.getElementById('notify-dialog');
+  if (!dialog) return;
+  dialog.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+function refreshNotifyDialog() {
+  const dialog = document.getElementById('notify-dialog');
+  if (dialog && !dialog.hidden) dialog.querySelector('.notify-card').innerHTML = renderNotifyDialogBody();
+}
+
+async function runNotify(task, okMessage = '') {
+  notifyState.busy = true;
+  notifyState.message = '';
+  refreshNotifyDialog();
+  try {
+    await task();
+    notifyState.message = okMessage;
+  } catch (err) {
+    console.warn('[notify]', err);
+    notifyState.message = (err && err.message) || String(err);
+  }
+  notifyState.busy = false;
+  refreshNotifyDialog();
+  renderTopbar();
+  const nudge = document.getElementById('notify-nudge-slot');
+  if (nudge) nudge.outerHTML = renderNotifyNudge();
+}
+
+async function onNotifyClick(e) {
+  if (e.target.id === 'notify-dialog') { closeNotifyDialog(); return; }
+  const action = e.target.closest('[data-notify]')?.dataset.notify;
+  if (!action) return;
+  if (action === 'close') closeNotifyDialog();
+  else if (action === 'install' && notifyState.installEvent) {
+    notifyState.installEvent.prompt();
+    await notifyState.installEvent.userChoice.catch(() => null);
+    notifyState.installEvent = null;
+    refreshNotifyDialog();
+  } else if (action === 'on') runNotify(enablePush, t('알림을 켰어요. 시험 알림으로 확인해 보세요.'));
+  else if (action === 'off') runNotify(disablePush, t('이 기기의 알림을 껐어요.'));
+  else if (action === 'test') runNotify(sendTestPush, t('시험 알림을 보냈어요. 잠시 뒤 도착해요.'));
+}
+
+function onNotifyChange(e) {
+  if (!/^notify-(morning|evening)(-on)?$/.test(e.target.id)) return;
+  const dialog = document.getElementById('notify-dialog');
+  account.notify = {
+    morning: dialog.querySelector('#notify-morning').value,
+    evening: dialog.querySelector('#notify-evening').value,
+    morningOn: dialog.querySelector('#notify-morning-on').checked,
+    eveningOn: dialog.querySelector('#notify-evening-on').checked,
+  };
+  runNotify(saveNotifyTimes, t('알림 시간을 저장했어요.'));
 }
 
 /** 오른쪽 위 손글씨 다짐: 누르면 그 자리에서 고친다 (내 화면에만 보임) */
@@ -9707,6 +10014,48 @@ const EN = {
   '챕터 선택': 'Select chapter',
   '선택한 챕터 {n}개를 지울까요?': 'Delete {n} selected chapters?',
   '{n}개 선택': '{n} selected',
+  '알림 설정': 'Notifications',
+  '알림이 허용되지 않았어요. 기기·브라우저 설정에서 오늘분량 알림을 허용해 주세요.': 'Notifications weren’t allowed. Allow Today’s Dose notifications in your device or browser settings.',
+  '보내지 못했어요. 알림을 껐다가 다시 켜 보세요.': 'Couldn’t send. Try turning notifications off and on again.',
+  '홈 화면에 추가하고 알림 받기': 'Add to Home Screen for reminders',
+  '아침·저녁 알림 받기': 'Get morning & evening reminders',
+  '아침엔 오늘 할 분량, 저녁엔 남은 분량을 알려 드려요.': 'Mornings: today’s dose. Evenings: what’s left.',
+  '방법 보기': 'How',
+  '알림 켜기': 'Turn on',
+  '홈 화면 앱으로 쓰고 있어요': 'You’re using the Home Screen app',
+  '사파리 아래쪽의 <b>공유</b> 버튼(네모에 위 화살표)을 눌러요': 'In Safari, tap the <b>Share</b> button (square with an up arrow)',
+  '<b>홈 화면에 추가</b>를 눌러요': 'Tap <b>Add to Home Screen</b>',
+  '홈 화면의 <b>오늘분량</b> 아이콘으로 열고, 여기서 알림을 켜요': 'Open <b>Today’s Dose</b> from your Home Screen and turn on notifications here',
+  '아이폰은 홈 화면에 추가한 앱에서만 알림을 받을 수 있어요 (iOS 16.4 이상).': 'On iPhone, notifications only work in the Home Screen app (iOS 16.4+).',
+  '홈 화면에 앱 설치': 'Install app',
+  '브라우저 메뉴에서 <b>홈 화면에 추가</b> 또는 <b>앱 설치</b>를 누르면 앱처럼 쓸 수 있어요.': 'Use <b>Add to Home Screen</b> or <b>Install app</b> in your browser menu to use it like an app.',
+  '홈 화면에 추가한 뒤 그 앱에서 알림을 켤 수 있어요.': 'Add it to your Home Screen first, then turn on notifications in that app.',
+  '이 브라우저는 알림을 지원하지 않아요.': 'This browser doesn’t support notifications.',
+  '이 기기에서 알림을 받고 있어요': 'This device gets reminders',
+  '시험 알림 보내기': 'Send a test',
+  '이 기기 알림 끄기': 'Turn off on this device',
+  '알림이 막혀 있어요. 기기·브라우저 설정에서 오늘분량 알림을 허용한 뒤 다시 열어 주세요.': 'Notifications are blocked. Allow them for Today’s Dose in your settings, then reopen this.',
+  '켜는 중…': 'Turning on…',
+  '이 기기에서 알림 켜기': 'Turn on for this device',
+  '알림': 'Notifications',
+  '1. 홈 화면 앱': '1. Home Screen app',
+  '2. 이 기기에서 알림 받기': '2. Reminders on this device',
+  '3. 알림 시간': '3. Reminder times',
+  '아침': 'Morning',
+  '오늘 할 분량 안내': 'Today’s dose',
+  '저녁': 'Evening',
+  '남은 분량 · 다 했으면 칭찬': 'What’s left · a cheer when done',
+  '시간은 이 계정의 모든 기기에 똑같이 적용돼요.': 'Times apply to all your devices.',
+  '알림을 켰어요. 시험 알림으로 확인해 보세요.': 'Reminders are on. Send a test to check.',
+  '이 기기의 알림을 껐어요.': 'Reminders are off on this device.',
+  '시험 알림을 보냈어요. 잠시 뒤 도착해요.': 'Test sent. It should arrive shortly.',
+  '알림 시간을 저장했어요.': 'Reminder times saved.',
+  '오늘은 쉬는 날이에요': 'Today is a day off',
+  '푹 쉬어요. 연속 기록은 끊기지 않아요.': 'Rest up — your streak won’t break.',
+  '오늘 할 분량 {n}개': (p) => `Today’s dose: ${p.n} ${p.n === 1 ? 'item' : 'items'}`,
+  '오늘 끝! {n}일째 이어서': (p) => `Done for today! ${p.n}-day streak`,
+  '잘했어요. 내일도 오늘만큼만!': 'Nice work. Same again tomorrow!',
+  '아직 {n}개 남았어요': (p) => `${p.n} still to go`,
   '칸의 숫자는 그날 할 분량이에요. 자세한 내용은 목록에서 볼 수 있어요.': 'Numbers show each day’s amount. See the list for details.',
   '받은 항목': 'Shared with you',
   '지난 목표': 'Past goals',
@@ -9904,6 +10253,7 @@ async function boot() {
   }
   window.addEventListener('hashchange', render);
   rememberPendingJoin();
+  initNotify();
   document.getElementById('topbar').addEventListener('click', async (e) => {
     const action = e.target.closest('[data-action]')?.dataset.action;
     if (action === 'user-menu') {
@@ -9919,6 +10269,7 @@ async function boot() {
       else alert(t('내보낼 목표가 없습니다.'));
       return;
     }
+    if (action === 'notify-open') { openNotifyDialog(); return; }
     if (action === 'retry-save') retrySave();
     if (action === 'sign-out') {
       if (pendingSaves > 0 && !confirm(t('아직 저장 중입니다. 그래도 로그아웃할까요?'))) return;
