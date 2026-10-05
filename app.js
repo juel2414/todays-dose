@@ -3198,6 +3198,97 @@ function renderNotifyNudge() {
     </div>`;
 }
 
+/* ----- 앱 다운로드 (홈 화면 설치) ----- */
+
+/** 카카오톡·인스타그램 같은 앱 안 브라우저 (여기서는 설치가 안 된다) */
+function inAppBrowserName() {
+  const ua = navigator.userAgent;
+  if (/KAKAOTALK/i.test(ua)) return 'kakao';
+  if (/Instagram|FBAN|FBAV|Line\/|NAVER\(inapp|DaumApps|everytimeApp|Whale\/.*inapp/i.test(ua)) return 'other';
+  return '';
+}
+
+const SHARE_ICON = '<svg class="install-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3.5"/><path d="m8 7.5 4-4 4 4"/><path d="M7 10.5H5.5v10h13v-10H17"/></svg>';
+const ADD_ICON = '<svg class="install-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8.5v7M8.5 12h7"/></svg>';
+
+function renderInstallSheet() {
+  const ios = isIOSDevice();
+  const inApp = inAppBrowserName();
+  const iphoneSafari = /iPhone|iPod/.test(navigator.userAgent) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(navigator.userAgent) && !inApp;
+  const url = location.href.split('#')[0];
+  let body;
+  if (isStandaloneApp()) {
+    body = `<p class="notify-ok">✓ ${t('이미 앱으로 쓰고 있어요')}</p>`;
+  } else if (inApp) {
+    body = `
+      <p>${t('카카오톡·인스타그램 같은 앱 안에서 연 화면에서는 설치할 수 없어요.')} ${ios ? t('<b>Safari</b>로 열어 주세요.') : t('<b>크롬</b>으로 열어 주세요.')}</p>
+      ${inApp === 'kakao' ? `<a class="btn btn-dark" href="kakaotalk://web/openExternal?url=${encodeURIComponent(url)}">${t('브라우저로 열기')}</a>`
+        : `<ol class="notify-steps"><li>${t('오른쪽 위나 아래의 <b>⋯</b> 메뉴를 눌러요')}</li><li>${ios ? t('<b>Safari로 열기</b>를 눌러요') : t('<b>다른 브라우저로 열기</b>를 눌러요')}</li><li>${t('열린 화면에서 <b>앱 다운로드</b>를 다시 눌러요')}</li></ol>`}
+      <button type="button" class="btn btn-outline" data-install="copy">${t('주소 복사')}</button>`;
+  } else if (ios) {
+    body = `
+      <ol class="install-steps">
+        <li><span class="install-n">1</span><span>${iphoneSafari ? t('화면 <b>맨 아래 가운데</b>의 공유 버튼을 눌러요') : t('<b>공유</b> 버튼을 눌러요')}</span>${SHARE_ICON}</li>
+        <li><span class="install-n">2</span><span>${t('목록을 올려서 <b>홈 화면에 추가</b>를 눌러요')}</span>${ADD_ICON}</li>
+        <li><span class="install-n">3</span><span>${t('오른쪽 위 <b>추가</b>를 누르면 끝!')}</span><span class="install-done">✓</span></li>
+      </ol>
+      <p class="muted small">${t('설치한 뒤에는 홈 화면의 오늘분량 아이콘으로 열어 주세요. 아이폰은 그 앱에서만 알림이 와요.')}</p>`;
+  } else if (/Android/i.test(navigator.userAgent)) {
+    body = `
+      <ol class="install-steps">
+        <li><span class="install-n">1</span><span>${t('크롬 오른쪽 위 <b>⋮</b> 메뉴를 눌러요')}</span><span class="install-ico-text">⋮</span></li>
+        <li><span class="install-n">2</span><span>${t('<b>앱 설치</b> 또는 <b>홈 화면에 추가</b>를 눌러요')}</span>${ADD_ICON}</li>
+        <li><span class="install-n">3</span><span>${t('<b>설치</b>를 누르면 끝!')}</span><span class="install-done">✓</span></li>
+      </ol>`;
+  } else {
+    body = `<p>${t('주소창 오른쪽의 <b>설치</b> 아이콘을 누르거나, 브라우저 메뉴에서 <b>앱 설치</b>를 눌러요.')}</p>`;
+  }
+  return `
+    <div class="notify-head">
+      <h2>${t('앱 다운로드')}</h2>
+      <button type="button" class="notify-close" data-install="close" aria-label="${t('닫기')}">×</button>
+    </div>
+    <p class="install-lead">${t('홈 화면에 설치하면 앱처럼 열리고, 아침·저녁 알림도 받을 수 있어요. 무료예요.')}</p>
+    <div class="install-body">${body}</div>
+    ${iphoneSafari && !isStandaloneApp() ? '<div class="install-pointer" aria-hidden="true"><span>↓</span></div>' : ''}`;
+}
+
+/** 앱 다운로드 버튼: 설치 창을 띄울 수 있으면 바로, 아니면 기기에 맞는 안내 */
+async function openInstallSheet() {
+  if (notifyState.installEvent && !isStandaloneApp()) {
+    const ev = notifyState.installEvent;
+    notifyState.installEvent = null;
+    ev.prompt();
+    await ev.userChoice.catch(() => null);
+    return;
+  }
+  let sheet = document.getElementById('install-sheet');
+  if (!sheet) {
+    sheet = document.createElement('div');
+    sheet.id = 'install-sheet';
+    sheet.className = 'modal';
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-modal', 'true');
+    sheet.innerHTML = '<div class="modal-card notify-card install-card"></div>';
+    document.body.appendChild(sheet);
+    sheet.addEventListener('click', async (e) => {
+      const action = e.target.closest('[data-install]')?.dataset.install;
+      if (e.target === sheet || action === 'close') {
+        sheet.hidden = true;
+        document.body.classList.remove('modal-open');
+      } else if (action === 'copy') {
+        try {
+          await navigator.clipboard.writeText(location.href.split('#')[0]);
+          e.target.textContent = t('복사했어요');
+        } catch (_) { /* 무시 */ }
+      }
+    });
+  }
+  sheet.querySelector('.install-card').innerHTML = renderInstallSheet();
+  sheet.hidden = false;
+  document.body.classList.add('modal-open');
+}
+
 const NOTIFY_TIMES = Array.from({ length: 48 }, (_, i) => `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
 
 function renderNotifyDialogBody() {
@@ -3206,21 +3297,10 @@ function renderNotifyDialogBody() {
   const ios = isIOSDevice();
   const timeSelect = (id, value) => `<select id="${id}" class="input notify-time">${(NOTIFY_TIMES.includes(value) ? NOTIFY_TIMES : [value, ...NOTIFY_TIMES]).map((v) => `<option value="${v}" ${v === value ? 'selected' : ''}>${v}</option>`).join('')}</select>`;
 
-  let install = '';
-  if (standalone) install = `<p class="notify-ok">✓ ${t('홈 화면 앱으로 쓰고 있어요')}</p>`;
-  else if (ios) {
-    install = `
-      <ol class="notify-steps">
-        <li>${t('사파리 아래쪽의 <b>공유</b> 버튼(네모에 위 화살표)을 눌러요')}</li>
-        <li>${t('<b>홈 화면에 추가</b>를 눌러요')}</li>
-        <li>${t('홈 화면의 <b>오늘분량</b> 아이콘으로 열고, 여기서 알림을 켜요')}</li>
-      </ol>
-      <p class="muted small">${t('아이폰은 홈 화면에 추가한 앱에서만 알림을 받을 수 있어요 (iOS 16.4 이상).')}</p>`;
-  } else if (notifyState.installEvent) {
-    install = `<button type="button" class="btn btn-dark" data-notify="install">${t('홈 화면에 앱 설치')}</button>`;
-  } else {
-    install = `<p class="muted small">${t('브라우저 메뉴에서 <b>홈 화면에 추가</b> 또는 <b>앱 설치</b>를 누르면 앱처럼 쓸 수 있어요.')}</p>`;
-  }
+  const install = standalone
+    ? `<p class="notify-ok">✓ ${t('홈 화면 앱으로 쓰고 있어요')}</p>`
+    : `<button type="button" class="btn btn-dark" data-notify="install">${t('앱 다운로드')}</button>
+      ${ios ? `<p class="muted small">${t('아이폰은 홈 화면에 추가한 앱에서만 알림을 받을 수 있어요 (iOS 16.4 이상).')}</p>` : ''}`;
 
   let device;
   if (!notifyState.supported) {
@@ -3322,11 +3402,9 @@ async function onNotifyClick(e) {
   const action = e.target.closest('[data-notify]')?.dataset.notify;
   if (!action) return;
   if (action === 'close') closeNotifyDialog();
-  else if (action === 'install' && notifyState.installEvent) {
-    notifyState.installEvent.prompt();
-    await notifyState.installEvent.userChoice.catch(() => null);
-    notifyState.installEvent = null;
-    refreshNotifyDialog();
+  else if (action === 'install') {
+    closeNotifyDialog();
+    openInstallSheet();
   } else if (action === 'on') runNotify(enablePush, t('알림을 켰어요. 시험 알림으로 확인해 보세요.'));
   else if (action === 'off') runNotify(disablePush, t('이 기기의 알림을 껐어요.'));
   else if (action === 'test') runNotify(sendTestPush, t('시험 알림을 보냈어요. 잠시 뒤 도착해요.'));
@@ -10014,6 +10092,28 @@ const EN = {
   '챕터 선택': 'Select chapter',
   '선택한 챕터 {n}개를 지울까요?': 'Delete {n} selected chapters?',
   '{n}개 선택': '{n} selected',
+  '이미 앱으로 쓰고 있어요': 'You’re already using the app',
+  '카카오톡·인스타그램 같은 앱 안에서 연 화면에서는 설치할 수 없어요.': 'You can’t install from inside apps like KakaoTalk or Instagram.',
+  '<b>Safari</b>로 열어 주세요.': 'Open it in <b>Safari</b>.',
+  '<b>크롬</b>으로 열어 주세요.': 'Open it in <b>Chrome</b>.',
+  '브라우저로 열기': 'Open in browser',
+  '오른쪽 위나 아래의 <b>⋯</b> 메뉴를 눌러요': 'Tap the <b>⋯</b> menu',
+  '<b>Safari로 열기</b>를 눌러요': 'Tap <b>Open in Safari</b>',
+  '<b>다른 브라우저로 열기</b>를 눌러요': 'Tap <b>Open in browser</b>',
+  '열린 화면에서 <b>앱 다운로드</b>를 다시 눌러요': 'Tap <b>Get the app</b> again there',
+  '주소 복사': 'Copy link',
+  '화면 <b>맨 아래 가운데</b>의 공유 버튼을 눌러요': 'Tap the Share button at the <b>bottom center</b>',
+  '<b>공유</b> 버튼을 눌러요': 'Tap the <b>Share</b> button',
+  '목록을 올려서 <b>홈 화면에 추가</b>를 눌러요': 'Scroll and tap <b>Add to Home Screen</b>',
+  '오른쪽 위 <b>추가</b>를 누르면 끝!': 'Tap <b>Add</b> — done!',
+  '설치한 뒤에는 홈 화면의 오늘분량 아이콘으로 열어 주세요. 아이폰은 그 앱에서만 알림이 와요.': 'Then open Today’s Dose from your Home Screen. On iPhone, reminders only arrive in that app.',
+  '크롬 오른쪽 위 <b>⋮</b> 메뉴를 눌러요': 'Tap the <b>⋮</b> menu in Chrome',
+  '<b>앱 설치</b> 또는 <b>홈 화면에 추가</b>를 눌러요': 'Tap <b>Install app</b> or <b>Add to Home screen</b>',
+  '<b>설치</b>를 누르면 끝!': 'Tap <b>Install</b> — done!',
+  '주소창 오른쪽의 <b>설치</b> 아이콘을 누르거나, 브라우저 메뉴에서 <b>앱 설치</b>를 눌러요.': 'Click the <b>Install</b> icon in the address bar, or choose <b>Install app</b> from the browser menu.',
+  '앱 다운로드': 'Get the app',
+  '홈 화면에 설치하면 앱처럼 열리고, 아침·저녁 알림도 받을 수 있어요. 무료예요.': 'Install it to your Home Screen to open it like an app and get morning & evening reminders. It’s free.',
+  '복사했어요': 'Copied',
   '알림 설정': 'Notifications',
   '알림이 허용되지 않았어요. 기기·브라우저 설정에서 오늘분량 알림을 허용해 주세요.': 'Notifications weren’t allowed. Allow Today’s Dose notifications in your device or browser settings.',
   '보내지 못했어요. 알림을 껐다가 다시 켜 보세요.': 'Couldn’t send. Try turning notifications off and on again.',

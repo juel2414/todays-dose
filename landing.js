@@ -11,6 +11,8 @@ const LANDING_TEXT = {
     heroTitle: '계획은 맡기고, 실행만 하세요.',
     heroSub: '마감일만 정하면, 매일 오늘 할 분량이 나와요.',
     cta: 'Google 계정으로 시작하기',
+    install: '앱 다운로드',
+    installSub: '홈 화면에 설치하고 아침·저녁 알림 받기',
     illusAlt: '책 더미에 기대어 책을 읽는 사람 손그림',
     todayCard: '오늘 분량',
     todayDate: '10월 1일 · D-24',
@@ -72,6 +74,8 @@ const LANDING_TEXT = {
     heroTitle: 'Leave the planning to us. Just get it done.',
     heroSub: 'Set a deadline. Every day, you get today’s amount.',
     cta: 'Continue with Google',
+    install: 'Get the app',
+    installSub: 'Install to your Home Screen for daily reminders',
     illusAlt: 'Hand-drawn person reading against a stack of books',
     todayCard: 'Today’s dose',
     todayDate: 'Oct 1 · D-24',
@@ -241,7 +245,12 @@ function renderLanding(root, options) {
         <div class="lp-hero-row">
           <div class="lp-hero-left">
             <p class="lp-hero-sub">${E(T.heroSub)}</p>
-            ${googleBtn('lp-cta')}
+            <div class="lp-cta-row">
+              ${googleBtn('lp-cta')}
+              <button type="button" class="lp-install" data-action="app-install" title="${E(T.installSub)}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 19.5h14"/></svg>${E(T.install)}
+              </button>
+            </div>
             <p class="lp-alert" data-lp-alert hidden></p>
           </div>
           <img class="lp-hero-illus" src="${LP_ASSETS.hero}" alt="${E(T.illusAlt)}">
@@ -367,6 +376,13 @@ function renderLanding(root, options) {
   initLandingScrollFx(landing);
 
   // 메뉴: 주소(#)를 바꾸지 않고 해당 칸으로 스크롤 (앱이 # 주소를 화면 이동에 쓴다)
+  // 앱 다운로드: 설치 창(안드로이드·PC) 또는 설치 안내(아이폰). 이미 앱으로 열었으면 버튼을 숨긴다
+  const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+  landing.querySelectorAll('[data-action="app-install"]').forEach((btn) => {
+    btn.hidden = standalone;
+    btn.addEventListener('click', () => { if (typeof openInstallSheet === 'function') openInstallSheet(); });
+  });
+
   landing.addEventListener('click', (e) => {
     const link = e.target.closest('[data-lp-scroll]');
     if (!link) return;

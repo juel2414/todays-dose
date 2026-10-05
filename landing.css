@@ -639,3 +639,17 @@ body.is-landing #app { max-width: none; padding: 0; }
 .lp-sfx .lp-who.is-seen .lp-who-bar i { width: var(--w); }
 .lp-sfx .lp-who-check .lp-check { transform: scale(0); transition: transform .45s cubic-bezier(.3, 1.8, .5, 1); transition-delay: calc(2s + var(--ri) * .12s); }
 .lp-sfx .lp-who.is-seen .lp-who-check .lp-check { transform: none; }
+
+/* 첫 화면 — 앱 다운로드 버튼 (Google 시작 버튼 옆) */
+.lp-cta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.lp-cta-row .lp-cta { align-self: auto; }
+.lp-install { display: inline-flex; align-items: center; gap: 8px; padding: 15px 22px 15px 18px; border: 1.5px solid var(--ink); border-radius: 999px; background: transparent; color: var(--ink); font-size: 16px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s; }
+.lp-install svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.lp-install:hover { background: var(--ink); color: #fff; }
+.lp-install[hidden] { display: none; }
+@media (max-width: 760px) {
+  .lp-cta-row { flex-direction: column; align-items: stretch; }
+  .lp-install { justify-content: center; height: 52px; padding: 0 20px; }
+}
+.lp-fx .lp-install { opacity: 0; translate: 0 18px; transition: opacity .8s ease 1.12s, translate .9s cubic-bezier(.2, .8, .2, 1) 1.12s, background .15s, color .15s; }
+.lp-fx.is-in .lp-install { opacity: 1; translate: 0 0; }
