@@ -3219,6 +3219,14 @@ function renderInstallSheet() {
   let body;
   if (isStandaloneApp()) {
     body = `<p class="notify-ok">✓ ${t('이미 앱으로 쓰고 있어요')}</p>`;
+  } else if (isSamsungInternet()) {
+    // 삼성 인터넷이 만드는 설치 파일은 옛 안드로이드 기준이라 Play 프로텍트가 '안전하지 않은 앱'으로 막는다 → 크롬으로 설치
+    const host = location.host + location.pathname;
+    body = `
+      <p>${t('삼성 인터넷으로 설치하면 Play 프로텍트 경고가 떠요. 앱 자체는 안전하지만, 경고 없이 설치하려면 <b>크롬</b>으로 열어 설치해 주세요.')}</p>
+      <a class="btn btn-dark" href="intent://${host}#Intent;scheme=https;package=com.android.chrome;end">${t('크롬으로 열기')}</a>
+      <ol class="notify-steps"><li>${t('크롬에서 다시 <b>앱 다운로드</b>를 눌러요')}</li><li>${t('<b>설치</b>를 누르면 끝!')}</li></ol>
+      <button type="button" class="btn btn-outline" data-install="copy">${t('주소 복사')}</button>`;
   } else if (inApp) {
     body = `
       <p>${t('카카오톡·인스타그램 같은 앱 안에서 연 화면에서는 설치할 수 없어요.')} ${ios ? t('<b>Safari</b>로 열어 주세요.') : t('<b>크롬</b>으로 열어 주세요.')}</p>
@@ -3253,9 +3261,11 @@ function renderInstallSheet() {
     ${iphoneSafari && !isStandaloneApp() ? '<div class="install-pointer" aria-hidden="true"><span>↓</span></div>' : ''}`;
 }
 
-/** 앱 다운로드 버튼: 설치 창을 띄울 수 있으면 바로, 아니면 기기에 맞는 안내 */
+const isSamsungInternet = () => /SamsungBrowser/i.test(navigator.userAgent);
+
+/** 앱 다운로드 버튼: 설치 창을 띄울 수 있으면 바로, 아니면 기기에 맞는 안내 (삼성 인터넷은 크롬 안내) */
 async function openInstallSheet() {
-  if (notifyState.installEvent && !isStandaloneApp()) {
+  if (notifyState.installEvent && !isStandaloneApp() && !isSamsungInternet()) {
     const ev = notifyState.installEvent;
     notifyState.installEvent = null;
     ev.prompt();
@@ -10092,6 +10102,9 @@ const EN = {
   '챕터 선택': 'Select chapter',
   '선택한 챕터 {n}개를 지울까요?': 'Delete {n} selected chapters?',
   '{n}개 선택': '{n} selected',
+  '삼성 인터넷으로 설치하면 Play 프로텍트 경고가 떠요. 앱 자체는 안전하지만, 경고 없이 설치하려면 <b>크롬</b>으로 열어 설치해 주세요.': 'Installing from Samsung Internet shows a Play Protect warning. The app is safe, but to install without the warning, open it in <b>Chrome</b>.',
+  '크롬으로 열기': 'Open in Chrome',
+  '크롬에서 다시 <b>앱 다운로드</b>를 눌러요': 'In Chrome, tap <b>Get the app</b> again',
   '이미 앱으로 쓰고 있어요': 'You’re already using the app',
   '카카오톡·인스타그램 같은 앱 안에서 연 화면에서는 설치할 수 없어요.': 'You can’t install from inside apps like KakaoTalk or Instagram.',
   '<b>Safari</b>로 열어 주세요.': 'Open it in <b>Safari</b>.',
