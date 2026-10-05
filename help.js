@@ -34,6 +34,8 @@ const HELP_TEXT = {
         ['start-1-new', '새 목표 만들기', ['오른쪽 위 **+ 새 목표 추가**를 눌러요', '종류(책·강의·성경 통독·기타)를 고르고 제목을 써요', '시작일·마감일을 정하고 **목표 추가**를 눌러요'], '**○주 동안** 버튼으로 마감일을 바로 정할 수 있어요.'],
         ['start-2-toc', '책 목차 넣기', ['**목차 사진 올리기**를 누르면 AI가 챕터와 페이지를 채워요', '빈 칸만 확인해요', '마지막 페이지를 입력해요']],
         ['start-3-rest', '쉬는 날 정하기', ['쉬는 요일을 골라요', '**더 정하기**를 펼쳐 행사 같은 특정 쉬는 날을 골라요', '여유 있는 날을 정하면 그날 더 많이 배정돼요']],
+        ['start-4-install', '앱 다운로드', ['첫 화면에서 **앱 다운로드**를 눌러요', '안드로이드는 **설치**를 누르면 끝이에요. 아이폰은 안내대로 **공유 → 홈 화면에 추가**를 눌러요', '홈 화면에 생긴 **오늘분량** 아이콘으로 열어요'], '카카오톡 링크나 삼성 인터넷에서는 설치가 잘 안 돼요. 아이폰은 **Safari**, 안드로이드는 **크롬**으로 열어 주세요.'],
+        ['start-5-notify', '아침·저녁 알림 켜기', ['앱 위쪽의 **종 모양** 버튼을 눌러요', '**이 기기에서 알림 켜기**를 누르고 알림을 허용해요', '아침·저녁 알림 시간을 골라요. 아침엔 오늘 할 분량, 저녁엔 남은 분량이 와요'], '아이폰은 홈 화면에 추가한 앱에서만 알림이 와요. **시험 알림 보내기**로 바로 확인해 보세요.'],
       ],
       daily: [
         ['daily-1-today', '오늘 할 분량', ['다 했으면 동그라미를 눌러 체크해요. 다시 누르면 취소돼요', '목표 이름을 누르면 자세한 화면으로 가요']],
@@ -86,6 +88,8 @@ const HELP_TEXT = {
         ['start-1-new', 'Create a new goal', ['Tap **+ New goal** at the top right', 'Pick a type (book, course, Bible reading, other) and enter a title', 'Set the start and end dates, then tap **Add goal**'], 'Use the **○ weeks** buttons to set the deadline in one tap.'],
         ['start-2-toc', 'Add a book’s contents', ['Tap **Upload contents photo** and AI fills in chapters and pages', 'Just check the empty fields', 'Enter the last page']],
         ['start-3-rest', 'Set days off', ['Pick your weekly days off', 'Open **More options** and pick specific days off, like events', 'Mark lighter-schedule days to get more on those days']],
+        ['start-4-install', 'Get the app', ['On the first screen, tap **Get the app**', 'On Android, tap **Install** — done. On iPhone, follow the guide: **Share → Add to Home Screen**', 'Open **Today’s Dose** from your Home Screen'], 'Installing from a KakaoTalk link or Samsung Internet may not work. Use **Safari** on iPhone and **Chrome** on Android.'],
+        ['start-5-notify', 'Turn on morning & evening reminders', ['Tap the **bell** button at the top', 'Tap **Turn on for this device** and allow notifications', 'Pick your morning and evening times. Mornings: today’s dose. Evenings: what’s left'], 'On iPhone, reminders only arrive in the Home Screen app. Use **Send a test** to check right away.'],
       ],
       daily: [
         ['daily-1-today', 'Today’s dose', ['Done? Tap the circle to check it off. Tap again to undo', 'Tap a goal’s name to open its details']],
@@ -98,7 +102,7 @@ const HELP_TEXT = {
         ['member-2-plan', 'Plan required reading or viewing', ['On the dashboard, find **From your groups** and tap **Make a plan**', 'Just set the dates. The title and contents are locked']],
         ['member-3-changed', 'When your admin updates an item', ['Tap **Preview changes** in the banner to see what changed', 'Tap **Apply** after checking. Your progress and dates stay the same'], 'Admins only see progress on group items. Your personal goals stay private.'],
       ],
-      admin: [
+      leader: [
         ['leader-1-create', 'Create a group', ['Enter a group name on the Groups screen', 'Tap **Create**']],
         ['leader-2-invite', 'Invite members', ['Find the invite code in group details', 'Tap **Copy invite link** and send it', 'Tap **New code** to replace the code']],
         ['leader-3-share', 'Share required reading or viewing', ['Tap **+ Share one of my goals**', 'Search your goals and pick one']],
