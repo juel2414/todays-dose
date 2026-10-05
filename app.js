@@ -3114,7 +3114,9 @@ function initNotify() {
   window.addEventListener('appinstalled', () => { notifyState.installEvent = null; refreshNotifyDialog(); });
   notifyState.supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
   if (!('serviceWorker' in navigator)) { notifyState.ready = true; return; }
-  navigator.serviceWorker.register('sw.js').then(async (reg) => {
+  // updateViaCache 'none' + 열 때마다 update(): 새로 배포한 sw.js(알림 아이콘 등)를 바로 받는다
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(async (reg) => {
+    reg.update().catch(() => {});
     if (notifyState.supported) {
       notifyState.permission = Notification.permission;
       const sub = await reg.pushManager.getSubscription();
