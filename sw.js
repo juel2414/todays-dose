@@ -1,4 +1,4 @@
-/* 오늘분량 — 서비스 워커: 휴대폰 알림(Web Push) 받기 · 알림을 누르면 앱 열기
+/* 오늘분량 — 서비스 워커 (v2: 상단바 아이콘): 휴대폰 알림(Web Push) 받기 · 알림을 누르면 앱 열기
  *   화면 파일은 따로 저장해 두지 않는다 (항상 최신 화면을 불러온다) */
 
 self.addEventListener('install', () => self.skipWaiting());
@@ -13,7 +13,8 @@ self.addEventListener('push', (e) => {
   }
   e.waitUntil(self.registration.showNotification(d.title || '오늘분량', {
     body: d.body || '',
-    icon: 'logo/png/icon-192.png?v=2',
+    icon: 'logo/png/icon-192.png?v=2', // 알림 오른쪽(또는 왼쪽)의 큰 아이콘
+    badge: 'logo/png/notify-badge-96.png?v=1', // 상단바 작은 아이콘 (흰색 모양만 쓰인다)
     tag: d.tag || 'todays-dose',
     renotify: true,
     data: { url: d.url || './' },
