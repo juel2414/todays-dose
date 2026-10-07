@@ -3301,6 +3301,25 @@ async function openInstallSheet() {
   document.body.classList.add('modal-open');
 }
 
+/* ----- 마지막 접속 시간: 앱을 쓰는 동안 갱신 ----- */
+
+let lastSeenPing = 0;
+/** 화면을 다시 볼 때 · 쓰는 동안 5분마다 서버에 '지금 접속 중' 기록 (서버도 1분 안 중복은 건너뜀) */
+function pingSeen(force = false) {
+  if (!currentUser || document.visibilityState === 'hidden') return;
+  if (!force && Date.now() - lastSeenPing < 4 * 60 * 1000) return;
+  lastSeenPing = Date.now();
+  try {
+    getSupabase().rpc('study_planner_seen').then(({ error }) => { if (error) console.warn('[seen]', error); });
+  } catch (_) { /* 무시 */ }
+}
+
+function initSeenPing() {
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pingSeen(true); });
+  window.addEventListener('focus', () => pingSeen());
+  setInterval(() => pingSeen(), 5 * 60 * 1000);
+}
+
 const NOTIFY_TIMES = Array.from({ length: 48 }, (_, i) => `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
 
 function renderNotifyDialogBody() {
@@ -10369,6 +10388,7 @@ async function boot() {
   window.addEventListener('hashchange', render);
   rememberPendingJoin();
   initNotify();
+  initSeenPing();
   document.getElementById('topbar').addEventListener('click', async (e) => {
     const action = e.target.closest('[data-action]')?.dataset.action;
     if (action === 'user-menu') {
