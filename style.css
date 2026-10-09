@@ -2615,3 +2615,7 @@ tr.is-today .check-mark { color: #fff; }
   #install-sheet .install-card { width: 100%; border-radius: 24px 24px 0 0; padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
 }
 @media (prefers-reduced-motion: reduce) { .install-pointer span { animation: none; } }
+
+/* 어드민 — 자동 새로고침 시각 */
+.admin-updated { margin-left: auto; font: 500 11px var(--mono); color: var(--text-2); white-space: nowrap; }
+@media (max-width: 760px) { .admin-updated { display: none; } }

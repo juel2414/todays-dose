@@ -6613,26 +6613,75 @@ const ADMIN_TABS = [
   ['inquiries', '문의'],
 ];
 
+/** 어드민에 필요한 것을 모두 불러와 adminState에 넣는다 */
+async function adminFetchAll() {
+  const [profiles, rows, goals, assignments, , inquiries] = await Promise.all([
+    adminLoadProfiles(), loadLibraryRows(), adminLoadAllGoals(), adminLoadAssignments(), adminLoadGroups(), adminLoadInquiries(),
+  ]);
+  adminState.inquiries = inquiries;
+  adminState.profiles = profiles;
+  adminState.goals = goals.filter((x) => checkGoalShape(x.goal, 0) === null);
+  adminState.assignments = assignments;
+  myAssignedBookIds = new Set(assignments.filter((a) => a.user_id === currentUser.id).map((a) => a.book_id));
+  setLibraryRows(rows);
+  adminState.loaded = true;
+  adminState.updatedAt = Date.now();
+}
+
 async function loadAdminData() {
   adminState.loading = true;
   adminState.error = null;
   try {
-    const [profiles, rows, goals, assignments, , inquiries] = await Promise.all([
-      adminLoadProfiles(), loadLibraryRows(), adminLoadAllGoals(), adminLoadAssignments(), adminLoadGroups(), adminLoadInquiries(),
-    ]);
-    adminState.inquiries = inquiries;
-    adminState.profiles = profiles;
-    adminState.goals = goals.filter((x) => checkGoalShape(x.goal, 0) === null);
-    adminState.assignments = assignments;
-    myAssignedBookIds = new Set(assignments.filter((a) => a.user_id === currentUser.id).map((a) => a.book_id));
-    setLibraryRows(rows);
-    adminState.loaded = true;
+    await adminFetchAll();
   } catch (err) {
     console.error('[admin] 불러오기 실패:', err);
     adminState.error = err.message || String(err);
   }
   adminState.loading = false;
   if (parseRoute().view === 'admin') render();
+}
+
+/* ----- 어드민 자동 새로고침: 화면을 보고 있는 동안 1분마다, 다시 볼 때 바로 ----- */
+
+/** 입력·편집 중이면 건너뛴다 (쓰던 내용·커서가 날아가지 않게) */
+function adminIsBusy() {
+  const admin = document.getElementById('admin');
+  if (!admin || adminState.loading || !adminState.loaded) return true;
+  if (adminState.editingBookId || adminState.mergingId || document.body.classList.contains('modal-open')) return true;
+  const active = document.activeElement;
+  return !!(active && admin.contains(active) && active.matches('input, textarea, select, [contenteditable]'));
+}
+
+async function adminAutoRefresh() {
+  if (!account.isAdmin || parseRoute().view !== 'admin' || document.visibilityState === 'hidden' || adminIsBusy()) return;
+  adminState.loading = true;
+  try {
+    await adminFetchAll();
+  } catch (err) {
+    console.warn('[admin] 자동 새로고침 실패:', err);
+    adminState.loading = false;
+    return;
+  }
+  adminState.loading = false;
+  if (parseRoute().view !== 'admin' || adminIsBusy()) return;
+  // 스크롤 위치와 펼쳐 둔 칸을 그대로 두고 다시 그린다
+  const before = [...document.querySelectorAll('#admin details')].map((d) => d.open);
+  const y = window.scrollY;
+  const route = parseRoute();
+  renderAdmin(document.getElementById('app'), route.tab, route);
+  const after = [...document.querySelectorAll('#admin details')];
+  if (after.length === before.length) after.forEach((d, i) => { d.open = before[i]; });
+  window.scrollTo(0, y);
+}
+
+let adminAutoStarted = false;
+function startAdminAutoRefresh() {
+  if (adminAutoStarted) return;
+  adminAutoStarted = true;
+  setInterval(adminAutoRefresh, 60 * 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && Date.now() - (adminState.updatedAt || 0) > 20 * 1000) adminAutoRefresh();
+  });
 }
 
 /** 서버 시각 → 이 컴퓨터 시간대 기준 "2026-09-30 14:03:25" */
@@ -6652,6 +6701,7 @@ function profileName(p) {
 }
 
 function renderAdmin(root, tab, route = {}) {
+  startAdminAutoRefresh();
   if (tab !== 'member' && !ADMIN_TABS.some(([key]) => key === tab)) tab = 'progress';
   let body;
   if (adminState.error) {
@@ -6708,6 +6758,7 @@ function renderAdmin(root, tab, route = {}) {
             return `<a class="admin-tab ${key === tab || (tab === 'member' && key === 'plans') ? 'is-active' : ''}" href="#/admin/${key}">${t(label)}${openN ? `<span class="admin-tab-count">${openN}</span>` : ''}</a>`;
           }).join('')}
         </nav>
+        <span class="admin-updated">${adminState.updatedAt ? t('자동 새로고침 · {time}', { time: timestampToDateTime(new Date(adminState.updatedAt).toISOString()).slice(11, 16) }) : ''}</span>
         <button type="button" class="btn btn-small btn-outline-muted" data-action="admin-refresh" ${adminState.loading ? 'disabled' : ''}>${t('새로고침')}</button>
       </div>`}
       ${body}
@@ -10123,6 +10174,7 @@ const EN = {
   '챕터 선택': 'Select chapter',
   '선택한 챕터 {n}개를 지울까요?': 'Delete {n} selected chapters?',
   '{n}개 선택': '{n} selected',
+  '자동 새로고침 · {time}': (p) => `Auto-refresh · ${p.time}`,
   '삼성 인터넷으로 설치하면 Play 프로텍트 경고가 떠요. 앱 자체는 안전하지만, 경고 없이 설치하려면 <b>크롬</b>으로 열어 설치해 주세요.': 'Installing from Samsung Internet shows a Play Protect warning. The app is safe, but to install without the warning, open it in <b>Chrome</b>.',
   '크롬으로 열기': 'Open in Chrome',
   '크롬에서 다시 <b>앱 다운로드</b>를 눌러요': 'In Chrome, tap <b>Get the app</b> again',
