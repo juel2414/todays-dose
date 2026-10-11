@@ -2620,11 +2620,7 @@ tr.is-today .check-mark { color: #fff; }
 .admin-updated { margin-left: auto; font: 500 11px var(--mono); color: var(--text-2); white-space: nowrap; }
 @media (max-width: 760px) { .admin-updated { display: none; } }
 
-/* 대시보드 — 마감 지났지만 남은 목표 */
-.overdue-box { margin: 14px 0 6px; padding: 14px 16px; border-radius: 16px; background: var(--danger-soft, #f6e3df); display: flex; flex-direction: column; gap: 8px; }
-.overdue-head { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--danger); }
-.overdue-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 0; border-top: 1px solid rgba(184, 67, 47, .18); }
-.overdue-title { flex: 1 1 160px; min-width: 0; font-size: 15px; font-weight: 700; color: var(--text); text-decoration: none; }
-.overdue-meta { font-size: 13px; color: var(--text-2); }
-.overdue-row .btn { margin-left: auto; }
-.overdue-note { margin: 0; font-size: 12px; color: var(--text-2); }
+/* 대시보드 — 마감 지났지만 다 못 한 목표 (오늘 할 분량에 계속) */
+.pill-overdue { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px; background: var(--danger-soft, #f6e3df); color: var(--danger); font-size: 12px; font-weight: 700; }
+.today-overdue { display: block; margin-top: 4px; font-size: 13px; color: var(--danger); }
+.today-overdue .link-btn { margin-left: 6px; font-weight: 700; color: var(--text); }

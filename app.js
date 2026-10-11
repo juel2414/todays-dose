@@ -2690,10 +2690,30 @@ function ddayCheer(s) {
   return '';
 }
 
-/** 오늘 할 분량 목록의 한 줄 데이터 (오늘 공부하는 날이 아니면 null) */
+/**
+ * 마감이 지났지만 다 못 한 목표의 오늘 분량: 평소 하루 분량만큼 이어서 (쉬는 날은 없음)
+ * 오늘 시작점 = 어제까지의 진도 → 하루 중에 체크해도 '오늘 분량'이 바뀌지 않는다
+ */
+function overdueTodayRow(goal, s, today = todayStr()) {
+  const plan = s.plan;
+  if (isRestDate(today, plan.restWeekdays, plan.restDates)) return null;
+  const unitsOf = (value) => getDoneUnits({ ...goal, progress: { ...goal.progress, current: value } }, s.basis);
+  const past = goal.progress.history.filter((h) => diffDays(h.date, today) > 0)
+    .sort((a, b) => diffDays(b.date, a.date))[0];
+  const hasToday = goal.progress.history.some((h) => h.date === today);
+  const start = Math.min(s.done, past ? unitsOf(past.value) : (hasToday ? plan.from : s.done));
+  const chunk = Math.max(1, Math.ceil(s.dailyPlan || 1));
+  const cumulative = Math.min(s.total, start + chunk);
+  if (cumulative <= start) return null;
+  return { date: today, prevCumulative: start, cumulative, amount: cumulative - start, isRestDay: false, isOverdueRow: true };
+}
+
+/** 오늘 할 분량 목록의 한 줄 데이터 (오늘 공부하는 날이 아니면 null). 마감이 지났어도 다 못 했으면 계속 나온다 */
 function todayItemOf(goal, s) {
-  if (!s.isActive || s.notStarted) return null;
-  const row = s.todayRow;
+  let row;
+  if (s.isOverdue && !s.isComplete) row = overdueTodayRow(goal, s);
+  else if (!s.isActive || s.notStarted) return null;
+  else row = s.todayRow;
   if (!row || row.isRestDay || row.amount === 0) return null;
   useUnitOf(goal);
   const done = s.done >= row.cumulative;
@@ -2704,7 +2724,7 @@ function todayItemOf(goal, s) {
     hint = describeChaptersForPages(goal.book, unitsToPage(goal.book, from + 1), unitsToPage(goal.book, row.cumulative));
   }
   return {
-    goal, s, row, done,
+    goal, s, row, done, overdue: !!row.isOverdueRow,
     range: describeUnitsRange(goal, s.basis, from, row.cumulative),
     amount: partial
       ? t('{left} 남음 · 오늘 분량 {amount}', { left: formatAmount(row.cumulative - from, s.basis), amount: formatAmount(row.amount, s.basis) })
@@ -2721,7 +2741,8 @@ function dashboardGreeting(todayItems, activeItems) {
   const parts = [];
   const urgent = left.slice().sort((a, b) => a.s.dday - b.s.dday)[0];
   if (urgent) {
-    const due = urgent.s.dday === 0 ? t('오늘이 마감이에요.')
+    const due = urgent.s.dday < 0 ? t('마감이 {n}일 지났어요.', { n: -urgent.s.dday })
+      : urgent.s.dday === 0 ? t('오늘이 마감이에요.')
       : urgent.s.dday === 1 ? t('내일이 마감이에요.')
       : t('마감까지 {n}일 남았어요.', { n: urgent.s.dday });
     parts.push(t('가장 급한 건 「{title}」{josa} {due}', {
@@ -2754,7 +2775,10 @@ function renderDashboard(root) {
     .sort((a, b) => diffDays(b.goal.dueDate, a.goal.dueDate));
   const finished = items.filter((x) => x.s.isComplete)
     .sort((a, b) => diffDays(a.goal.dueDate, b.goal.dueDate));
-  const todayItems = active.map((x) => todayItemOf(x.goal, x.s)).filter(Boolean);
+  // 마감이 지났지만 다 못 한 목표도 오늘 할 분량에 계속 넣는다 (overdue는 아래에서 정한다)
+  const todayItems = items.filter((x) => x.s.isActive || (x.s.isOverdue && !x.s.isComplete))
+    .sort((a, b) => diffDays(b.goal.dueDate, a.goal.dueDate))
+    .map((x) => todayItemOf(x.goal, x.s)).filter(Boolean);
   const pendingCards = renderPendingCards();
 
   const title = name ? t('{name} 님의 오늘분량', { name: escapeHtml(name) }) : t('오늘분량');
@@ -2801,7 +2825,6 @@ function renderDashboard(root) {
           </div>
           ${todayItems.length ? `<div class="today-bar ${allDone ? 'is-full' : ''}"><span class="today-bar-track"><i style="width:${Math.round((nDone / todayItems.length) * 100)}%"></i></span>${allDone ? '<b aria-hidden="true">✓</b>' : ''}</div>` : ''}
           ${allDone ? renderTodayFinish(active) : ''}
-          ${renderOverdueBox(overdue)}
           ${todayItems.length ? todayItems.map(renderTodayItem).join('')
             : `<p class="dash-today-empty">${active.length ? t('오늘은 할 분량이 없어요.') : t('진행 중인 목표가 없습니다. <a href="#/new">새 목표를 추가</a>해 보세요.')}</p>`}
         </section>
@@ -2869,7 +2892,8 @@ function renderDashboard(root) {
       const goal = getGoal(btn.dataset.goalId);
       if (!goal) return;
       const s = getGoalSummary(goal);
-      const row = s.todayRow;
+      const item = todayItemOf(goal, s);
+      const row = item ? item.row : null;
       if (!row) return;
       const done = s.done >= row.cumulative;
       if (done && s.done > row.cumulative
@@ -3523,25 +3547,6 @@ function playDashEnter(root) {
   setTimeout(() => dash.classList.remove('dash-enter'), 2600);
 }
 
-/** 마감이 지났지만 다 못 한 목표: 남은 분량 + 마감일 연장 버튼 */
-function renderOverdueBox(overdue) {
-  if (!overdue.length) return '';
-  return `
-    <div class="overdue-box">
-      <div class="overdue-head"><b>${t('마감이 지났지만 아직 남은 목표')}</b><span class="mono-count">${overdue.length}</span></div>
-      ${overdue.map(({ goal, s }) => {
-        useUnitOf(goal);
-        return `
-        <div class="overdue-row">
-          <a class="overdue-title" href="#/goal/${escapeHtml(goal.id)}">${escapeHtml(goal.title)}</a>
-          <span class="overdue-meta">${t('{amount} 남음 · {date} 마감', { amount: formatAmount(s.remaining, s.basis), date: formatShortDate(goal.dueDate) })}</span>
-          <button type="button" class="btn btn-small btn-dark" data-action="extend-due" data-goal-id="${escapeHtml(goal.id)}">${t('마감일 늘리기')}</button>
-        </div>`;
-      }).join('')}
-      <p class="overdue-note">${t('목표는 지워지지 않아요. 마감일을 늘리면 남은 분량을 다시 나눠 드려요.')}</p>
-    </div>`;
-}
-
 /** 오늘 할 분량 한 줄 */
 function renderTodayItem(x) {
   const { goal, s, done } = x;
@@ -3556,9 +3561,12 @@ function renderTodayItem(x) {
           ${groupName ? `<span>${escapeHtml(groupName)}</span>` : ''}
           <a class="today-title" href="#/goal/${escapeHtml(goal.id)}">${escapeHtml(goal.title)}</a>
           ${isGoalSourceChanged(goal) ? `<span class="pill-outline-blue">${t('내용 변경됨')}</span>` : ''}
+          ${x.overdue ? `<span class="pill-overdue">${t('마감 지남')}</span>` : ''}
         </div>
         <div class="today-range"><span class="today-range-main">${escapeHtml(x.range)}</span><span class="serif-amt">${escapeHtml(x.amount)}</span></div>
         ${x.hint ? `<span class="today-hint">${escapeHtml(x.hint)}</span>` : ''}
+        ${x.overdue ? `<span class="today-overdue">${t('{date}에 마감됐지만 남은 {amount}{josa} 하루씩 이어서 해요.', { date: formatShortDate(goal.dueDate), amount: formatAmount(s.remaining, s.basis), josa: currentLang === 'en' ? '' : josa(formatAmount(s.remaining, s.basis), '을', '를') })}
+          <button type="button" class="link-btn" data-action="extend-due" data-goal-id="${escapeHtml(goal.id)}">${t('마감일 늘리기')}</button></span>` : ''}
       </div>
       <div class="today-side">
         ${done ? `<span class="today-done">✓ ${t('완료')}</span><span class="hand-note hand-sm">${t('잘했어요!')}</span>` : ''}
@@ -10218,10 +10226,10 @@ const EN = {
   '선택한 챕터 {n}개를 지울까요?': 'Delete {n} selected chapters?',
   '{n}개 선택': '{n} selected',
   '끝낸 목표': 'Finished goals',
-  '마감이 지났지만 아직 남은 목표': 'Past due, not finished',
-  '{amount} 남음 · {date} 마감': (p) => `${p.amount} left · due ${p.date}`,
+  '마감 지남': 'Past due',
+  '마감이 {n}일 지났어요.': (p) => `It’s ${p.n} ${p.n === 1 ? 'day' : 'days'} past due.`,
+  '{date}에 마감됐지만 남은 {amount}{josa} 하루씩 이어서 해요.': (p) => `Due ${p.date} — keep going with ${p.amount} left, a day’s dose at a time.`,
   '마감일 늘리기': 'Extend',
-  '목표는 지워지지 않아요. 마감일을 늘리면 남은 분량을 다시 나눠 드려요.': 'Goals aren’t deleted. Extend the due date and we’ll re-split what’s left.',
   '자동 새로고침 · {time}': (p) => `Auto-refresh · ${p.time}`,
   '삼성 인터넷으로 설치하면 Play 프로텍트 경고가 떠요. 앱 자체는 안전하지만, 경고 없이 설치하려면 <b>크롬</b>으로 열어 설치해 주세요.': 'Installing from Samsung Internet shows a Play Protect warning. The app is safe, but to install without the warning, open it in <b>Chrome</b>.',
   '크롬으로 열기': 'Open in Chrome',
