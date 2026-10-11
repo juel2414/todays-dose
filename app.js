@@ -2749,7 +2749,10 @@ function renderDashboard(root) {
   const items = appData.goals.map((goal) => ({ goal, s: getGoalSummary(goal, undefined, today) }));
   const active = items.filter((x) => x.s.isActive)
     .sort((a, b) => diffDays(b.goal.dueDate, a.goal.dueDate));
-  const finished = items.filter((x) => !x.s.isActive)
+  // 마감이 지났지만 다 못 한 목표는 대시보드에 남겨 두고 마감일을 늘릴 수 있게 한다 (지워진 것처럼 보이지 않게)
+  const overdue = items.filter((x) => x.s.isOverdue && !x.s.isComplete)
+    .sort((a, b) => diffDays(b.goal.dueDate, a.goal.dueDate));
+  const finished = items.filter((x) => x.s.isComplete)
     .sort((a, b) => diffDays(a.goal.dueDate, b.goal.dueDate));
   const todayItems = active.map((x) => todayItemOf(x.goal, x.s)).filter(Boolean);
   const pendingCards = renderPendingCards();
@@ -2798,6 +2801,7 @@ function renderDashboard(root) {
           </div>
           ${todayItems.length ? `<div class="today-bar ${allDone ? 'is-full' : ''}"><span class="today-bar-track"><i style="width:${Math.round((nDone / todayItems.length) * 100)}%"></i></span>${allDone ? '<b aria-hidden="true">✓</b>' : ''}</div>` : ''}
           ${allDone ? renderTodayFinish(active) : ''}
+          ${renderOverdueBox(overdue)}
           ${todayItems.length ? todayItems.map(renderTodayItem).join('')
             : `<p class="dash-today-empty">${active.length ? t('오늘은 할 분량이 없어요.') : t('진행 중인 목표가 없습니다. <a href="#/new">새 목표를 추가</a>해 보세요.')}</p>`}
         </section>
@@ -2809,7 +2813,7 @@ function renderDashboard(root) {
           <h2 class="dash-sec-label is-closed">${t('지난 목표')}</h2>
           <section class="closed-box">
             <button type="button" class="closed-toggle" data-action="toggle-closed" aria-expanded="${dashState.closedOpen}">
-              <span>${t('끝난 목표 · 마감 지난 목표')} <span class="mono-count">${finished.length}</span></span>
+              <span>${t('끝낸 목표')} <span class="mono-count">${finished.length}</span></span>
               <span class="closed-label">${dashState.closedOpen ? t('접기') : t('펼치기')}</span>
             </button>
             ${dashState.closedOpen ? (finished.length
@@ -2823,10 +2827,10 @@ function renderDashboard(root) {
         </aside>
       </div>
 
-      ${active.length ? `
+      ${active.length || overdue.length ? `
       <section class="dash-progress">
         <h2>${t('목표별 진행')}</h2>
-        <div class="progress-grid">${active.map((x) => renderGoalCard(x.goal, x.s)).join('')}</div>
+        <div class="progress-grid">${[...active, ...overdue].map((x) => renderGoalCard(x.goal, x.s)).join('')}</div>
       </section>` : ''}
     </div>`;
 
@@ -2834,6 +2838,15 @@ function renderDashboard(root) {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
     if (btn.dataset.action === 'notify-open') { openNotifyDialog(); return; }
+    if (btn.dataset.action === 'extend-due') {
+      // 목표 화면으로 가서 '마감일 변경' 미리보기를 바로 연다 (기본: 오늘부터 1주 뒤)
+      const goal = getGoal(btn.dataset.goalId);
+      if (!goal) return;
+      openPreview(goal, { kind: 'due', dueDate: addDays(todayStr(), 7) });
+      detailState.focusDue = true;
+      navigate(`#/goal/${goal.id}`);
+      return;
+    }
     if (btn.dataset.action === 'notify-nudge-close') {
       try { localStorage.setItem('td-notify-nudge', 'off'); } catch (_) { /* 무시 */ }
       const slot = root.querySelector('#notify-nudge-slot');
@@ -3508,6 +3521,25 @@ function playDashEnter(root) {
   order('.goal-card');
   dash.classList.add('dash-enter');
   setTimeout(() => dash.classList.remove('dash-enter'), 2600);
+}
+
+/** 마감이 지났지만 다 못 한 목표: 남은 분량 + 마감일 연장 버튼 */
+function renderOverdueBox(overdue) {
+  if (!overdue.length) return '';
+  return `
+    <div class="overdue-box">
+      <div class="overdue-head"><b>${t('마감이 지났지만 아직 남은 목표')}</b><span class="mono-count">${overdue.length}</span></div>
+      ${overdue.map(({ goal, s }) => {
+        useUnitOf(goal);
+        return `
+        <div class="overdue-row">
+          <a class="overdue-title" href="#/goal/${escapeHtml(goal.id)}">${escapeHtml(goal.title)}</a>
+          <span class="overdue-meta">${t('{amount} 남음 · {date} 마감', { amount: formatAmount(s.remaining, s.basis), date: formatShortDate(goal.dueDate) })}</span>
+          <button type="button" class="btn btn-small btn-dark" data-action="extend-due" data-goal-id="${escapeHtml(goal.id)}">${t('마감일 늘리기')}</button>
+        </div>`;
+      }).join('')}
+      <p class="overdue-note">${t('목표는 지워지지 않아요. 마감일을 늘리면 남은 분량을 다시 나눠 드려요.')}</p>
+    </div>`;
 }
 
 /** 오늘 할 분량 한 줄 */
@@ -5621,6 +5653,17 @@ function renderGoalDetail(root, goal) {
     </div>
   `;
   bindDetailEvents(root.querySelector('#detail'), goal);
+  if (detailState.focusDue) {
+    // 대시보드 '마감일 늘리기'로 왔으면 마감일 입력칸으로 내려간다 (render의 맨 위 이동 뒤에)
+    detailState.focusDue = false;
+    setTimeout(() => {
+      const input = document.getElementById('preview-due');
+      if (!input) return;
+      const top = input.getBoundingClientRect().top + window.scrollY - window.innerHeight / 2;
+      window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+      input.focus({ preventScroll: true });
+    }, 60);
+  }
 }
 
 function renderBasisTabs(goal, basis) {
@@ -10174,6 +10217,11 @@ const EN = {
   '챕터 선택': 'Select chapter',
   '선택한 챕터 {n}개를 지울까요?': 'Delete {n} selected chapters?',
   '{n}개 선택': '{n} selected',
+  '끝낸 목표': 'Finished goals',
+  '마감이 지났지만 아직 남은 목표': 'Past due, not finished',
+  '{amount} 남음 · {date} 마감': (p) => `${p.amount} left · due ${p.date}`,
+  '마감일 늘리기': 'Extend',
+  '목표는 지워지지 않아요. 마감일을 늘리면 남은 분량을 다시 나눠 드려요.': 'Goals aren’t deleted. Extend the due date and we’ll re-split what’s left.',
   '자동 새로고침 · {time}': (p) => `Auto-refresh · ${p.time}`,
   '삼성 인터넷으로 설치하면 Play 프로텍트 경고가 떠요. 앱 자체는 안전하지만, 경고 없이 설치하려면 <b>크롬</b>으로 열어 설치해 주세요.': 'Installing from Samsung Internet shows a Play Protect warning. The app is safe, but to install without the warning, open it in <b>Chrome</b>.',
   '크롬으로 열기': 'Open in Chrome',
