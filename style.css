@@ -2624,3 +2624,12 @@ tr.is-today .check-mark { color: #fff; }
 .pill-overdue { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px; background: var(--danger-soft, #f6e3df); color: var(--danger); font-size: 12px; font-weight: 700; }
 .today-overdue { display: block; margin-top: 4px; font-size: 13px; color: var(--danger); }
 .today-overdue .link-btn { margin-left: 6px; font-weight: 700; color: var(--text); }
+
+/* 계획표 — 다시 짜기 전 '이전 계획' (기본 접힘) */
+.plan-table tr.pre-toggle-row td { padding: 10px 12px; background: var(--pill); }
+.plan-table tr.pre-toggle-row .link-btn { font-weight: 700; margin-right: 10px; }
+.plan-table tr.is-pre-replan td { color: var(--muted); background: transparent; opacity: .6; }
+.plan-table tr.is-pre-replan strong { font-weight: 500; }
+.pre-tag { display: inline-block; font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.plan-table tr.replan-divider td { padding: 8px 12px; font: 700 12px var(--font); color: var(--primary); border-bottom: 2px solid var(--primary); background: var(--primary-soft); }
+.cal-cell.is-pre-replan { opacity: .45; background: transparent; box-shadow: inset 0 0 0 1px #d4d4d0; }

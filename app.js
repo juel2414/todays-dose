@@ -5607,6 +5607,7 @@ function submitGoalForm(goal, requiredBookId = null, groupItemId = null) {
 const detailState = { goalId: null, basis: null, view: 'list', month: null, preview: null, draft: null, recMode: 'page' };
 
 function resetDetailState(goal) {
+  detailState.showPre = false;
   detailState.goalId = goal.id;
   detailState.basis = getPrimaryBasis(goal);
   detailState.month = null;
@@ -6266,9 +6267,36 @@ function renderPlanTable(goal, basis, readOnly = false) {
   const rows = buildTimeline(goal, basis);
   const replanned = !!goal.plans[basis].current;
   const done = getDoneUnits(goal, basis);
+  // 다시 짜기 전 날짜(이전 계획)는 기본으로 접어 둔다: 섞여 있으면 같은 범위가 두 번 나와 헷갈린다
+  const preRows = replanned ? rows.filter((r) => r.isPreReplan) : [];
+  const restartDate = replanned ? goal.plans[basis].current.startDate : null;
+  const shownRows = preRows.length && !detailState.showPre ? rows.filter((r) => !r.isPreReplan) : rows;
 
-  const body = rows.map((row) => {
+  const preToggle = preRows.length ? `
+      <tr class="pre-toggle-row"><td colspan="6">
+        <button type="button" class="link-btn" data-action="toggle-pre">${detailState.showPre
+          ? t('이전 계획 접기')
+          : t('{date} 전의 이전 계획 {n}일 보기', { date: formatShortDate(restartDate), n: preRows.length })}</button>
+        <span class="muted small">${t('{date}에 남은 분량으로 계획을 다시 짰어요.', { date: formatShortDate(restartDate) })}</span>
+      </td></tr>` : '';
+
+  const body = shownRows.map((row, i) => {
     const { dayDiff, checked, classes } = getRowState(row, done, today, replanned);
+    const pre = replanned && row.isPreReplan;
+    const divider = pre && shownRows[i + 1] && !shownRows[i + 1].isPreReplan
+      ? `<tr class="replan-divider"><td colspan="6">${t('{date}부터 다시 짠 계획', { date: formatShortDate(restartDate) })}</td></tr>` : '';
+    if (pre) {
+      // 이전 계획 줄: 흐리게, 체크·못 함 표시 없이 (지금 진도와 따로 본다)
+      return `
+      <tr class="is-pre-replan ${row.isRestDay ? 'is-rest-day' : ''}">
+        <td class="col-date">${row.date}</td>
+        <td class="col-weekday">${weekdayLabel(row.date)}</td>
+        <td class="col-content">${describeRowContent(goal, basis, row)}</td>
+        <td class="col-amount">${renderAmountCell(basis, row)}</td>
+        <td class="col-cum">${formatCumulative(goal, basis, row.cumulative)}</td>
+        <td class="col-check"><span class="pre-tag">${t('이전 계획')}</span></td>
+      </tr>${divider}`;
+    }
 
     return `
       <tr class="${classes}">
@@ -6298,7 +6326,7 @@ function renderPlanTable(goal, basis, readOnly = false) {
           <th class="col-check">${t('완료')}</th>
         </tr>
       </thead>
-      <tbody>${body}</tbody>
+      <tbody>${preToggle}${body}</tbody>
     </table>
   `;
 }
@@ -6373,6 +6401,16 @@ function renderPlanCalendar(goal, basis) {
     const dowClass = dow === 0 ? 'is-sun' : dow === 6 ? 'is-sat' : '';
     if (!row) {
       cells.push(`<div class="cal-cell is-out"><span class="cal-day ${dowClass}">${d}</span></div>`);
+      continue;
+    }
+    if (replanned && row.isPreReplan) {
+      // 이전 계획 칸: 흐리게, 체크 없이
+      cells.push(`
+      <div class="cal-cell is-pre-replan ${row.isRestDay ? 'is-rest-day' : ''}" title="${t('이전 계획')}">
+        <div class="cal-cell-head"><span class="cal-day ${dowClass}">${d}</span></div>
+        <div class="cal-content">${describeCellContent(goal, basis, row)}</div>
+        <span class="cal-amt" aria-hidden="true">–</span>
+      </div>`);
       continue;
     }
     const { dayDiff, checked, classes } = getRowState(row, done, today, replanned);
@@ -6506,6 +6544,11 @@ function bindDetailEvents(container, goal) {
       openPreview(goal, { kind: 'due', dueDate: goal.dueDate });
       rerenderDetail(goal);
       document.getElementById('preview-due')?.focus();
+      return;
+    }
+    if (action === 'toggle-pre') {
+      detailState.showPre = !detailState.showPre;
+      rerenderDetail(goal);
       return;
     }
     if (action === 'preview-cancel') {
@@ -10225,6 +10268,11 @@ const EN = {
   '챕터 선택': 'Select chapter',
   '선택한 챕터 {n}개를 지울까요?': 'Delete {n} selected chapters?',
   '{n}개 선택': '{n} selected',
+  '이전 계획 접기': 'Hide earlier plan',
+  '{date} 전의 이전 계획 {n}일 보기': (p) => `Show earlier plan before ${p.date} (${p.n} days)`,
+  '{date}에 남은 분량으로 계획을 다시 짰어요.': (p) => `The plan was re-split on ${p.date}.`,
+  '{date}부터 다시 짠 계획': (p) => `Re-split plan from ${p.date}`,
+  '이전 계획': 'Earlier plan',
   '끝낸 목표': 'Finished goals',
   '마감 지남': 'Past due',
   '마감이 {n}일 지났어요.': (p) => `It’s ${p.n} ${p.n === 1 ? 'day' : 'days'} past due.`,
