@@ -1959,6 +1959,7 @@ a.plan-row:hover { background: var(--pill); }
 /* 회원 관리 */
 .member-panel { padding: 18px 24px 8px; }
 .admin-member-table td { vertical-align: middle; }
+.admin-member-table .seen-ago { margin-top: 2px; font-family: inherit; font-size: 12px; color: var(--muted, #8a8a8a); }
 .member-groups { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .group-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 6px 5px 11px; border-radius: 999px; background: var(--neutral-soft); font-size: 12px; font-weight: 600; color: var(--text); }
 .chip-leader { padding: 2px 7px; border-radius: 999px; background: var(--text); color: #fff; font-size: 10px; }

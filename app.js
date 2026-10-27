@@ -6786,6 +6786,18 @@ function timestampToDateTime(iso) {
   return `${formatDate(d)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
 
+/** 마지막 접속을 "방금 · n분 전 · n시간 전 · 어제 · n일 전"으로 */
+function timestampAgo(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+  if (Number.isNaN(mins)) return '';
+  if (mins < 5) return t('방금');
+  if (mins < 60) return t('{n}분 전', { n: mins });
+  if (mins < 24 * 60 && formatDate(d) === todayStr()) return t('{n}시간 전', { n: Math.floor(mins / 60) });
+  return relativeDay(formatDate(d));
+}
+
 function timestampToDate(iso) {
   return iso ? formatDate(new Date(iso)) : '-';
 }
@@ -7499,7 +7511,8 @@ async function adminReviewAction(action, id, btn) {
 /* ----- 회원 관리 ----- */
 
 function renderAdminMembers() {
-  const profiles = adminState.profiles;
+  // 최근에 접속한 사람부터 (접속 기록 없는 사람은 맨 아래)
+  const profiles = adminState.profiles.slice().sort((a, b) => (b.last_seen_at || '').localeCompare(a.last_seen_at || ''));
   if (!profiles.length) return `<div class="empty">${t('아직 로그인한 사람이 없습니다.')}</div>`;
   return `
     <div class="member-toolbar">
@@ -7525,7 +7538,7 @@ function renderAdminMembers() {
               </td>
               <td>${renderMemberGroupCell(p, groups)}</td>
               <td class="mono-cell nowrap">${timestampToDateTime(p.created_at)}</td>
-              <td class="mono-cell nowrap">${timestampToDateTime(p.last_seen_at)}</td>
+              <td class="mono-cell nowrap">${timestampToDateTime(p.last_seen_at)}<div class="seen-ago">${timestampAgo(p.last_seen_at)}</div></td>
             </tr>`;
           }).join('')}
         </tbody>
@@ -10436,6 +10449,9 @@ const EN = {
   '받은 항목': 'Received',
   '어제': 'Yesterday',
   '{n}일 전': (p) => `${p.n} days ago`,
+  '방금': 'Just now',
+  '{n}분 전': (p) => `${p.n} min ago`,
+  '{n}시간 전': (p) => `${p.n} hr ago`,
   '외 {n}명 더 보기': (p) => `Show ${p.n} more`,
   '단톡방에 붙여 넣기': 'Paste it in your group chat',
   '초대 링크': 'Invite link',
