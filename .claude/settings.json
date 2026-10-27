@@ -1,0 +1,10 @@
+{
+  "extraKnownMarketplaces": {
+    "21st": {
+      "source": { "source": "github", "repo": "21st-dev/claude-code-plugin" }
+    }
+  },
+  "enabledPlugins": {
+    "21st@21st": true
+  }
+}

@@ -1,2 +1,5 @@
-.claude/
+# .claude 폴더는 기본으로 올리지 않되, 클라우드 세션에서도 쓰는 설정·스킬만 올린다
+.claude/*
+!.claude/settings.json
+!.claude/skills/
 .DS_Store
